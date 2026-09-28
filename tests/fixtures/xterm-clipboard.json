@@ -1,0 +1,84 @@
+{
+  "sources": [
+    {
+      "url": "https://raw.githubusercontent.com/xtermjs/xterm.js/6.0.0/addons/addon-clipboard/src/ClipboardAddon.ts",
+      "sha256": "da3a7f3645c36818e62d5be44ebf6e1bd526c43b13f628e241e21a9f7db1d34a"
+    },
+    {
+      "url": "https://cdn.jsdelivr.net/npm/js-base64@3.7.7/base64.mjs",
+      "sha256": "8652d7c2eae5fdd4c088ac97798812000126f562ed0e8dfe6c4d9526fb2543ac"
+    }
+  ],
+  "cases": [
+    {
+      "payload": "c;aGk=",
+      "writes": [
+        "hi"
+      ]
+    },
+    {
+      "payload": "c;5Lit5paH8J+ZggpsaW5lCTI=",
+      "writes": [
+        "中文🙂\nline\t2"
+      ]
+    },
+    {
+      "payload": "c;",
+      "writes": [
+        ""
+      ]
+    },
+    {
+      "payload": "c;!!!",
+      "writes": [
+        ""
+      ]
+    },
+    {
+      "payload": "c;aGk",
+      "writes": [
+        ""
+      ]
+    },
+    {
+      "payload": "c;aGk= ",
+      "writes": [
+        ""
+      ]
+    },
+    {
+      "payload": "c;/w==",
+      "writes": [
+        ""
+      ]
+    },
+    {
+      "payload": "c;aGl=",
+      "writes": [
+        ""
+      ]
+    },
+    {
+      "payload": "c;aGk=;ignored",
+      "writes": [
+        "hi"
+      ]
+    },
+    {
+      "payload": "p;aGk=",
+      "writes": []
+    },
+    {
+      "payload": "s;aGk=",
+      "writes": []
+    },
+    {
+      "payload": "cp;aGk=",
+      "writes": []
+    },
+    {
+      "payload": "c",
+      "writes": []
+    }
+  ]
+}

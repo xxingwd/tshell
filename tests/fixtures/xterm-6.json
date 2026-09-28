@@ -1,0 +1,4157 @@
+{
+  "version": "6.0.0",
+  "sources": [
+    {
+      "path": "src/common/input/Keyboard.ts",
+      "url": "https://raw.githubusercontent.com/xtermjs/xterm.js/6.0.0/src/common/input/Keyboard.ts",
+      "sha256": "b1f999aa257410ac77aa8abadf03300ca0fc582cda98f0f01b4a81ef7eb7e3d8"
+    },
+    {
+      "path": "src/browser/Clipboard.ts",
+      "url": "https://raw.githubusercontent.com/xtermjs/xterm.js/6.0.0/src/browser/Clipboard.ts",
+      "sha256": "074e645cf075f5caa16b2bea3544b517f77065821fbf79a1215ab1984c0e5382"
+    },
+    {
+      "path": "src/common/Color.ts",
+      "url": "https://raw.githubusercontent.com/xtermjs/xterm.js/6.0.0/src/common/Color.ts",
+      "sha256": "ca962c9f8acb904437205b68b2a2820a692d24278634ec38923ccf3776b0c232"
+    },
+    {
+      "path": "src/common/buffer/Constants.ts",
+      "url": "https://raw.githubusercontent.com/xtermjs/xterm.js/6.0.0/src/common/buffer/Constants.ts",
+      "sha256": "4c3c75114e7dc1c200971902ed80f75b76202af1255f7a728cb242c9741e288d"
+    },
+    {
+      "path": "addons/addon-webgl/src/TextureAtlas.ts",
+      "url": "https://raw.githubusercontent.com/xtermjs/xterm.js/6.0.0/addons/addon-webgl/src/TextureAtlas.ts",
+      "sha256": "d6e171b9ceed0027e2aa96acd8e39387e0819813ab666ed731c6b597c0dff398"
+    },
+    {
+      "path": "addons/addon-webgl/src/Constants.ts",
+      "url": "https://raw.githubusercontent.com/xtermjs/xterm.js/6.0.0/addons/addon-webgl/src/Constants.ts",
+      "sha256": "7d88b8886edbe03288c97295b7818ebc727d9ec5c07a4be8a8c98e3af5062373"
+    }
+  ],
+  "ansi": [
+    1581104,
+    10100784,
+    2129984,
+    9469984,
+    3166368,
+    8405136,
+    2130064,
+    12634320,
+    5791856,
+    16408688,
+    6344832,
+    14733392,
+    7377120,
+    12615888,
+    6340816,
+    16777215,
+    0,
+    95,
+    135,
+    175,
+    215,
+    255,
+    24320,
+    24415,
+    24455,
+    24495,
+    24535,
+    24575,
+    34560,
+    34655,
+    34695,
+    34735,
+    34775,
+    34815,
+    44800,
+    44895,
+    44935,
+    44975,
+    45015,
+    45055,
+    55040,
+    55135,
+    55175,
+    55215,
+    55255,
+    55295,
+    65280,
+    65375,
+    65415,
+    65455,
+    65495,
+    65535,
+    6225920,
+    6226015,
+    6226055,
+    6226095,
+    6226135,
+    6226175,
+    6250240,
+    6250335,
+    6250375,
+    6250415,
+    6250455,
+    6250495,
+    6260480,
+    6260575,
+    6260615,
+    6260655,
+    6260695,
+    6260735,
+    6270720,
+    6270815,
+    6270855,
+    6270895,
+    6270935,
+    6270975,
+    6280960,
+    6281055,
+    6281095,
+    6281135,
+    6281175,
+    6281215,
+    6291200,
+    6291295,
+    6291335,
+    6291375,
+    6291415,
+    6291455,
+    8847360,
+    8847455,
+    8847495,
+    8847535,
+    8847575,
+    8847615,
+    8871680,
+    8871775,
+    8871815,
+    8871855,
+    8871895,
+    8871935,
+    8881920,
+    8882015,
+    8882055,
+    8882095,
+    8882135,
+    8882175,
+    8892160,
+    8892255,
+    8892295,
+    8892335,
+    8892375,
+    8892415,
+    8902400,
+    8902495,
+    8902535,
+    8902575,
+    8902615,
+    8902655,
+    8912640,
+    8912735,
+    8912775,
+    8912815,
+    8912855,
+    8912895,
+    11468800,
+    11468895,
+    11468935,
+    11468975,
+    11469015,
+    11469055,
+    11493120,
+    11493215,
+    11493255,
+    11493295,
+    11493335,
+    11493375,
+    11503360,
+    11503455,
+    11503495,
+    11503535,
+    11503575,
+    11503615,
+    11513600,
+    11513695,
+    11513735,
+    11513775,
+    11513815,
+    11513855,
+    11523840,
+    11523935,
+    11523975,
+    11524015,
+    11524055,
+    11524095,
+    11534080,
+    11534175,
+    11534215,
+    11534255,
+    11534295,
+    11534335,
+    14090240,
+    14090335,
+    14090375,
+    14090415,
+    14090455,
+    14090495,
+    14114560,
+    14114655,
+    14114695,
+    14114735,
+    14114775,
+    14114815,
+    14124800,
+    14124895,
+    14124935,
+    14124975,
+    14125015,
+    14125055,
+    14135040,
+    14135135,
+    14135175,
+    14135215,
+    14135255,
+    14135295,
+    14145280,
+    14145375,
+    14145415,
+    14145455,
+    14145495,
+    14145535,
+    14155520,
+    14155615,
+    14155655,
+    14155695,
+    14155735,
+    14155775,
+    16711680,
+    16711775,
+    16711815,
+    16711855,
+    16711895,
+    16711935,
+    16736000,
+    16736095,
+    16736135,
+    16736175,
+    16736215,
+    16736255,
+    16746240,
+    16746335,
+    16746375,
+    16746415,
+    16746455,
+    16746495,
+    16756480,
+    16756575,
+    16756615,
+    16756655,
+    16756695,
+    16756735,
+    16766720,
+    16766815,
+    16766855,
+    16766895,
+    16766935,
+    16766975,
+    16776960,
+    16777055,
+    16777095,
+    16777135,
+    16777175,
+    16777215,
+    526344,
+    1184274,
+    1842204,
+    2500134,
+    3158064,
+    3815994,
+    4473924,
+    5131854,
+    5789784,
+    6447714,
+    7105644,
+    7763574,
+    8421504,
+    9079434,
+    9737364,
+    10395294,
+    11053224,
+    11711154,
+    12369084,
+    13027014,
+    13684944,
+    14342874,
+    15000804,
+    15658734
+  ],
+  "keys": [
+    {
+      "key": "backspace",
+      "app_cursor": false,
+      "bytes": ""
+    },
+    {
+      "key": "shift-backspace",
+      "app_cursor": false,
+      "bytes": ""
+    },
+    {
+      "key": "alt-backspace",
+      "app_cursor": false,
+      "bytes": "\u001b"
+    },
+    {
+      "key": "alt-shift-backspace",
+      "app_cursor": false,
+      "bytes": "\u001b"
+    },
+    {
+      "key": "ctrl-backspace",
+      "app_cursor": false,
+      "bytes": "\b"
+    },
+    {
+      "key": "ctrl-shift-backspace",
+      "app_cursor": false,
+      "bytes": "\b"
+    },
+    {
+      "key": "ctrl-alt-backspace",
+      "app_cursor": false,
+      "bytes": "\u001b\b"
+    },
+    {
+      "key": "ctrl-alt-shift-backspace",
+      "app_cursor": false,
+      "bytes": "\u001b\b"
+    },
+    {
+      "key": "tab",
+      "app_cursor": false,
+      "bytes": "\t"
+    },
+    {
+      "key": "shift-tab",
+      "app_cursor": false,
+      "bytes": "\u001b[Z"
+    },
+    {
+      "key": "alt-tab",
+      "app_cursor": false,
+      "bytes": "\t"
+    },
+    {
+      "key": "alt-shift-tab",
+      "app_cursor": false,
+      "bytes": "\u001b[Z"
+    },
+    {
+      "key": "ctrl-tab",
+      "app_cursor": false,
+      "bytes": "\t"
+    },
+    {
+      "key": "ctrl-shift-tab",
+      "app_cursor": false,
+      "bytes": "\u001b[Z"
+    },
+    {
+      "key": "ctrl-alt-tab",
+      "app_cursor": false,
+      "bytes": "\t"
+    },
+    {
+      "key": "ctrl-alt-shift-tab",
+      "app_cursor": false,
+      "bytes": "\u001b[Z"
+    },
+    {
+      "key": "enter",
+      "app_cursor": false,
+      "bytes": "\r"
+    },
+    {
+      "key": "shift-enter",
+      "app_cursor": false,
+      "bytes": "\r"
+    },
+    {
+      "key": "alt-enter",
+      "app_cursor": false,
+      "bytes": "\u001b\r"
+    },
+    {
+      "key": "alt-shift-enter",
+      "app_cursor": false,
+      "bytes": "\u001b\r"
+    },
+    {
+      "key": "ctrl-enter",
+      "app_cursor": false,
+      "bytes": "\r"
+    },
+    {
+      "key": "ctrl-shift-enter",
+      "app_cursor": false,
+      "bytes": "\r"
+    },
+    {
+      "key": "ctrl-alt-enter",
+      "app_cursor": false,
+      "bytes": "\u001b\r"
+    },
+    {
+      "key": "ctrl-alt-shift-enter",
+      "app_cursor": false,
+      "bytes": "\u001b\r"
+    },
+    {
+      "key": "escape",
+      "app_cursor": false,
+      "bytes": "\u001b"
+    },
+    {
+      "key": "shift-escape",
+      "app_cursor": false,
+      "bytes": "\u001b"
+    },
+    {
+      "key": "alt-escape",
+      "app_cursor": false,
+      "bytes": "\u001b\u001b"
+    },
+    {
+      "key": "alt-shift-escape",
+      "app_cursor": false,
+      "bytes": "\u001b\u001b"
+    },
+    {
+      "key": "ctrl-escape",
+      "app_cursor": false,
+      "bytes": "\u001b"
+    },
+    {
+      "key": "ctrl-shift-escape",
+      "app_cursor": false,
+      "bytes": "\u001b"
+    },
+    {
+      "key": "ctrl-alt-escape",
+      "app_cursor": false,
+      "bytes": "\u001b\u001b"
+    },
+    {
+      "key": "ctrl-alt-shift-escape",
+      "app_cursor": false,
+      "bytes": "\u001b\u001b"
+    },
+    {
+      "key": "left",
+      "app_cursor": false,
+      "bytes": "\u001b[D"
+    },
+    {
+      "key": "shift-left",
+      "app_cursor": false,
+      "bytes": "\u001b[1;2D"
+    },
+    {
+      "key": "alt-left",
+      "app_cursor": false,
+      "bytes": "\u001b[1;3D"
+    },
+    {
+      "key": "alt-shift-left",
+      "app_cursor": false,
+      "bytes": "\u001b[1;4D"
+    },
+    {
+      "key": "ctrl-left",
+      "app_cursor": false,
+      "bytes": "\u001b[1;5D"
+    },
+    {
+      "key": "ctrl-shift-left",
+      "app_cursor": false,
+      "bytes": "\u001b[1;6D"
+    },
+    {
+      "key": "ctrl-alt-left",
+      "app_cursor": false,
+      "bytes": "\u001b[1;7D"
+    },
+    {
+      "key": "ctrl-alt-shift-left",
+      "app_cursor": false,
+      "bytes": "\u001b[1;8D"
+    },
+    {
+      "key": "right",
+      "app_cursor": false,
+      "bytes": "\u001b[C"
+    },
+    {
+      "key": "shift-right",
+      "app_cursor": false,
+      "bytes": "\u001b[1;2C"
+    },
+    {
+      "key": "alt-right",
+      "app_cursor": false,
+      "bytes": "\u001b[1;3C"
+    },
+    {
+      "key": "alt-shift-right",
+      "app_cursor": false,
+      "bytes": "\u001b[1;4C"
+    },
+    {
+      "key": "ctrl-right",
+      "app_cursor": false,
+      "bytes": "\u001b[1;5C"
+    },
+    {
+      "key": "ctrl-shift-right",
+      "app_cursor": false,
+      "bytes": "\u001b[1;6C"
+    },
+    {
+      "key": "ctrl-alt-right",
+      "app_cursor": false,
+      "bytes": "\u001b[1;7C"
+    },
+    {
+      "key": "ctrl-alt-shift-right",
+      "app_cursor": false,
+      "bytes": "\u001b[1;8C"
+    },
+    {
+      "key": "up",
+      "app_cursor": false,
+      "bytes": "\u001b[A"
+    },
+    {
+      "key": "shift-up",
+      "app_cursor": false,
+      "bytes": "\u001b[1;2A"
+    },
+    {
+      "key": "alt-up",
+      "app_cursor": false,
+      "bytes": "\u001b[1;3A"
+    },
+    {
+      "key": "alt-shift-up",
+      "app_cursor": false,
+      "bytes": "\u001b[1;4A"
+    },
+    {
+      "key": "ctrl-up",
+      "app_cursor": false,
+      "bytes": "\u001b[1;5A"
+    },
+    {
+      "key": "ctrl-shift-up",
+      "app_cursor": false,
+      "bytes": "\u001b[1;6A"
+    },
+    {
+      "key": "ctrl-alt-up",
+      "app_cursor": false,
+      "bytes": "\u001b[1;7A"
+    },
+    {
+      "key": "ctrl-alt-shift-up",
+      "app_cursor": false,
+      "bytes": "\u001b[1;8A"
+    },
+    {
+      "key": "down",
+      "app_cursor": false,
+      "bytes": "\u001b[B"
+    },
+    {
+      "key": "shift-down",
+      "app_cursor": false,
+      "bytes": "\u001b[1;2B"
+    },
+    {
+      "key": "alt-down",
+      "app_cursor": false,
+      "bytes": "\u001b[1;3B"
+    },
+    {
+      "key": "alt-shift-down",
+      "app_cursor": false,
+      "bytes": "\u001b[1;4B"
+    },
+    {
+      "key": "ctrl-down",
+      "app_cursor": false,
+      "bytes": "\u001b[1;5B"
+    },
+    {
+      "key": "ctrl-shift-down",
+      "app_cursor": false,
+      "bytes": "\u001b[1;6B"
+    },
+    {
+      "key": "ctrl-alt-down",
+      "app_cursor": false,
+      "bytes": "\u001b[1;7B"
+    },
+    {
+      "key": "ctrl-alt-shift-down",
+      "app_cursor": false,
+      "bytes": "\u001b[1;8B"
+    },
+    {
+      "key": "insert",
+      "app_cursor": false,
+      "bytes": "\u001b[2~"
+    },
+    {
+      "key": "shift-insert",
+      "app_cursor": false,
+      "bytes": null
+    },
+    {
+      "key": "alt-insert",
+      "app_cursor": false,
+      "bytes": "\u001b[2~"
+    },
+    {
+      "key": "alt-shift-insert",
+      "app_cursor": false,
+      "bytes": null
+    },
+    {
+      "key": "ctrl-insert",
+      "app_cursor": false,
+      "bytes": null
+    },
+    {
+      "key": "ctrl-shift-insert",
+      "app_cursor": false,
+      "bytes": null
+    },
+    {
+      "key": "ctrl-alt-insert",
+      "app_cursor": false,
+      "bytes": null
+    },
+    {
+      "key": "ctrl-alt-shift-insert",
+      "app_cursor": false,
+      "bytes": null
+    },
+    {
+      "key": "delete",
+      "app_cursor": false,
+      "bytes": "\u001b[3~"
+    },
+    {
+      "key": "shift-delete",
+      "app_cursor": false,
+      "bytes": "\u001b[3;2~"
+    },
+    {
+      "key": "alt-delete",
+      "app_cursor": false,
+      "bytes": "\u001b[3;3~"
+    },
+    {
+      "key": "alt-shift-delete",
+      "app_cursor": false,
+      "bytes": "\u001b[3;4~"
+    },
+    {
+      "key": "ctrl-delete",
+      "app_cursor": false,
+      "bytes": "\u001b[3;5~"
+    },
+    {
+      "key": "ctrl-shift-delete",
+      "app_cursor": false,
+      "bytes": "\u001b[3;6~"
+    },
+    {
+      "key": "ctrl-alt-delete",
+      "app_cursor": false,
+      "bytes": "\u001b[3;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-delete",
+      "app_cursor": false,
+      "bytes": "\u001b[3;8~"
+    },
+    {
+      "key": "home",
+      "app_cursor": false,
+      "bytes": "\u001b[H"
+    },
+    {
+      "key": "shift-home",
+      "app_cursor": false,
+      "bytes": "\u001b[1;2H"
+    },
+    {
+      "key": "alt-home",
+      "app_cursor": false,
+      "bytes": "\u001b[1;3H"
+    },
+    {
+      "key": "alt-shift-home",
+      "app_cursor": false,
+      "bytes": "\u001b[1;4H"
+    },
+    {
+      "key": "ctrl-home",
+      "app_cursor": false,
+      "bytes": "\u001b[1;5H"
+    },
+    {
+      "key": "ctrl-shift-home",
+      "app_cursor": false,
+      "bytes": "\u001b[1;6H"
+    },
+    {
+      "key": "ctrl-alt-home",
+      "app_cursor": false,
+      "bytes": "\u001b[1;7H"
+    },
+    {
+      "key": "ctrl-alt-shift-home",
+      "app_cursor": false,
+      "bytes": "\u001b[1;8H"
+    },
+    {
+      "key": "end",
+      "app_cursor": false,
+      "bytes": "\u001b[F"
+    },
+    {
+      "key": "shift-end",
+      "app_cursor": false,
+      "bytes": "\u001b[1;2F"
+    },
+    {
+      "key": "alt-end",
+      "app_cursor": false,
+      "bytes": "\u001b[1;3F"
+    },
+    {
+      "key": "alt-shift-end",
+      "app_cursor": false,
+      "bytes": "\u001b[1;4F"
+    },
+    {
+      "key": "ctrl-end",
+      "app_cursor": false,
+      "bytes": "\u001b[1;5F"
+    },
+    {
+      "key": "ctrl-shift-end",
+      "app_cursor": false,
+      "bytes": "\u001b[1;6F"
+    },
+    {
+      "key": "ctrl-alt-end",
+      "app_cursor": false,
+      "bytes": "\u001b[1;7F"
+    },
+    {
+      "key": "ctrl-alt-shift-end",
+      "app_cursor": false,
+      "bytes": "\u001b[1;8F"
+    },
+    {
+      "key": "pageup",
+      "app_cursor": false,
+      "bytes": "\u001b[5~"
+    },
+    {
+      "key": "shift-pageup",
+      "app_cursor": false,
+      "bytes": null
+    },
+    {
+      "key": "alt-pageup",
+      "app_cursor": false,
+      "bytes": "\u001b[5~"
+    },
+    {
+      "key": "alt-shift-pageup",
+      "app_cursor": false,
+      "bytes": null
+    },
+    {
+      "key": "ctrl-pageup",
+      "app_cursor": false,
+      "bytes": "\u001b[5;5~"
+    },
+    {
+      "key": "ctrl-shift-pageup",
+      "app_cursor": false,
+      "bytes": null
+    },
+    {
+      "key": "ctrl-alt-pageup",
+      "app_cursor": false,
+      "bytes": "\u001b[5;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-pageup",
+      "app_cursor": false,
+      "bytes": null
+    },
+    {
+      "key": "pagedown",
+      "app_cursor": false,
+      "bytes": "\u001b[6~"
+    },
+    {
+      "key": "shift-pagedown",
+      "app_cursor": false,
+      "bytes": null
+    },
+    {
+      "key": "alt-pagedown",
+      "app_cursor": false,
+      "bytes": "\u001b[6~"
+    },
+    {
+      "key": "alt-shift-pagedown",
+      "app_cursor": false,
+      "bytes": null
+    },
+    {
+      "key": "ctrl-pagedown",
+      "app_cursor": false,
+      "bytes": "\u001b[6;5~"
+    },
+    {
+      "key": "ctrl-shift-pagedown",
+      "app_cursor": false,
+      "bytes": null
+    },
+    {
+      "key": "ctrl-alt-pagedown",
+      "app_cursor": false,
+      "bytes": "\u001b[6;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-pagedown",
+      "app_cursor": false,
+      "bytes": null
+    },
+    {
+      "key": "f1",
+      "app_cursor": false,
+      "bytes": "\u001bOP"
+    },
+    {
+      "key": "shift-f1",
+      "app_cursor": false,
+      "bytes": "\u001b[1;2P"
+    },
+    {
+      "key": "alt-f1",
+      "app_cursor": false,
+      "bytes": "\u001b[1;3P"
+    },
+    {
+      "key": "alt-shift-f1",
+      "app_cursor": false,
+      "bytes": "\u001b[1;4P"
+    },
+    {
+      "key": "ctrl-f1",
+      "app_cursor": false,
+      "bytes": "\u001b[1;5P"
+    },
+    {
+      "key": "ctrl-shift-f1",
+      "app_cursor": false,
+      "bytes": "\u001b[1;6P"
+    },
+    {
+      "key": "ctrl-alt-f1",
+      "app_cursor": false,
+      "bytes": "\u001b[1;7P"
+    },
+    {
+      "key": "ctrl-alt-shift-f1",
+      "app_cursor": false,
+      "bytes": "\u001b[1;8P"
+    },
+    {
+      "key": "f2",
+      "app_cursor": false,
+      "bytes": "\u001bOQ"
+    },
+    {
+      "key": "shift-f2",
+      "app_cursor": false,
+      "bytes": "\u001b[1;2Q"
+    },
+    {
+      "key": "alt-f2",
+      "app_cursor": false,
+      "bytes": "\u001b[1;3Q"
+    },
+    {
+      "key": "alt-shift-f2",
+      "app_cursor": false,
+      "bytes": "\u001b[1;4Q"
+    },
+    {
+      "key": "ctrl-f2",
+      "app_cursor": false,
+      "bytes": "\u001b[1;5Q"
+    },
+    {
+      "key": "ctrl-shift-f2",
+      "app_cursor": false,
+      "bytes": "\u001b[1;6Q"
+    },
+    {
+      "key": "ctrl-alt-f2",
+      "app_cursor": false,
+      "bytes": "\u001b[1;7Q"
+    },
+    {
+      "key": "ctrl-alt-shift-f2",
+      "app_cursor": false,
+      "bytes": "\u001b[1;8Q"
+    },
+    {
+      "key": "f3",
+      "app_cursor": false,
+      "bytes": "\u001bOR"
+    },
+    {
+      "key": "shift-f3",
+      "app_cursor": false,
+      "bytes": "\u001b[1;2R"
+    },
+    {
+      "key": "alt-f3",
+      "app_cursor": false,
+      "bytes": "\u001b[1;3R"
+    },
+    {
+      "key": "alt-shift-f3",
+      "app_cursor": false,
+      "bytes": "\u001b[1;4R"
+    },
+    {
+      "key": "ctrl-f3",
+      "app_cursor": false,
+      "bytes": "\u001b[1;5R"
+    },
+    {
+      "key": "ctrl-shift-f3",
+      "app_cursor": false,
+      "bytes": "\u001b[1;6R"
+    },
+    {
+      "key": "ctrl-alt-f3",
+      "app_cursor": false,
+      "bytes": "\u001b[1;7R"
+    },
+    {
+      "key": "ctrl-alt-shift-f3",
+      "app_cursor": false,
+      "bytes": "\u001b[1;8R"
+    },
+    {
+      "key": "f4",
+      "app_cursor": false,
+      "bytes": "\u001bOS"
+    },
+    {
+      "key": "shift-f4",
+      "app_cursor": false,
+      "bytes": "\u001b[1;2S"
+    },
+    {
+      "key": "alt-f4",
+      "app_cursor": false,
+      "bytes": "\u001b[1;3S"
+    },
+    {
+      "key": "alt-shift-f4",
+      "app_cursor": false,
+      "bytes": "\u001b[1;4S"
+    },
+    {
+      "key": "ctrl-f4",
+      "app_cursor": false,
+      "bytes": "\u001b[1;5S"
+    },
+    {
+      "key": "ctrl-shift-f4",
+      "app_cursor": false,
+      "bytes": "\u001b[1;6S"
+    },
+    {
+      "key": "ctrl-alt-f4",
+      "app_cursor": false,
+      "bytes": "\u001b[1;7S"
+    },
+    {
+      "key": "ctrl-alt-shift-f4",
+      "app_cursor": false,
+      "bytes": "\u001b[1;8S"
+    },
+    {
+      "key": "f5",
+      "app_cursor": false,
+      "bytes": "\u001b[15~"
+    },
+    {
+      "key": "shift-f5",
+      "app_cursor": false,
+      "bytes": "\u001b[15;2~"
+    },
+    {
+      "key": "alt-f5",
+      "app_cursor": false,
+      "bytes": "\u001b[15;3~"
+    },
+    {
+      "key": "alt-shift-f5",
+      "app_cursor": false,
+      "bytes": "\u001b[15;4~"
+    },
+    {
+      "key": "ctrl-f5",
+      "app_cursor": false,
+      "bytes": "\u001b[15;5~"
+    },
+    {
+      "key": "ctrl-shift-f5",
+      "app_cursor": false,
+      "bytes": "\u001b[15;6~"
+    },
+    {
+      "key": "ctrl-alt-f5",
+      "app_cursor": false,
+      "bytes": "\u001b[15;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-f5",
+      "app_cursor": false,
+      "bytes": "\u001b[15;8~"
+    },
+    {
+      "key": "f6",
+      "app_cursor": false,
+      "bytes": "\u001b[17~"
+    },
+    {
+      "key": "shift-f6",
+      "app_cursor": false,
+      "bytes": "\u001b[17;2~"
+    },
+    {
+      "key": "alt-f6",
+      "app_cursor": false,
+      "bytes": "\u001b[17;3~"
+    },
+    {
+      "key": "alt-shift-f6",
+      "app_cursor": false,
+      "bytes": "\u001b[17;4~"
+    },
+    {
+      "key": "ctrl-f6",
+      "app_cursor": false,
+      "bytes": "\u001b[17;5~"
+    },
+    {
+      "key": "ctrl-shift-f6",
+      "app_cursor": false,
+      "bytes": "\u001b[17;6~"
+    },
+    {
+      "key": "ctrl-alt-f6",
+      "app_cursor": false,
+      "bytes": "\u001b[17;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-f6",
+      "app_cursor": false,
+      "bytes": "\u001b[17;8~"
+    },
+    {
+      "key": "f7",
+      "app_cursor": false,
+      "bytes": "\u001b[18~"
+    },
+    {
+      "key": "shift-f7",
+      "app_cursor": false,
+      "bytes": "\u001b[18;2~"
+    },
+    {
+      "key": "alt-f7",
+      "app_cursor": false,
+      "bytes": "\u001b[18;3~"
+    },
+    {
+      "key": "alt-shift-f7",
+      "app_cursor": false,
+      "bytes": "\u001b[18;4~"
+    },
+    {
+      "key": "ctrl-f7",
+      "app_cursor": false,
+      "bytes": "\u001b[18;5~"
+    },
+    {
+      "key": "ctrl-shift-f7",
+      "app_cursor": false,
+      "bytes": "\u001b[18;6~"
+    },
+    {
+      "key": "ctrl-alt-f7",
+      "app_cursor": false,
+      "bytes": "\u001b[18;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-f7",
+      "app_cursor": false,
+      "bytes": "\u001b[18;8~"
+    },
+    {
+      "key": "f8",
+      "app_cursor": false,
+      "bytes": "\u001b[19~"
+    },
+    {
+      "key": "shift-f8",
+      "app_cursor": false,
+      "bytes": "\u001b[19;2~"
+    },
+    {
+      "key": "alt-f8",
+      "app_cursor": false,
+      "bytes": "\u001b[19;3~"
+    },
+    {
+      "key": "alt-shift-f8",
+      "app_cursor": false,
+      "bytes": "\u001b[19;4~"
+    },
+    {
+      "key": "ctrl-f8",
+      "app_cursor": false,
+      "bytes": "\u001b[19;5~"
+    },
+    {
+      "key": "ctrl-shift-f8",
+      "app_cursor": false,
+      "bytes": "\u001b[19;6~"
+    },
+    {
+      "key": "ctrl-alt-f8",
+      "app_cursor": false,
+      "bytes": "\u001b[19;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-f8",
+      "app_cursor": false,
+      "bytes": "\u001b[19;8~"
+    },
+    {
+      "key": "f9",
+      "app_cursor": false,
+      "bytes": "\u001b[20~"
+    },
+    {
+      "key": "shift-f9",
+      "app_cursor": false,
+      "bytes": "\u001b[20;2~"
+    },
+    {
+      "key": "alt-f9",
+      "app_cursor": false,
+      "bytes": "\u001b[20;3~"
+    },
+    {
+      "key": "alt-shift-f9",
+      "app_cursor": false,
+      "bytes": "\u001b[20;4~"
+    },
+    {
+      "key": "ctrl-f9",
+      "app_cursor": false,
+      "bytes": "\u001b[20;5~"
+    },
+    {
+      "key": "ctrl-shift-f9",
+      "app_cursor": false,
+      "bytes": "\u001b[20;6~"
+    },
+    {
+      "key": "ctrl-alt-f9",
+      "app_cursor": false,
+      "bytes": "\u001b[20;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-f9",
+      "app_cursor": false,
+      "bytes": "\u001b[20;8~"
+    },
+    {
+      "key": "f10",
+      "app_cursor": false,
+      "bytes": "\u001b[21~"
+    },
+    {
+      "key": "shift-f10",
+      "app_cursor": false,
+      "bytes": "\u001b[21;2~"
+    },
+    {
+      "key": "alt-f10",
+      "app_cursor": false,
+      "bytes": "\u001b[21;3~"
+    },
+    {
+      "key": "alt-shift-f10",
+      "app_cursor": false,
+      "bytes": "\u001b[21;4~"
+    },
+    {
+      "key": "ctrl-f10",
+      "app_cursor": false,
+      "bytes": "\u001b[21;5~"
+    },
+    {
+      "key": "ctrl-shift-f10",
+      "app_cursor": false,
+      "bytes": "\u001b[21;6~"
+    },
+    {
+      "key": "ctrl-alt-f10",
+      "app_cursor": false,
+      "bytes": "\u001b[21;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-f10",
+      "app_cursor": false,
+      "bytes": "\u001b[21;8~"
+    },
+    {
+      "key": "f11",
+      "app_cursor": false,
+      "bytes": "\u001b[23~"
+    },
+    {
+      "key": "shift-f11",
+      "app_cursor": false,
+      "bytes": "\u001b[23;2~"
+    },
+    {
+      "key": "alt-f11",
+      "app_cursor": false,
+      "bytes": "\u001b[23;3~"
+    },
+    {
+      "key": "alt-shift-f11",
+      "app_cursor": false,
+      "bytes": "\u001b[23;4~"
+    },
+    {
+      "key": "ctrl-f11",
+      "app_cursor": false,
+      "bytes": "\u001b[23;5~"
+    },
+    {
+      "key": "ctrl-shift-f11",
+      "app_cursor": false,
+      "bytes": "\u001b[23;6~"
+    },
+    {
+      "key": "ctrl-alt-f11",
+      "app_cursor": false,
+      "bytes": "\u001b[23;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-f11",
+      "app_cursor": false,
+      "bytes": "\u001b[23;8~"
+    },
+    {
+      "key": "f12",
+      "app_cursor": false,
+      "bytes": "\u001b[24~"
+    },
+    {
+      "key": "shift-f12",
+      "app_cursor": false,
+      "bytes": "\u001b[24;2~"
+    },
+    {
+      "key": "alt-f12",
+      "app_cursor": false,
+      "bytes": "\u001b[24;3~"
+    },
+    {
+      "key": "alt-shift-f12",
+      "app_cursor": false,
+      "bytes": "\u001b[24;4~"
+    },
+    {
+      "key": "ctrl-f12",
+      "app_cursor": false,
+      "bytes": "\u001b[24;5~"
+    },
+    {
+      "key": "ctrl-shift-f12",
+      "app_cursor": false,
+      "bytes": "\u001b[24;6~"
+    },
+    {
+      "key": "ctrl-alt-f12",
+      "app_cursor": false,
+      "bytes": "\u001b[24;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-f12",
+      "app_cursor": false,
+      "bytes": "\u001b[24;8~"
+    },
+    {
+      "key": "backspace",
+      "app_cursor": true,
+      "bytes": ""
+    },
+    {
+      "key": "shift-backspace",
+      "app_cursor": true,
+      "bytes": ""
+    },
+    {
+      "key": "alt-backspace",
+      "app_cursor": true,
+      "bytes": "\u001b"
+    },
+    {
+      "key": "alt-shift-backspace",
+      "app_cursor": true,
+      "bytes": "\u001b"
+    },
+    {
+      "key": "ctrl-backspace",
+      "app_cursor": true,
+      "bytes": "\b"
+    },
+    {
+      "key": "ctrl-shift-backspace",
+      "app_cursor": true,
+      "bytes": "\b"
+    },
+    {
+      "key": "ctrl-alt-backspace",
+      "app_cursor": true,
+      "bytes": "\u001b\b"
+    },
+    {
+      "key": "ctrl-alt-shift-backspace",
+      "app_cursor": true,
+      "bytes": "\u001b\b"
+    },
+    {
+      "key": "tab",
+      "app_cursor": true,
+      "bytes": "\t"
+    },
+    {
+      "key": "shift-tab",
+      "app_cursor": true,
+      "bytes": "\u001b[Z"
+    },
+    {
+      "key": "alt-tab",
+      "app_cursor": true,
+      "bytes": "\t"
+    },
+    {
+      "key": "alt-shift-tab",
+      "app_cursor": true,
+      "bytes": "\u001b[Z"
+    },
+    {
+      "key": "ctrl-tab",
+      "app_cursor": true,
+      "bytes": "\t"
+    },
+    {
+      "key": "ctrl-shift-tab",
+      "app_cursor": true,
+      "bytes": "\u001b[Z"
+    },
+    {
+      "key": "ctrl-alt-tab",
+      "app_cursor": true,
+      "bytes": "\t"
+    },
+    {
+      "key": "ctrl-alt-shift-tab",
+      "app_cursor": true,
+      "bytes": "\u001b[Z"
+    },
+    {
+      "key": "enter",
+      "app_cursor": true,
+      "bytes": "\r"
+    },
+    {
+      "key": "shift-enter",
+      "app_cursor": true,
+      "bytes": "\r"
+    },
+    {
+      "key": "alt-enter",
+      "app_cursor": true,
+      "bytes": "\u001b\r"
+    },
+    {
+      "key": "alt-shift-enter",
+      "app_cursor": true,
+      "bytes": "\u001b\r"
+    },
+    {
+      "key": "ctrl-enter",
+      "app_cursor": true,
+      "bytes": "\r"
+    },
+    {
+      "key": "ctrl-shift-enter",
+      "app_cursor": true,
+      "bytes": "\r"
+    },
+    {
+      "key": "ctrl-alt-enter",
+      "app_cursor": true,
+      "bytes": "\u001b\r"
+    },
+    {
+      "key": "ctrl-alt-shift-enter",
+      "app_cursor": true,
+      "bytes": "\u001b\r"
+    },
+    {
+      "key": "escape",
+      "app_cursor": true,
+      "bytes": "\u001b"
+    },
+    {
+      "key": "shift-escape",
+      "app_cursor": true,
+      "bytes": "\u001b"
+    },
+    {
+      "key": "alt-escape",
+      "app_cursor": true,
+      "bytes": "\u001b\u001b"
+    },
+    {
+      "key": "alt-shift-escape",
+      "app_cursor": true,
+      "bytes": "\u001b\u001b"
+    },
+    {
+      "key": "ctrl-escape",
+      "app_cursor": true,
+      "bytes": "\u001b"
+    },
+    {
+      "key": "ctrl-shift-escape",
+      "app_cursor": true,
+      "bytes": "\u001b"
+    },
+    {
+      "key": "ctrl-alt-escape",
+      "app_cursor": true,
+      "bytes": "\u001b\u001b"
+    },
+    {
+      "key": "ctrl-alt-shift-escape",
+      "app_cursor": true,
+      "bytes": "\u001b\u001b"
+    },
+    {
+      "key": "left",
+      "app_cursor": true,
+      "bytes": "\u001bOD"
+    },
+    {
+      "key": "shift-left",
+      "app_cursor": true,
+      "bytes": "\u001b[1;2D"
+    },
+    {
+      "key": "alt-left",
+      "app_cursor": true,
+      "bytes": "\u001b[1;3D"
+    },
+    {
+      "key": "alt-shift-left",
+      "app_cursor": true,
+      "bytes": "\u001b[1;4D"
+    },
+    {
+      "key": "ctrl-left",
+      "app_cursor": true,
+      "bytes": "\u001b[1;5D"
+    },
+    {
+      "key": "ctrl-shift-left",
+      "app_cursor": true,
+      "bytes": "\u001b[1;6D"
+    },
+    {
+      "key": "ctrl-alt-left",
+      "app_cursor": true,
+      "bytes": "\u001b[1;7D"
+    },
+    {
+      "key": "ctrl-alt-shift-left",
+      "app_cursor": true,
+      "bytes": "\u001b[1;8D"
+    },
+    {
+      "key": "right",
+      "app_cursor": true,
+      "bytes": "\u001bOC"
+    },
+    {
+      "key": "shift-right",
+      "app_cursor": true,
+      "bytes": "\u001b[1;2C"
+    },
+    {
+      "key": "alt-right",
+      "app_cursor": true,
+      "bytes": "\u001b[1;3C"
+    },
+    {
+      "key": "alt-shift-right",
+      "app_cursor": true,
+      "bytes": "\u001b[1;4C"
+    },
+    {
+      "key": "ctrl-right",
+      "app_cursor": true,
+      "bytes": "\u001b[1;5C"
+    },
+    {
+      "key": "ctrl-shift-right",
+      "app_cursor": true,
+      "bytes": "\u001b[1;6C"
+    },
+    {
+      "key": "ctrl-alt-right",
+      "app_cursor": true,
+      "bytes": "\u001b[1;7C"
+    },
+    {
+      "key": "ctrl-alt-shift-right",
+      "app_cursor": true,
+      "bytes": "\u001b[1;8C"
+    },
+    {
+      "key": "up",
+      "app_cursor": true,
+      "bytes": "\u001bOA"
+    },
+    {
+      "key": "shift-up",
+      "app_cursor": true,
+      "bytes": "\u001b[1;2A"
+    },
+    {
+      "key": "alt-up",
+      "app_cursor": true,
+      "bytes": "\u001b[1;3A"
+    },
+    {
+      "key": "alt-shift-up",
+      "app_cursor": true,
+      "bytes": "\u001b[1;4A"
+    },
+    {
+      "key": "ctrl-up",
+      "app_cursor": true,
+      "bytes": "\u001b[1;5A"
+    },
+    {
+      "key": "ctrl-shift-up",
+      "app_cursor": true,
+      "bytes": "\u001b[1;6A"
+    },
+    {
+      "key": "ctrl-alt-up",
+      "app_cursor": true,
+      "bytes": "\u001b[1;7A"
+    },
+    {
+      "key": "ctrl-alt-shift-up",
+      "app_cursor": true,
+      "bytes": "\u001b[1;8A"
+    },
+    {
+      "key": "down",
+      "app_cursor": true,
+      "bytes": "\u001bOB"
+    },
+    {
+      "key": "shift-down",
+      "app_cursor": true,
+      "bytes": "\u001b[1;2B"
+    },
+    {
+      "key": "alt-down",
+      "app_cursor": true,
+      "bytes": "\u001b[1;3B"
+    },
+    {
+      "key": "alt-shift-down",
+      "app_cursor": true,
+      "bytes": "\u001b[1;4B"
+    },
+    {
+      "key": "ctrl-down",
+      "app_cursor": true,
+      "bytes": "\u001b[1;5B"
+    },
+    {
+      "key": "ctrl-shift-down",
+      "app_cursor": true,
+      "bytes": "\u001b[1;6B"
+    },
+    {
+      "key": "ctrl-alt-down",
+      "app_cursor": true,
+      "bytes": "\u001b[1;7B"
+    },
+    {
+      "key": "ctrl-alt-shift-down",
+      "app_cursor": true,
+      "bytes": "\u001b[1;8B"
+    },
+    {
+      "key": "insert",
+      "app_cursor": true,
+      "bytes": "\u001b[2~"
+    },
+    {
+      "key": "shift-insert",
+      "app_cursor": true,
+      "bytes": null
+    },
+    {
+      "key": "alt-insert",
+      "app_cursor": true,
+      "bytes": "\u001b[2~"
+    },
+    {
+      "key": "alt-shift-insert",
+      "app_cursor": true,
+      "bytes": null
+    },
+    {
+      "key": "ctrl-insert",
+      "app_cursor": true,
+      "bytes": null
+    },
+    {
+      "key": "ctrl-shift-insert",
+      "app_cursor": true,
+      "bytes": null
+    },
+    {
+      "key": "ctrl-alt-insert",
+      "app_cursor": true,
+      "bytes": null
+    },
+    {
+      "key": "ctrl-alt-shift-insert",
+      "app_cursor": true,
+      "bytes": null
+    },
+    {
+      "key": "delete",
+      "app_cursor": true,
+      "bytes": "\u001b[3~"
+    },
+    {
+      "key": "shift-delete",
+      "app_cursor": true,
+      "bytes": "\u001b[3;2~"
+    },
+    {
+      "key": "alt-delete",
+      "app_cursor": true,
+      "bytes": "\u001b[3;3~"
+    },
+    {
+      "key": "alt-shift-delete",
+      "app_cursor": true,
+      "bytes": "\u001b[3;4~"
+    },
+    {
+      "key": "ctrl-delete",
+      "app_cursor": true,
+      "bytes": "\u001b[3;5~"
+    },
+    {
+      "key": "ctrl-shift-delete",
+      "app_cursor": true,
+      "bytes": "\u001b[3;6~"
+    },
+    {
+      "key": "ctrl-alt-delete",
+      "app_cursor": true,
+      "bytes": "\u001b[3;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-delete",
+      "app_cursor": true,
+      "bytes": "\u001b[3;8~"
+    },
+    {
+      "key": "home",
+      "app_cursor": true,
+      "bytes": "\u001bOH"
+    },
+    {
+      "key": "shift-home",
+      "app_cursor": true,
+      "bytes": "\u001b[1;2H"
+    },
+    {
+      "key": "alt-home",
+      "app_cursor": true,
+      "bytes": "\u001b[1;3H"
+    },
+    {
+      "key": "alt-shift-home",
+      "app_cursor": true,
+      "bytes": "\u001b[1;4H"
+    },
+    {
+      "key": "ctrl-home",
+      "app_cursor": true,
+      "bytes": "\u001b[1;5H"
+    },
+    {
+      "key": "ctrl-shift-home",
+      "app_cursor": true,
+      "bytes": "\u001b[1;6H"
+    },
+    {
+      "key": "ctrl-alt-home",
+      "app_cursor": true,
+      "bytes": "\u001b[1;7H"
+    },
+    {
+      "key": "ctrl-alt-shift-home",
+      "app_cursor": true,
+      "bytes": "\u001b[1;8H"
+    },
+    {
+      "key": "end",
+      "app_cursor": true,
+      "bytes": "\u001bOF"
+    },
+    {
+      "key": "shift-end",
+      "app_cursor": true,
+      "bytes": "\u001b[1;2F"
+    },
+    {
+      "key": "alt-end",
+      "app_cursor": true,
+      "bytes": "\u001b[1;3F"
+    },
+    {
+      "key": "alt-shift-end",
+      "app_cursor": true,
+      "bytes": "\u001b[1;4F"
+    },
+    {
+      "key": "ctrl-end",
+      "app_cursor": true,
+      "bytes": "\u001b[1;5F"
+    },
+    {
+      "key": "ctrl-shift-end",
+      "app_cursor": true,
+      "bytes": "\u001b[1;6F"
+    },
+    {
+      "key": "ctrl-alt-end",
+      "app_cursor": true,
+      "bytes": "\u001b[1;7F"
+    },
+    {
+      "key": "ctrl-alt-shift-end",
+      "app_cursor": true,
+      "bytes": "\u001b[1;8F"
+    },
+    {
+      "key": "pageup",
+      "app_cursor": true,
+      "bytes": "\u001b[5~"
+    },
+    {
+      "key": "shift-pageup",
+      "app_cursor": true,
+      "bytes": null
+    },
+    {
+      "key": "alt-pageup",
+      "app_cursor": true,
+      "bytes": "\u001b[5~"
+    },
+    {
+      "key": "alt-shift-pageup",
+      "app_cursor": true,
+      "bytes": null
+    },
+    {
+      "key": "ctrl-pageup",
+      "app_cursor": true,
+      "bytes": "\u001b[5;5~"
+    },
+    {
+      "key": "ctrl-shift-pageup",
+      "app_cursor": true,
+      "bytes": null
+    },
+    {
+      "key": "ctrl-alt-pageup",
+      "app_cursor": true,
+      "bytes": "\u001b[5;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-pageup",
+      "app_cursor": true,
+      "bytes": null
+    },
+    {
+      "key": "pagedown",
+      "app_cursor": true,
+      "bytes": "\u001b[6~"
+    },
+    {
+      "key": "shift-pagedown",
+      "app_cursor": true,
+      "bytes": null
+    },
+    {
+      "key": "alt-pagedown",
+      "app_cursor": true,
+      "bytes": "\u001b[6~"
+    },
+    {
+      "key": "alt-shift-pagedown",
+      "app_cursor": true,
+      "bytes": null
+    },
+    {
+      "key": "ctrl-pagedown",
+      "app_cursor": true,
+      "bytes": "\u001b[6;5~"
+    },
+    {
+      "key": "ctrl-shift-pagedown",
+      "app_cursor": true,
+      "bytes": null
+    },
+    {
+      "key": "ctrl-alt-pagedown",
+      "app_cursor": true,
+      "bytes": "\u001b[6;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-pagedown",
+      "app_cursor": true,
+      "bytes": null
+    },
+    {
+      "key": "f1",
+      "app_cursor": true,
+      "bytes": "\u001bOP"
+    },
+    {
+      "key": "shift-f1",
+      "app_cursor": true,
+      "bytes": "\u001b[1;2P"
+    },
+    {
+      "key": "alt-f1",
+      "app_cursor": true,
+      "bytes": "\u001b[1;3P"
+    },
+    {
+      "key": "alt-shift-f1",
+      "app_cursor": true,
+      "bytes": "\u001b[1;4P"
+    },
+    {
+      "key": "ctrl-f1",
+      "app_cursor": true,
+      "bytes": "\u001b[1;5P"
+    },
+    {
+      "key": "ctrl-shift-f1",
+      "app_cursor": true,
+      "bytes": "\u001b[1;6P"
+    },
+    {
+      "key": "ctrl-alt-f1",
+      "app_cursor": true,
+      "bytes": "\u001b[1;7P"
+    },
+    {
+      "key": "ctrl-alt-shift-f1",
+      "app_cursor": true,
+      "bytes": "\u001b[1;8P"
+    },
+    {
+      "key": "f2",
+      "app_cursor": true,
+      "bytes": "\u001bOQ"
+    },
+    {
+      "key": "shift-f2",
+      "app_cursor": true,
+      "bytes": "\u001b[1;2Q"
+    },
+    {
+      "key": "alt-f2",
+      "app_cursor": true,
+      "bytes": "\u001b[1;3Q"
+    },
+    {
+      "key": "alt-shift-f2",
+      "app_cursor": true,
+      "bytes": "\u001b[1;4Q"
+    },
+    {
+      "key": "ctrl-f2",
+      "app_cursor": true,
+      "bytes": "\u001b[1;5Q"
+    },
+    {
+      "key": "ctrl-shift-f2",
+      "app_cursor": true,
+      "bytes": "\u001b[1;6Q"
+    },
+    {
+      "key": "ctrl-alt-f2",
+      "app_cursor": true,
+      "bytes": "\u001b[1;7Q"
+    },
+    {
+      "key": "ctrl-alt-shift-f2",
+      "app_cursor": true,
+      "bytes": "\u001b[1;8Q"
+    },
+    {
+      "key": "f3",
+      "app_cursor": true,
+      "bytes": "\u001bOR"
+    },
+    {
+      "key": "shift-f3",
+      "app_cursor": true,
+      "bytes": "\u001b[1;2R"
+    },
+    {
+      "key": "alt-f3",
+      "app_cursor": true,
+      "bytes": "\u001b[1;3R"
+    },
+    {
+      "key": "alt-shift-f3",
+      "app_cursor": true,
+      "bytes": "\u001b[1;4R"
+    },
+    {
+      "key": "ctrl-f3",
+      "app_cursor": true,
+      "bytes": "\u001b[1;5R"
+    },
+    {
+      "key": "ctrl-shift-f3",
+      "app_cursor": true,
+      "bytes": "\u001b[1;6R"
+    },
+    {
+      "key": "ctrl-alt-f3",
+      "app_cursor": true,
+      "bytes": "\u001b[1;7R"
+    },
+    {
+      "key": "ctrl-alt-shift-f3",
+      "app_cursor": true,
+      "bytes": "\u001b[1;8R"
+    },
+    {
+      "key": "f4",
+      "app_cursor": true,
+      "bytes": "\u001bOS"
+    },
+    {
+      "key": "shift-f4",
+      "app_cursor": true,
+      "bytes": "\u001b[1;2S"
+    },
+    {
+      "key": "alt-f4",
+      "app_cursor": true,
+      "bytes": "\u001b[1;3S"
+    },
+    {
+      "key": "alt-shift-f4",
+      "app_cursor": true,
+      "bytes": "\u001b[1;4S"
+    },
+    {
+      "key": "ctrl-f4",
+      "app_cursor": true,
+      "bytes": "\u001b[1;5S"
+    },
+    {
+      "key": "ctrl-shift-f4",
+      "app_cursor": true,
+      "bytes": "\u001b[1;6S"
+    },
+    {
+      "key": "ctrl-alt-f4",
+      "app_cursor": true,
+      "bytes": "\u001b[1;7S"
+    },
+    {
+      "key": "ctrl-alt-shift-f4",
+      "app_cursor": true,
+      "bytes": "\u001b[1;8S"
+    },
+    {
+      "key": "f5",
+      "app_cursor": true,
+      "bytes": "\u001b[15~"
+    },
+    {
+      "key": "shift-f5",
+      "app_cursor": true,
+      "bytes": "\u001b[15;2~"
+    },
+    {
+      "key": "alt-f5",
+      "app_cursor": true,
+      "bytes": "\u001b[15;3~"
+    },
+    {
+      "key": "alt-shift-f5",
+      "app_cursor": true,
+      "bytes": "\u001b[15;4~"
+    },
+    {
+      "key": "ctrl-f5",
+      "app_cursor": true,
+      "bytes": "\u001b[15;5~"
+    },
+    {
+      "key": "ctrl-shift-f5",
+      "app_cursor": true,
+      "bytes": "\u001b[15;6~"
+    },
+    {
+      "key": "ctrl-alt-f5",
+      "app_cursor": true,
+      "bytes": "\u001b[15;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-f5",
+      "app_cursor": true,
+      "bytes": "\u001b[15;8~"
+    },
+    {
+      "key": "f6",
+      "app_cursor": true,
+      "bytes": "\u001b[17~"
+    },
+    {
+      "key": "shift-f6",
+      "app_cursor": true,
+      "bytes": "\u001b[17;2~"
+    },
+    {
+      "key": "alt-f6",
+      "app_cursor": true,
+      "bytes": "\u001b[17;3~"
+    },
+    {
+      "key": "alt-shift-f6",
+      "app_cursor": true,
+      "bytes": "\u001b[17;4~"
+    },
+    {
+      "key": "ctrl-f6",
+      "app_cursor": true,
+      "bytes": "\u001b[17;5~"
+    },
+    {
+      "key": "ctrl-shift-f6",
+      "app_cursor": true,
+      "bytes": "\u001b[17;6~"
+    },
+    {
+      "key": "ctrl-alt-f6",
+      "app_cursor": true,
+      "bytes": "\u001b[17;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-f6",
+      "app_cursor": true,
+      "bytes": "\u001b[17;8~"
+    },
+    {
+      "key": "f7",
+      "app_cursor": true,
+      "bytes": "\u001b[18~"
+    },
+    {
+      "key": "shift-f7",
+      "app_cursor": true,
+      "bytes": "\u001b[18;2~"
+    },
+    {
+      "key": "alt-f7",
+      "app_cursor": true,
+      "bytes": "\u001b[18;3~"
+    },
+    {
+      "key": "alt-shift-f7",
+      "app_cursor": true,
+      "bytes": "\u001b[18;4~"
+    },
+    {
+      "key": "ctrl-f7",
+      "app_cursor": true,
+      "bytes": "\u001b[18;5~"
+    },
+    {
+      "key": "ctrl-shift-f7",
+      "app_cursor": true,
+      "bytes": "\u001b[18;6~"
+    },
+    {
+      "key": "ctrl-alt-f7",
+      "app_cursor": true,
+      "bytes": "\u001b[18;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-f7",
+      "app_cursor": true,
+      "bytes": "\u001b[18;8~"
+    },
+    {
+      "key": "f8",
+      "app_cursor": true,
+      "bytes": "\u001b[19~"
+    },
+    {
+      "key": "shift-f8",
+      "app_cursor": true,
+      "bytes": "\u001b[19;2~"
+    },
+    {
+      "key": "alt-f8",
+      "app_cursor": true,
+      "bytes": "\u001b[19;3~"
+    },
+    {
+      "key": "alt-shift-f8",
+      "app_cursor": true,
+      "bytes": "\u001b[19;4~"
+    },
+    {
+      "key": "ctrl-f8",
+      "app_cursor": true,
+      "bytes": "\u001b[19;5~"
+    },
+    {
+      "key": "ctrl-shift-f8",
+      "app_cursor": true,
+      "bytes": "\u001b[19;6~"
+    },
+    {
+      "key": "ctrl-alt-f8",
+      "app_cursor": true,
+      "bytes": "\u001b[19;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-f8",
+      "app_cursor": true,
+      "bytes": "\u001b[19;8~"
+    },
+    {
+      "key": "f9",
+      "app_cursor": true,
+      "bytes": "\u001b[20~"
+    },
+    {
+      "key": "shift-f9",
+      "app_cursor": true,
+      "bytes": "\u001b[20;2~"
+    },
+    {
+      "key": "alt-f9",
+      "app_cursor": true,
+      "bytes": "\u001b[20;3~"
+    },
+    {
+      "key": "alt-shift-f9",
+      "app_cursor": true,
+      "bytes": "\u001b[20;4~"
+    },
+    {
+      "key": "ctrl-f9",
+      "app_cursor": true,
+      "bytes": "\u001b[20;5~"
+    },
+    {
+      "key": "ctrl-shift-f9",
+      "app_cursor": true,
+      "bytes": "\u001b[20;6~"
+    },
+    {
+      "key": "ctrl-alt-f9",
+      "app_cursor": true,
+      "bytes": "\u001b[20;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-f9",
+      "app_cursor": true,
+      "bytes": "\u001b[20;8~"
+    },
+    {
+      "key": "f10",
+      "app_cursor": true,
+      "bytes": "\u001b[21~"
+    },
+    {
+      "key": "shift-f10",
+      "app_cursor": true,
+      "bytes": "\u001b[21;2~"
+    },
+    {
+      "key": "alt-f10",
+      "app_cursor": true,
+      "bytes": "\u001b[21;3~"
+    },
+    {
+      "key": "alt-shift-f10",
+      "app_cursor": true,
+      "bytes": "\u001b[21;4~"
+    },
+    {
+      "key": "ctrl-f10",
+      "app_cursor": true,
+      "bytes": "\u001b[21;5~"
+    },
+    {
+      "key": "ctrl-shift-f10",
+      "app_cursor": true,
+      "bytes": "\u001b[21;6~"
+    },
+    {
+      "key": "ctrl-alt-f10",
+      "app_cursor": true,
+      "bytes": "\u001b[21;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-f10",
+      "app_cursor": true,
+      "bytes": "\u001b[21;8~"
+    },
+    {
+      "key": "f11",
+      "app_cursor": true,
+      "bytes": "\u001b[23~"
+    },
+    {
+      "key": "shift-f11",
+      "app_cursor": true,
+      "bytes": "\u001b[23;2~"
+    },
+    {
+      "key": "alt-f11",
+      "app_cursor": true,
+      "bytes": "\u001b[23;3~"
+    },
+    {
+      "key": "alt-shift-f11",
+      "app_cursor": true,
+      "bytes": "\u001b[23;4~"
+    },
+    {
+      "key": "ctrl-f11",
+      "app_cursor": true,
+      "bytes": "\u001b[23;5~"
+    },
+    {
+      "key": "ctrl-shift-f11",
+      "app_cursor": true,
+      "bytes": "\u001b[23;6~"
+    },
+    {
+      "key": "ctrl-alt-f11",
+      "app_cursor": true,
+      "bytes": "\u001b[23;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-f11",
+      "app_cursor": true,
+      "bytes": "\u001b[23;8~"
+    },
+    {
+      "key": "f12",
+      "app_cursor": true,
+      "bytes": "\u001b[24~"
+    },
+    {
+      "key": "shift-f12",
+      "app_cursor": true,
+      "bytes": "\u001b[24;2~"
+    },
+    {
+      "key": "alt-f12",
+      "app_cursor": true,
+      "bytes": "\u001b[24;3~"
+    },
+    {
+      "key": "alt-shift-f12",
+      "app_cursor": true,
+      "bytes": "\u001b[24;4~"
+    },
+    {
+      "key": "ctrl-f12",
+      "app_cursor": true,
+      "bytes": "\u001b[24;5~"
+    },
+    {
+      "key": "ctrl-shift-f12",
+      "app_cursor": true,
+      "bytes": "\u001b[24;6~"
+    },
+    {
+      "key": "ctrl-alt-f12",
+      "app_cursor": true,
+      "bytes": "\u001b[24;7~"
+    },
+    {
+      "key": "ctrl-alt-shift-f12",
+      "app_cursor": true,
+      "bytes": "\u001b[24;8~"
+    }
+  ],
+  "paste": [
+    {
+      "text": "",
+      "bracketed": false,
+      "bytes": ""
+    },
+    {
+      "text": "",
+      "bracketed": true,
+      "bytes": "\u001b[200~\u001b[201~"
+    },
+    {
+      "text": "a\nb\r\nc\rd",
+      "bracketed": false,
+      "bytes": "a\rb\rc\rd"
+    },
+    {
+      "text": "a\nb\r\nc\rd",
+      "bracketed": true,
+      "bytes": "\u001b[200~a\rb\rc\rd\u001b[201~"
+    },
+    {
+      "text": "中文🙂",
+      "bracketed": false,
+      "bytes": "中文🙂"
+    },
+    {
+      "text": "中文🙂",
+      "bracketed": true,
+      "bytes": "\u001b[200~中文🙂\u001b[201~"
+    },
+    {
+      "text": "\u001b[31mred\u001b[0m",
+      "bracketed": false,
+      "bytes": "\u001b[31mred\u001b[0m"
+    },
+    {
+      "text": "\u001b[31mred\u001b[0m",
+      "bracketed": true,
+      "bytes": "\u001b[200~\u001b[31mred\u001b[0m\u001b[201~"
+    },
+    {
+      "text": "\u001b[201~",
+      "bracketed": false,
+      "bytes": "\u001b[201~"
+    },
+    {
+      "text": "\u001b[201~",
+      "bracketed": true,
+      "bytes": "\u001b[200~\u001b[201~\u001b[201~"
+    }
+  ],
+  "colors": [
+    {
+      "name": "default",
+      "mode": 0,
+      "value": 0,
+      "bold": false,
+      "faint": false,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 2568772,
+      "alpha": 255
+    },
+    {
+      "name": "default",
+      "mode": 0,
+      "value": 0,
+      "bold": false,
+      "faint": false,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 255
+    },
+    {
+      "name": "default",
+      "mode": 0,
+      "value": 0,
+      "bold": false,
+      "faint": true,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 2568772,
+      "alpha": 128
+    },
+    {
+      "name": "default",
+      "mode": 0,
+      "value": 0,
+      "bold": false,
+      "faint": true,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 128
+    },
+    {
+      "name": "default",
+      "mode": 0,
+      "value": 0,
+      "bold": true,
+      "faint": false,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 2568772,
+      "alpha": 255
+    },
+    {
+      "name": "default",
+      "mode": 0,
+      "value": 0,
+      "bold": true,
+      "faint": false,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 255
+    },
+    {
+      "name": "default",
+      "mode": 0,
+      "value": 0,
+      "bold": true,
+      "faint": true,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 2568772,
+      "alpha": 128
+    },
+    {
+      "name": "default",
+      "mode": 0,
+      "value": 0,
+      "bold": true,
+      "faint": true,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 128
+    },
+    {
+      "name": "red",
+      "mode": 16777216,
+      "value": 1,
+      "bold": false,
+      "faint": false,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 10100784,
+      "alpha": 255
+    },
+    {
+      "name": "red",
+      "mode": 16777216,
+      "value": 1,
+      "bold": false,
+      "faint": false,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 255
+    },
+    {
+      "name": "red",
+      "mode": 16777216,
+      "value": 1,
+      "bold": false,
+      "faint": true,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 10100784,
+      "alpha": 128
+    },
+    {
+      "name": "red",
+      "mode": 16777216,
+      "value": 1,
+      "bold": false,
+      "faint": true,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 128
+    },
+    {
+      "name": "red",
+      "mode": 16777216,
+      "value": 1,
+      "bold": true,
+      "faint": false,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16408688,
+      "alpha": 255
+    },
+    {
+      "name": "red",
+      "mode": 16777216,
+      "value": 1,
+      "bold": true,
+      "faint": false,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 255
+    },
+    {
+      "name": "red",
+      "mode": 16777216,
+      "value": 1,
+      "bold": true,
+      "faint": true,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16408688,
+      "alpha": 128
+    },
+    {
+      "name": "red",
+      "mode": 16777216,
+      "value": 1,
+      "bold": true,
+      "faint": true,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 128
+    },
+    {
+      "name": "indexed-red",
+      "mode": 33554432,
+      "value": 1,
+      "bold": false,
+      "faint": false,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 10100784,
+      "alpha": 255
+    },
+    {
+      "name": "indexed-red",
+      "mode": 33554432,
+      "value": 1,
+      "bold": false,
+      "faint": false,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 255
+    },
+    {
+      "name": "indexed-red",
+      "mode": 33554432,
+      "value": 1,
+      "bold": false,
+      "faint": true,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 10100784,
+      "alpha": 128
+    },
+    {
+      "name": "indexed-red",
+      "mode": 33554432,
+      "value": 1,
+      "bold": false,
+      "faint": true,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 128
+    },
+    {
+      "name": "indexed-red",
+      "mode": 33554432,
+      "value": 1,
+      "bold": true,
+      "faint": false,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16408688,
+      "alpha": 255
+    },
+    {
+      "name": "indexed-red",
+      "mode": 33554432,
+      "value": 1,
+      "bold": true,
+      "faint": false,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 255
+    },
+    {
+      "name": "indexed-red",
+      "mode": 33554432,
+      "value": 1,
+      "bold": true,
+      "faint": true,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16408688,
+      "alpha": 128
+    },
+    {
+      "name": "indexed-red",
+      "mode": 33554432,
+      "value": 1,
+      "bold": true,
+      "faint": true,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 128
+    },
+    {
+      "name": "bright-red",
+      "mode": 16777216,
+      "value": 9,
+      "bold": false,
+      "faint": false,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16408688,
+      "alpha": 255
+    },
+    {
+      "name": "bright-red",
+      "mode": 16777216,
+      "value": 9,
+      "bold": false,
+      "faint": false,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 255
+    },
+    {
+      "name": "bright-red",
+      "mode": 16777216,
+      "value": 9,
+      "bold": false,
+      "faint": true,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16408688,
+      "alpha": 128
+    },
+    {
+      "name": "bright-red",
+      "mode": 16777216,
+      "value": 9,
+      "bold": false,
+      "faint": true,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 128
+    },
+    {
+      "name": "bright-red",
+      "mode": 16777216,
+      "value": 9,
+      "bold": true,
+      "faint": false,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16408688,
+      "alpha": 255
+    },
+    {
+      "name": "bright-red",
+      "mode": 16777216,
+      "value": 9,
+      "bold": true,
+      "faint": false,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 255
+    },
+    {
+      "name": "bright-red",
+      "mode": 16777216,
+      "value": 9,
+      "bold": true,
+      "faint": true,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16408688,
+      "alpha": 128
+    },
+    {
+      "name": "bright-red",
+      "mode": 16777216,
+      "value": 9,
+      "bold": true,
+      "faint": true,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 128
+    },
+    {
+      "name": "blue",
+      "mode": 16777216,
+      "value": 4,
+      "bold": false,
+      "faint": false,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 3166368,
+      "alpha": 255
+    },
+    {
+      "name": "blue",
+      "mode": 16777216,
+      "value": 4,
+      "bold": false,
+      "faint": false,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 255
+    },
+    {
+      "name": "blue",
+      "mode": 16777216,
+      "value": 4,
+      "bold": false,
+      "faint": true,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 3166368,
+      "alpha": 128
+    },
+    {
+      "name": "blue",
+      "mode": 16777216,
+      "value": 4,
+      "bold": false,
+      "faint": true,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 128
+    },
+    {
+      "name": "blue",
+      "mode": 16777216,
+      "value": 4,
+      "bold": true,
+      "faint": false,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 7377120,
+      "alpha": 255
+    },
+    {
+      "name": "blue",
+      "mode": 16777216,
+      "value": 4,
+      "bold": true,
+      "faint": false,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 255
+    },
+    {
+      "name": "blue",
+      "mode": 16777216,
+      "value": 4,
+      "bold": true,
+      "faint": true,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 7377120,
+      "alpha": 128
+    },
+    {
+      "name": "blue",
+      "mode": 16777216,
+      "value": 4,
+      "bold": true,
+      "faint": true,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 128
+    },
+    {
+      "name": "indexed-blue",
+      "mode": 33554432,
+      "value": 4,
+      "bold": false,
+      "faint": false,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 3166368,
+      "alpha": 255
+    },
+    {
+      "name": "indexed-blue",
+      "mode": 33554432,
+      "value": 4,
+      "bold": false,
+      "faint": false,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 255
+    },
+    {
+      "name": "indexed-blue",
+      "mode": 33554432,
+      "value": 4,
+      "bold": false,
+      "faint": true,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 3166368,
+      "alpha": 128
+    },
+    {
+      "name": "indexed-blue",
+      "mode": 33554432,
+      "value": 4,
+      "bold": false,
+      "faint": true,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 128
+    },
+    {
+      "name": "indexed-blue",
+      "mode": 33554432,
+      "value": 4,
+      "bold": true,
+      "faint": false,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 7377120,
+      "alpha": 255
+    },
+    {
+      "name": "indexed-blue",
+      "mode": 33554432,
+      "value": 4,
+      "bold": true,
+      "faint": false,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 255
+    },
+    {
+      "name": "indexed-blue",
+      "mode": 33554432,
+      "value": 4,
+      "bold": true,
+      "faint": true,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 7377120,
+      "alpha": 128
+    },
+    {
+      "name": "indexed-blue",
+      "mode": 33554432,
+      "value": 4,
+      "bold": true,
+      "faint": true,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 128
+    },
+    {
+      "name": "bright-blue",
+      "mode": 16777216,
+      "value": 12,
+      "bold": false,
+      "faint": false,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 7377120,
+      "alpha": 255
+    },
+    {
+      "name": "bright-blue",
+      "mode": 16777216,
+      "value": 12,
+      "bold": false,
+      "faint": false,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 255
+    },
+    {
+      "name": "bright-blue",
+      "mode": 16777216,
+      "value": 12,
+      "bold": false,
+      "faint": true,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 7377120,
+      "alpha": 128
+    },
+    {
+      "name": "bright-blue",
+      "mode": 16777216,
+      "value": 12,
+      "bold": false,
+      "faint": true,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 128
+    },
+    {
+      "name": "bright-blue",
+      "mode": 16777216,
+      "value": 12,
+      "bold": true,
+      "faint": false,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 7377120,
+      "alpha": 255
+    },
+    {
+      "name": "bright-blue",
+      "mode": 16777216,
+      "value": 12,
+      "bold": true,
+      "faint": false,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 255
+    },
+    {
+      "name": "bright-blue",
+      "mode": 16777216,
+      "value": 12,
+      "bold": true,
+      "faint": true,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 7377120,
+      "alpha": 128
+    },
+    {
+      "name": "bright-blue",
+      "mode": 16777216,
+      "value": 12,
+      "bold": true,
+      "faint": true,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 128
+    },
+    {
+      "name": "cube",
+      "mode": 33554432,
+      "value": 130,
+      "bold": false,
+      "faint": false,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 11493120,
+      "alpha": 255
+    },
+    {
+      "name": "cube",
+      "mode": 33554432,
+      "value": 130,
+      "bold": false,
+      "faint": false,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 255
+    },
+    {
+      "name": "cube",
+      "mode": 33554432,
+      "value": 130,
+      "bold": false,
+      "faint": true,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 11493120,
+      "alpha": 128
+    },
+    {
+      "name": "cube",
+      "mode": 33554432,
+      "value": 130,
+      "bold": false,
+      "faint": true,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 128
+    },
+    {
+      "name": "cube",
+      "mode": 33554432,
+      "value": 130,
+      "bold": true,
+      "faint": false,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 11493120,
+      "alpha": 255
+    },
+    {
+      "name": "cube",
+      "mode": 33554432,
+      "value": 130,
+      "bold": true,
+      "faint": false,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 255
+    },
+    {
+      "name": "cube",
+      "mode": 33554432,
+      "value": 130,
+      "bold": true,
+      "faint": true,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 11493120,
+      "alpha": 128
+    },
+    {
+      "name": "cube",
+      "mode": 33554432,
+      "value": 130,
+      "bold": true,
+      "faint": true,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 128
+    },
+    {
+      "name": "rgb",
+      "mode": 50331648,
+      "value": 2113632,
+      "bold": false,
+      "faint": false,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 2113632,
+      "alpha": 255
+    },
+    {
+      "name": "rgb",
+      "mode": 50331648,
+      "value": 2113632,
+      "bold": false,
+      "faint": false,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 255
+    },
+    {
+      "name": "rgb",
+      "mode": 50331648,
+      "value": 2113632,
+      "bold": false,
+      "faint": true,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 2113632,
+      "alpha": 128
+    },
+    {
+      "name": "rgb",
+      "mode": 50331648,
+      "value": 2113632,
+      "bold": false,
+      "faint": true,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 128
+    },
+    {
+      "name": "rgb",
+      "mode": 50331648,
+      "value": 2113632,
+      "bold": true,
+      "faint": false,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 2113632,
+      "alpha": 255
+    },
+    {
+      "name": "rgb",
+      "mode": 50331648,
+      "value": 2113632,
+      "bold": true,
+      "faint": false,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 255
+    },
+    {
+      "name": "rgb",
+      "mode": 50331648,
+      "value": 2113632,
+      "bold": true,
+      "faint": true,
+      "inverse": false,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 2113632,
+      "alpha": 128
+    },
+    {
+      "name": "rgb",
+      "mode": 50331648,
+      "value": 2113632,
+      "bold": true,
+      "faint": true,
+      "inverse": true,
+      "foreground": 2568772,
+      "background": 16777215,
+      "rgb": 16777215,
+      "alpha": 128
+    },
+    {
+      "name": "default",
+      "mode": 0,
+      "value": 0,
+      "bold": false,
+      "faint": false,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 14410992,
+      "alpha": 255
+    },
+    {
+      "name": "default",
+      "mode": 0,
+      "value": 0,
+      "bold": false,
+      "faint": false,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 255
+    },
+    {
+      "name": "default",
+      "mode": 0,
+      "value": 0,
+      "bold": false,
+      "faint": true,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 14410992,
+      "alpha": 128
+    },
+    {
+      "name": "default",
+      "mode": 0,
+      "value": 0,
+      "bold": false,
+      "faint": true,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 128
+    },
+    {
+      "name": "default",
+      "mode": 0,
+      "value": 0,
+      "bold": true,
+      "faint": false,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 14410992,
+      "alpha": 255
+    },
+    {
+      "name": "default",
+      "mode": 0,
+      "value": 0,
+      "bold": true,
+      "faint": false,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 255
+    },
+    {
+      "name": "default",
+      "mode": 0,
+      "value": 0,
+      "bold": true,
+      "faint": true,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 14410992,
+      "alpha": 128
+    },
+    {
+      "name": "default",
+      "mode": 0,
+      "value": 0,
+      "bold": true,
+      "faint": true,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 128
+    },
+    {
+      "name": "red",
+      "mode": 16777216,
+      "value": 1,
+      "bold": false,
+      "faint": false,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 10100784,
+      "alpha": 255
+    },
+    {
+      "name": "red",
+      "mode": 16777216,
+      "value": 1,
+      "bold": false,
+      "faint": false,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 255
+    },
+    {
+      "name": "red",
+      "mode": 16777216,
+      "value": 1,
+      "bold": false,
+      "faint": true,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 10100784,
+      "alpha": 128
+    },
+    {
+      "name": "red",
+      "mode": 16777216,
+      "value": 1,
+      "bold": false,
+      "faint": true,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 128
+    },
+    {
+      "name": "red",
+      "mode": 16777216,
+      "value": 1,
+      "bold": true,
+      "faint": false,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 16408688,
+      "alpha": 255
+    },
+    {
+      "name": "red",
+      "mode": 16777216,
+      "value": 1,
+      "bold": true,
+      "faint": false,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 255
+    },
+    {
+      "name": "red",
+      "mode": 16777216,
+      "value": 1,
+      "bold": true,
+      "faint": true,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 16408688,
+      "alpha": 128
+    },
+    {
+      "name": "red",
+      "mode": 16777216,
+      "value": 1,
+      "bold": true,
+      "faint": true,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 128
+    },
+    {
+      "name": "indexed-red",
+      "mode": 33554432,
+      "value": 1,
+      "bold": false,
+      "faint": false,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 10100784,
+      "alpha": 255
+    },
+    {
+      "name": "indexed-red",
+      "mode": 33554432,
+      "value": 1,
+      "bold": false,
+      "faint": false,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 255
+    },
+    {
+      "name": "indexed-red",
+      "mode": 33554432,
+      "value": 1,
+      "bold": false,
+      "faint": true,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 10100784,
+      "alpha": 128
+    },
+    {
+      "name": "indexed-red",
+      "mode": 33554432,
+      "value": 1,
+      "bold": false,
+      "faint": true,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 128
+    },
+    {
+      "name": "indexed-red",
+      "mode": 33554432,
+      "value": 1,
+      "bold": true,
+      "faint": false,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 16408688,
+      "alpha": 255
+    },
+    {
+      "name": "indexed-red",
+      "mode": 33554432,
+      "value": 1,
+      "bold": true,
+      "faint": false,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 255
+    },
+    {
+      "name": "indexed-red",
+      "mode": 33554432,
+      "value": 1,
+      "bold": true,
+      "faint": true,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 16408688,
+      "alpha": 128
+    },
+    {
+      "name": "indexed-red",
+      "mode": 33554432,
+      "value": 1,
+      "bold": true,
+      "faint": true,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 128
+    },
+    {
+      "name": "bright-red",
+      "mode": 16777216,
+      "value": 9,
+      "bold": false,
+      "faint": false,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 16408688,
+      "alpha": 255
+    },
+    {
+      "name": "bright-red",
+      "mode": 16777216,
+      "value": 9,
+      "bold": false,
+      "faint": false,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 255
+    },
+    {
+      "name": "bright-red",
+      "mode": 16777216,
+      "value": 9,
+      "bold": false,
+      "faint": true,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 16408688,
+      "alpha": 128
+    },
+    {
+      "name": "bright-red",
+      "mode": 16777216,
+      "value": 9,
+      "bold": false,
+      "faint": true,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 128
+    },
+    {
+      "name": "bright-red",
+      "mode": 16777216,
+      "value": 9,
+      "bold": true,
+      "faint": false,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 16408688,
+      "alpha": 255
+    },
+    {
+      "name": "bright-red",
+      "mode": 16777216,
+      "value": 9,
+      "bold": true,
+      "faint": false,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 255
+    },
+    {
+      "name": "bright-red",
+      "mode": 16777216,
+      "value": 9,
+      "bold": true,
+      "faint": true,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 16408688,
+      "alpha": 128
+    },
+    {
+      "name": "bright-red",
+      "mode": 16777216,
+      "value": 9,
+      "bold": true,
+      "faint": true,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 128
+    },
+    {
+      "name": "blue",
+      "mode": 16777216,
+      "value": 4,
+      "bold": false,
+      "faint": false,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 3166368,
+      "alpha": 255
+    },
+    {
+      "name": "blue",
+      "mode": 16777216,
+      "value": 4,
+      "bold": false,
+      "faint": false,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 255
+    },
+    {
+      "name": "blue",
+      "mode": 16777216,
+      "value": 4,
+      "bold": false,
+      "faint": true,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 3166368,
+      "alpha": 128
+    },
+    {
+      "name": "blue",
+      "mode": 16777216,
+      "value": 4,
+      "bold": false,
+      "faint": true,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 128
+    },
+    {
+      "name": "blue",
+      "mode": 16777216,
+      "value": 4,
+      "bold": true,
+      "faint": false,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 7377120,
+      "alpha": 255
+    },
+    {
+      "name": "blue",
+      "mode": 16777216,
+      "value": 4,
+      "bold": true,
+      "faint": false,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 255
+    },
+    {
+      "name": "blue",
+      "mode": 16777216,
+      "value": 4,
+      "bold": true,
+      "faint": true,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 7377120,
+      "alpha": 128
+    },
+    {
+      "name": "blue",
+      "mode": 16777216,
+      "value": 4,
+      "bold": true,
+      "faint": true,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 128
+    },
+    {
+      "name": "indexed-blue",
+      "mode": 33554432,
+      "value": 4,
+      "bold": false,
+      "faint": false,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 3166368,
+      "alpha": 255
+    },
+    {
+      "name": "indexed-blue",
+      "mode": 33554432,
+      "value": 4,
+      "bold": false,
+      "faint": false,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 255
+    },
+    {
+      "name": "indexed-blue",
+      "mode": 33554432,
+      "value": 4,
+      "bold": false,
+      "faint": true,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 3166368,
+      "alpha": 128
+    },
+    {
+      "name": "indexed-blue",
+      "mode": 33554432,
+      "value": 4,
+      "bold": false,
+      "faint": true,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 128
+    },
+    {
+      "name": "indexed-blue",
+      "mode": 33554432,
+      "value": 4,
+      "bold": true,
+      "faint": false,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 7377120,
+      "alpha": 255
+    },
+    {
+      "name": "indexed-blue",
+      "mode": 33554432,
+      "value": 4,
+      "bold": true,
+      "faint": false,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 255
+    },
+    {
+      "name": "indexed-blue",
+      "mode": 33554432,
+      "value": 4,
+      "bold": true,
+      "faint": true,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 7377120,
+      "alpha": 128
+    },
+    {
+      "name": "indexed-blue",
+      "mode": 33554432,
+      "value": 4,
+      "bold": true,
+      "faint": true,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 128
+    },
+    {
+      "name": "bright-blue",
+      "mode": 16777216,
+      "value": 12,
+      "bold": false,
+      "faint": false,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 7377120,
+      "alpha": 255
+    },
+    {
+      "name": "bright-blue",
+      "mode": 16777216,
+      "value": 12,
+      "bold": false,
+      "faint": false,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 255
+    },
+    {
+      "name": "bright-blue",
+      "mode": 16777216,
+      "value": 12,
+      "bold": false,
+      "faint": true,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 7377120,
+      "alpha": 128
+    },
+    {
+      "name": "bright-blue",
+      "mode": 16777216,
+      "value": 12,
+      "bold": false,
+      "faint": true,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 128
+    },
+    {
+      "name": "bright-blue",
+      "mode": 16777216,
+      "value": 12,
+      "bold": true,
+      "faint": false,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 7377120,
+      "alpha": 255
+    },
+    {
+      "name": "bright-blue",
+      "mode": 16777216,
+      "value": 12,
+      "bold": true,
+      "faint": false,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 255
+    },
+    {
+      "name": "bright-blue",
+      "mode": 16777216,
+      "value": 12,
+      "bold": true,
+      "faint": true,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 7377120,
+      "alpha": 128
+    },
+    {
+      "name": "bright-blue",
+      "mode": 16777216,
+      "value": 12,
+      "bold": true,
+      "faint": true,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 128
+    },
+    {
+      "name": "cube",
+      "mode": 33554432,
+      "value": 130,
+      "bold": false,
+      "faint": false,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 11493120,
+      "alpha": 255
+    },
+    {
+      "name": "cube",
+      "mode": 33554432,
+      "value": 130,
+      "bold": false,
+      "faint": false,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 255
+    },
+    {
+      "name": "cube",
+      "mode": 33554432,
+      "value": 130,
+      "bold": false,
+      "faint": true,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 11493120,
+      "alpha": 128
+    },
+    {
+      "name": "cube",
+      "mode": 33554432,
+      "value": 130,
+      "bold": false,
+      "faint": true,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 128
+    },
+    {
+      "name": "cube",
+      "mode": 33554432,
+      "value": 130,
+      "bold": true,
+      "faint": false,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 11493120,
+      "alpha": 255
+    },
+    {
+      "name": "cube",
+      "mode": 33554432,
+      "value": 130,
+      "bold": true,
+      "faint": false,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 255
+    },
+    {
+      "name": "cube",
+      "mode": 33554432,
+      "value": 130,
+      "bold": true,
+      "faint": true,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 11493120,
+      "alpha": 128
+    },
+    {
+      "name": "cube",
+      "mode": 33554432,
+      "value": 130,
+      "bold": true,
+      "faint": true,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 128
+    },
+    {
+      "name": "rgb",
+      "mode": 50331648,
+      "value": 2113632,
+      "bold": false,
+      "faint": false,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 2113632,
+      "alpha": 255
+    },
+    {
+      "name": "rgb",
+      "mode": 50331648,
+      "value": 2113632,
+      "bold": false,
+      "faint": false,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 255
+    },
+    {
+      "name": "rgb",
+      "mode": 50331648,
+      "value": 2113632,
+      "bold": false,
+      "faint": true,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 2113632,
+      "alpha": 128
+    },
+    {
+      "name": "rgb",
+      "mode": 50331648,
+      "value": 2113632,
+      "bold": false,
+      "faint": true,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 128
+    },
+    {
+      "name": "rgb",
+      "mode": 50331648,
+      "value": 2113632,
+      "bold": true,
+      "faint": false,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 2113632,
+      "alpha": 255
+    },
+    {
+      "name": "rgb",
+      "mode": 50331648,
+      "value": 2113632,
+      "bold": true,
+      "faint": false,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 255
+    },
+    {
+      "name": "rgb",
+      "mode": 50331648,
+      "value": 2113632,
+      "bold": true,
+      "faint": true,
+      "inverse": false,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 2113632,
+      "alpha": 128
+    },
+    {
+      "name": "rgb",
+      "mode": 50331648,
+      "value": 2113632,
+      "bold": true,
+      "faint": true,
+      "inverse": true,
+      "foreground": 14410992,
+      "background": 1054242,
+      "rgb": 1054242,
+      "alpha": 128
+    }
+  ]
+}

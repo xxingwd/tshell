@@ -1,0 +1,9 @@
+/target/
+/artifacts/
+/data/
+/output/
+/tmp/
+/dist/
+/*-main/
+/{3}
+*.log

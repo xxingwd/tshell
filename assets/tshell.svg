@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <title>TShell</title>
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="#171E29"/>
+  <path d="M40 72H128V96H96V184H72V96H40Z" fill="#F0F5FA"/>
+  <path d="M148 72H216V96H156V116H196L216 136V164L196 184H132V160H192V140H152L132 120V88Z" fill="#64DFC3"/>
+</svg>

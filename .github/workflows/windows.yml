@@ -1,0 +1,71 @@
+name: Windows release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  TSHELL_UPDATE_REPOSITORY: ${{ github.repository }}
+
+jobs:
+  release:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install nightly-2026-09-12 --profile minimal
+          if ($LASTEXITCODE -ne 0) { throw 'Rust installation failed' }
+          rustup override set nightly-2026-09-12
+          if ($LASTEXITCODE -ne 0) { throw 'Rust setup failed' }
+      - uses: Swatinem/rust-cache@v2
+      - name: Validate version
+        shell: pwsh
+        run: |
+          $metadata = cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed' }
+          $version = ($metadata.packages | Where-Object name -eq tshell).version
+          if ($version -notmatch '^\d+\.\d+\.\d+$' -or $env:GITHUB_REF_NAME -cne "v$version") {
+            throw 'Tag must match the stable Cargo.toml version, e.g. v0.1.0'
+          }
+      - name: Test and build
+        shell: pwsh
+        run: |
+          cargo test --locked --bin tshell
+          if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
+          cargo build --locked --release --bin tshell
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+      - name: Package
+        shell: pwsh
+        run: ./tools/package-windows.ps1
+      - name: Publish Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $repo = $env:GITHUB_REPOSITORY
+          $tag = $env:GITHUB_REF_NAME
+          $publishedTags = gh api --paginate "repos/$repo/releases" --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name'
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect releases' }
+          foreach ($publishedTag in $publishedTags) {
+            if ($publishedTag -match '^v(\d+\.\d+\.\d+)$' -and [version]$Matches[1] -ge [version]$tag.Substring(1)) {
+              throw 'Release versions must increase; do not overwrite an existing release'
+            }
+          }
+          $files = @('dist/tshell-windows-x86_64.zip', 'dist/tshell-windows-x86_64.exe', 'dist/update-windows-x86_64.json', 'dist/THIRD-PARTY-NOTICES.txt', 'dist/SHA256SUMS.txt')
+          foreach ($file in $files) { if (!(Test-Path -LiteralPath $file)) { throw "Missing asset: $file" } }
+          gh release create $tag @files --repo $repo --verify-tag --title "TShell $tag" --generate-notes --draft
+          if ($LASTEXITCODE -ne 0) { throw 'Upload failed; inspect any existing draft before retrying' }
+          gh release edit $tag --repo $repo --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Publishing failed; inspect the draft release' }
