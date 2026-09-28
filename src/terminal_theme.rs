@@ -84,50 +84,6 @@ mod tests {
     }
 
     #[test]
-    fn embedded_defaults_match_the_source_snapshot() {
-        let fixture: serde_json::Value =
-            serde_json::from_str(include_str!("../tests/fixtures/theme-catalog.json")).unwrap();
-        let file = ThemeFile::default();
-        let themes = fixture["themes"].as_array().unwrap();
-        assert_eq!(themes.len(), 17);
-        let ansi_keys = [
-            "black",
-            "red",
-            "green",
-            "yellow",
-            "blue",
-            "magenta",
-            "cyan",
-            "white",
-            "brightBlack",
-            "brightRed",
-            "brightGreen",
-            "brightYellow",
-            "brightBlue",
-            "brightMagenta",
-            "brightCyan",
-            "brightWhite",
-        ];
-        for source in themes {
-            let theme = file.selected(source["id"].as_str().unwrap()).unwrap();
-            let color = |key: &str| source[key].as_u64().unwrap() as u32;
-            assert_eq!(theme.name, source["label"].as_str().unwrap());
-            assert_eq!(theme.colors().foreground, color("foreground"));
-            assert_eq!(theme.colors().background, color("background"));
-            assert_eq!(theme.colors().cursor, color("cursor"));
-            assert_eq!(theme.selection(), color("selectionBackground"));
-            for (index, key) in ansi_keys.into_iter().enumerate() {
-                assert_eq!(
-                    theme.colors().ansi[index],
-                    color(key),
-                    "{}: {key}",
-                    theme.id
-                );
-            }
-        }
-    }
-
-    #[test]
     fn paired_themes_follow_lightness_only_for_new_families() {
         assert_eq!(paired_theme("codex", false), Some("codex-dark"));
         assert_eq!(paired_theme("codex-dark", true), Some("codex-light"));

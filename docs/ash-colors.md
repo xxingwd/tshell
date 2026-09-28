@@ -22,7 +22,7 @@ TShell 原先将 DIM 前景的每个 RGB 通道乘以 2/3。这在暗色背景�
 已核对 ash 锁定的 `ratatui-crossterm 0.1.2` 和 `crossterm 0.29.0` 发布源码：Ratatui `Color::Blue` 映射为 Crossterm `DarkBlue`，输出 `SGR 38;5;4`；它与 shell 常用的 `SGR 34` 都选择调色板第 4 色。新增测试覆盖两种编码、粗体、DIM、恢复普通强度、OSC 覆盖和主题切换。未取得用户当前异常位置的原始输出，因此不能断言该位置仅包含普通 Blue。
 
 进一步确认明暗模式蓝色深浅不同来自两套 ANSI 调色板。现已提供独立的
-[终端主题选择](../vendor/terminal-themes/README.md)，默认 One Dark；切换界面
+终端主题选择，默认 One Dark；切换界面
 明暗不会改变终端配色。每套主题使用已提交的 RGB，包括前景、背景、ANSI 色、
 光标及选区。用户可直接选择偏好的深浅配色，xterm.js 不规定主题必须使用哪一种蓝色。
 

@@ -42,6 +42,8 @@ foreach ($package in ($metadata.packages | Sort-Object name, version)) {
 }
 $notices.Add("`nBundled Microsoft ConPTY runtime")
 $notices.Add([System.IO.File]::ReadAllText((Join-Path $PWD 'vendor/conpty/LICENSE')))
+$notices.Add("`nBundled terminal palette data")
+$notices.Add([System.IO.File]::ReadAllText((Join-Path $PWD 'src/terminal_theme/PALETTE_LICENSE')))
 $notices | Set-Content -LiteralPath "$OutputDirectory/THIRD-PARTY-NOTICES.txt" -Encoding utf8
 Copy-Item -LiteralPath "$OutputDirectory/THIRD-PARTY-NOTICES.txt" -Destination "$staging/THIRD-PARTY-NOTICES.txt"
 @'

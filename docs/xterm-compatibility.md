@@ -2,7 +2,21 @@
 
 TShell uses **xterm.js 6.0.0** as the reference for terminal behavior, with WebGL custom glyphs enabled, `drawBoldTextInBrightColors=true`, `minimumContrastRatio=1`, and Windows keyboard behavior. User-selected font, palette, opacity and workspace shortcuts remain application preferences. Rust/GPUI remains the runtime; no browser or JavaScript interpreter is embedded.
 
-All 17 original [bundled palettes](../vendor/terminal-themes/README.md) retain their checked-in colour values; One Dark remains the default dark slot. Four additional Codex and VS Code Modern palettes are application extensions. Workspace surfaces and dialog tokens derive from the selected terminal background, foreground and cursor. Users configure independent light/dark scheme IDs; automatic mode chooses between them using only Windows lightness, never its accent colours. Legacy Codex/VS Code choices migrate to their matching pairs; legacy single schemes retain the matching lightness slot. Codex's red, green and magenta ANSI entries use the supplied semantic colours; other ANSI entries reuse the existing light and One Dark tables. VS Code Modern's terminal foreground and workspace colours follow the locally installed default theme; its ANSI colours use the existing light and One Dark tables because those theme files do not specify them. Theme changes update existing/new panes, selection/cursor colours and protocol reports together. DIM still follows xterm's alpha-compositing rules. This is an application preference, not a change to the xterm.js baseline.
+The built-in palette definitions in [`defaults.json`](../src/terminal_theme/defaults.json) retain their
+checked-in colour values; One Dark remains the default dark slot. Four additional
+Codex and VS Code Modern palettes are application extensions. Workspace surfaces
+and dialog tokens derive from the selected terminal background, foreground and
+cursor. Users configure independent light/dark scheme IDs; automatic mode chooses
+between them using only Windows lightness, never its accent colours. Legacy
+Codex/VS Code choices migrate to their matching pairs; legacy single schemes
+retain the matching lightness slot. Codex's red, green and magenta ANSI entries
+use the supplied semantic colours; other ANSI entries reuse the existing light
+and One Dark tables. VS Code Modern's terminal foreground and workspace colours
+follow the locally installed default theme; its ANSI colours use the existing
+light and One Dark tables because those theme files do not specify them. Theme
+changes update existing/new panes, selection/cursor colours and protocol reports
+together. DIM still follows xterm's alpha-compositing rules. This is an
+application preference, not a change to the xterm.js baseline.
 
 TShell keeps the user's terminal font and, on Windows, explicitly uses Chromium's
 simplified-Han fallback order: Noto Sans SC, Noto Sans CJK SC, Microsoft YaHei,
