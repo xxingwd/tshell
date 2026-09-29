@@ -89,11 +89,11 @@ impl AppView {
             finish: prompt.finish,
         });
         let input = dialog.read(cx).input.clone();
-        window.open_dialog(cx, move |builder, _, _| {
+        window.open_dialog(cx, move |builder, _, cx| {
             let reply = reply.clone();
             let finish = finish.clone();
             let submit = dialog.clone();
-            builder
+            workspace_dialog(builder, cx)
                 .title(crate::t!("ssh.authentication"))
                 .width(px(440.))
                 .on_ok(move |_, window, cx| {

@@ -7,6 +7,9 @@ enum OpenedFile {
 
 impl AppView {
     pub(super) fn remote_files(&mut self) -> Option<remote_files::Session> {
+        if self.hosts[self.active].backend.is_none() {
+            return None;
+        }
         let host = self.hosts[self.active].config.clone()?;
         let id = self.hosts[self.active]
             .snapshot
@@ -22,6 +25,9 @@ impl AppView {
     }
 
     pub(super) fn load_files(&mut self, cx: &mut Context<Self>) {
+        if self.workspace_mode != WorkspaceMode::Files || self.active_file_session.is_none() {
+            return;
+        }
         self.tree_request += 1;
         let request = self.tree_request;
         let root = self.cwd.clone();
@@ -39,9 +45,6 @@ impl AppView {
         self.tree_loading.clear();
         self.tree_loaded.clear();
         let host = self.remote_files();
-        if self.workspace_mode != WorkspaceMode::Files {
-            return;
-        }
         self.file_loading = Some(crate::t!("file.reading_directory").to_string());
         cx.spawn(async move |view, cx| {
             let requested_expansion = expanded.clone();
@@ -165,6 +168,9 @@ impl AppView {
     }
 
     pub(super) fn open_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if self.hosts[self.active].config.is_some() && self.hosts[self.active].backend.is_none() {
+            return;
+        }
         if self.open_file.as_ref() == Some(&path) && self.pending_file_state.is_none() {
             self.file_request += 1;
             self.file_loading = None;
@@ -261,11 +267,15 @@ impl AppView {
                             OpenedFile::Png(image) => (String::new(), Some(image)),
                         };
                         let language = workbench::language_for_path(&path).to_owned();
+                        let preview_mode = preview::can_preview(&language, &text);
+                        let preview = preview_mode.then(|| preview::parse(&language, &text));
                         this.pending_file_state = Some(SessionFileState {
                             path: Some(path),
                             saved_text: text.clone(),
                             text,
                             image,
+                            preview,
+                            preview_mode,
                             language,
                             dirty: false,
                         });

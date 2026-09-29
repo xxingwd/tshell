@@ -95,6 +95,8 @@ impl AppView {
                 .flat_map(|w| &w.panes)
                 .any(|p| p.notice_count > host.read_notices.get(&p.id).copied().unwrap_or(0));
             let edit_id = id.clone();
+            let delete_id = id.clone();
+            let host_index = self.active;
             let owner = cx.entity().downgrade();
             rows.push(
                 div()
@@ -111,14 +113,11 @@ impl AppView {
                     .items_center()
                     .gap_1()
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgb(p.selected)))
+                    .hover(|style| style.bg(rgb(p.row_hover())))
                     .text_size(px(13.))
+                    .line_height(relative(1.25))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(rgb(if id == host.snapshot.active_session {
-                        p.text
-                    } else {
-                        p.muted
-                    }))
+                    .text_color(rgb(p.text))
                     .child(
                         div()
                             .flex_1()
@@ -165,14 +164,27 @@ impl AppView {
                         this.toggle_session(id.clone(), cx);
                     }))
                     .context_menu(move |menu, _, _| {
-                        let owner = owner.clone();
+                        let edit_owner = owner.clone();
+                        let delete_owner = owner.clone();
                         let id = edit_id.clone();
+                        let delete_id = delete_id.clone();
                         menu.item(PopupMenuItem::new(crate::t!("session.edit_menu")).on_click(
                             move |_, window, cx| {
-                                let _ =
-                                    owner.update(cx, |this, cx| this.edit_session(&id, window, cx));
+                                let _ = edit_owner
+                                    .update(cx, |this, cx| this.edit_session(&id, window, cx));
                             },
                         ))
+                        .item(
+                            PopupMenuItem::new(crate::t!("session.delete_menu")).on_click(
+                                move |_, _, cx| {
+                                    let _ = delete_owner.update(cx, |this, cx| {
+                                        if this.active == host_index {
+                                            this.act(Action::RemoveSession(delete_id.clone()), cx);
+                                        }
+                                    });
+                                },
+                            ),
+                        )
                     })
                     .into_any_element(),
             );
@@ -220,15 +232,22 @@ impl AppView {
                             .items_center()
                             .gap_1()
                             .cursor_pointer()
-                            .bg(rgb(if selected { p.selected } else { p.panel }))
+                            .when(selected, |row| row.bg(rgb(p.row_selected())))
                             .text_color(rgb(p.text))
-                            .hover(|s| s.bg(rgb(p.selected)))
+                            .hover(move |s| {
+                                s.bg(rgb(if selected {
+                                    p.row_selected()
+                                } else {
+                                    p.row_hover()
+                                }))
+                            })
                             .child(
                                 div()
                                     .flex_1()
                                     .min_w_0()
                                     .truncate()
                                     .text_size(px(13.))
+                                    .line_height(relative(1.25))
                                     .child(label),
                             )
                             .when(

@@ -6,11 +6,12 @@ dividers adjacent to the active pane receive the accent color, with the same
 stroke width and coordinates. No frame is drawn on workspace outer edges.
 Normal and active colors blend 60% muted and 80% accent, respectively, over the
 UI border color; the final strokes stay opaque to avoid darkened intersections.
-Local, ordinary SSH and tmux count an eight-pixel minimum inset within the
-available pixel remainder, not in addition to it. A ten-pixel remainder, for
-example, places the grid eight pixels from the start and leaves two at the end;
-natural insets already larger than eight pixels remain centered. Tmux retains
-its native cell-sized separator gaps inside the outer inset.
+Local, ordinary SSH and tmux reserve an eight-pixel minimum on both sides of
+each padded axis. Any additional remainder stays on the trailing side: normal
+mode starts at the top and puts extra height below, while focus mode starts at
+eight pixels and keeps at least eight below; horizontally it starts at eight
+pixels and puts extra width on the right. Tmux retains its native cell-sized
+separator gaps inside the outer inset.
 The terminal workspace wrapper adds no additional padding;
 Explorer and Git diff use their own unchanged layout branches.
 The highlight is paint-only and does not consume
@@ -45,6 +46,19 @@ alternate-screen changes. Grid mutation and output revision publication happen
 under the same lock. Key and paste encoding read atomically published modes, so
 they do not wait for rendering to catch up.
 
+tmux capture restoration uses `capture-pane -e -N` to retain stored trailing
+spaces and their SGR backgrounds. Unallocated trailing cells are still absent,
+so TShell uses a default cell template only while processing synthetic line
+feeds; otherwise a coloured or styled final cell could colour newly scrolled
+blank rows. The captured SGR state continues across rows. A failed capture stays
+pending and is retried on the next coalesced snapshot refresh. A resize that
+supersedes an in-flight capture discards the old result and schedules a fresh
+capture at the new size.
+An existing pane with an uninterrupted `%output` stream does not recapture just
+because it resized: replaying coloured cells cannot reconstruct tmux's current
+SGR pen, and would interrupt an application's incremental redraw. New panes,
+window switches and stream reconnections still restore their captured grid.
+
 `TerminalView::prepare` and `paint` never acquire the terminal state lock. Each
 visible row retains its shaped text and merged backgrounds. Each text row also
 has an immutable GPUI entity rendered through the public `Entity::cached` API.
@@ -74,7 +88,7 @@ testing works in both drag directions; pending moves are merged in the mailbox,
 and release/copy flush the final pending endpoint. Mouse moves outside the surface
 are tracked while selecting. Wheel movement retains sub-line deltas. Applications
 using DEC mouse tracking receive button, release, drag, any-motion and wheel reports
-in SGR 1006, UTF-8 1005 or legacy X10 encoding. Shift bypasses application mouse
+in SGR 1006, UTF-8 1005 or legacy X10 encoding. Mouse-motion reports leave scrollback and selection unchanged. Shift bypasses application mouse
 tracking for local selection/scrollback. Focus in/out reports follow DEC mode 1004.
 
 ## Reproduce checks

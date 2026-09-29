@@ -64,7 +64,34 @@ impl LocalBackend {
         format!("{prefix}{}", self.next)
     }
     pub fn snapshot(&self) -> Snapshot {
-        self.state.clone()
+        let mut snapshot = self.state.clone();
+        if self.ssh.is_some() && !self.screens.is_empty() {
+            let mut connecting = false;
+            let mut ready = false;
+            for screen in self.screens.values() {
+                if !screen.exited.load(std::sync::atomic::Ordering::Acquire) {
+                    if screen.ready.load(std::sync::atomic::Ordering::Acquire) {
+                        ready = true;
+                    } else {
+                        connecting = true;
+                    }
+                }
+            }
+            snapshot.connection = if ready {
+                Connection::Ready
+            } else if connecting {
+                Connection::Connecting
+            } else {
+                Connection::Closed
+            };
+            if snapshot.connection == Connection::Closed {
+                snapshot.message = self
+                    .screens
+                    .values()
+                    .find_map(|screen| screen.error.lock().clone());
+            }
+        }
+        snapshot
     }
     pub(super) fn reap_finished(&mut self) {
         let mut title_changed = false;
@@ -415,7 +442,11 @@ impl LocalBackend {
                 let Some(window) = self.state.window().cloned() else {
                     bail!("{}", crate::t!("local.no_window"))
                 };
-                if window.panes.len() >= MAX_LOCAL_PANES {
+                if self
+                    .layouts
+                    .get(&window.id)
+                    .is_some_and(|layout| layout.pane_count() >= MAX_LOCAL_PANES)
+                {
                     bail!("{}", crate::t!("local.pane_limit", max = MAX_LOCAL_PANES));
                 }
                 let path = self
@@ -553,6 +584,38 @@ fn window_pixel_panes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_ssh_connection_tracks_pty_readiness_and_failure() {
+        use std::sync::atomic::Ordering;
+
+        let mut backend =
+            LocalBackend::restore(std::env::temp_dir(), None, Some(Vec::new())).unwrap();
+        backend.ssh = Some(crate::tmux_client::HostConfig {
+            destination: "example.invalid".into(),
+            name: String::new(),
+            user: "test".into(),
+            port: None,
+            identity_file: None,
+            tmux: false,
+            socket: None,
+        });
+        let screen = Session::remote("test".into(), 28, 100, Arc::new(|_| Ok(())));
+        screen.ready.store(false, Ordering::Release);
+        backend.screens.insert("pane".into(), screen.clone());
+        assert_eq!(backend.snapshot().connection, Connection::Connecting);
+        screen.ready.store(true, Ordering::Release);
+        assert_eq!(backend.snapshot().connection, Connection::Ready);
+        *screen.error.lock() = Some("Connection failed".into());
+        screen.exited.store(true, Ordering::Release);
+        let snapshot = backend.snapshot();
+        assert_eq!(snapshot.connection, Connection::Closed);
+        assert_eq!(snapshot.message.as_deref(), Some("Connection failed"));
+
+        let live = Session::remote("live".into(), 28, 100, Arc::new(|_| Ok(())));
+        backend.screens.insert("live".into(), live);
+        assert_eq!(backend.snapshot().connection, Connection::Ready);
+    }
     use crate::backend::Direction;
 
     fn check_background_output(mut backend: LocalBackend, remote: bool) {
@@ -672,6 +735,8 @@ mod tests {
             height: 602.,
             cell_width: 8.,
             line_height: 21.,
+            horizontal_padding: super::super::PANE_PADDING,
+            vertical_padding: super::super::PANE_PADDING,
         };
         backend.resize_pixels(&id, viewport);
         backend.apply(Action::Split(SplitAxis::Horizontal)).unwrap();
@@ -773,6 +838,25 @@ mod tests {
         b.apply(Action::CloseWindow).unwrap();
         assert_eq!(b.snapshot().windows().count(), 1);
         assert_eq!(b.screens.len(), 1);
+    }
+
+    #[test]
+    fn zoom_does_not_bypass_the_pane_limit() {
+        let mut backend = LocalBackend::new(std::env::current_dir().unwrap()).unwrap();
+        let window = backend.snapshot().window().unwrap().clone();
+        let mut layout = Layout::Leaf(window.active_pane);
+        for index in 1..MAX_LOCAL_PANES {
+            layout = Layout::Split {
+                axis: SplitAxis::Horizontal,
+                ratio: 0.5,
+                first: Box::new(layout),
+                second: Box::new(Layout::Leaf(format!("pane-{index}"))),
+            };
+        }
+        backend.layouts.insert(window.id, layout);
+        backend.apply(Action::Zoom).unwrap();
+        assert_eq!(backend.snapshot().window().unwrap().panes.len(), 1);
+        assert!(backend.apply(Action::Split(SplitAxis::Horizontal)).is_err());
     }
 
     #[test]

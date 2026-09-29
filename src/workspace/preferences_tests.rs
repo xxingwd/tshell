@@ -7,13 +7,13 @@ use gpui_kit::WindowAppearance;
 fn system_mode_selects_independently_configured_light_and_dark_schemes() {
     let themes = ThemeFile::default();
     for (appearance, system, expected) in [
-        (Appearance::Light, WindowAppearance::Dark, "github-light"),
+        (Appearance::Light, WindowAppearance::Dark, "vscode-light"),
         (Appearance::Dark, WindowAppearance::Light, "vscode-dark"),
-        (Appearance::System, WindowAppearance::Light, "github-light"),
+        (Appearance::System, WindowAppearance::Light, "vscode-light"),
         (Appearance::System, WindowAppearance::Dark, "vscode-dark"),
     ] {
         assert_eq!(
-            active_theme_id(&themes, "github-light", "vscode-dark", appearance, system),
+            active_theme_id(&themes, "vscode-light", "vscode-dark", appearance, system),
             expected
         );
     }
@@ -33,9 +33,9 @@ fn system_mode_selects_independently_configured_light_and_dark_schemes() {
 fn legacy_theme_choice_migrates_to_two_editable_slots() {
     let themes = ThemeFile::default();
     for (legacy, expected_light, expected_dark) in [
-        ("codex", "codex-light", "codex-dark"),
+        ("codex", "vscode-light", "vscode-dark"),
         ("vscode-light", "vscode-light", "vscode-dark"),
-        ("one-dark", "tide-light", "one-dark"),
+        ("one-dark", "vscode-light", "vscode-dark"),
     ] {
         let prefs: Preferences =
             serde_json::from_str(&format!(r#"{{"selected_theme":"{legacy}"}}"#)).unwrap();
@@ -45,12 +45,12 @@ fn legacy_theme_choice_migrates_to_two_editable_slots() {
         );
     }
     let prefs: Preferences = serde_json::from_str(
-        r#"{"selected_theme":"codex","light_theme":"github-light","dark_theme":"vscode-dark"}"#,
+        r#"{"selected_theme":"codex","light_theme":"vscode-light","dark_theme":"vscode-dark"}"#,
     )
     .unwrap();
     assert_eq!(
         theme_slots(&themes, &prefs),
-        ("github-light".into(), "vscode-dark".into())
+        ("vscode-light".into(), "vscode-dark".into())
     );
     let restored: Preferences =
         serde_json::from_str(&serde_json::to_string(&prefs).unwrap()).unwrap();
@@ -62,11 +62,11 @@ fn legacy_theme_choice_migrates_to_two_editable_slots() {
     missing.themes.retain(|theme| theme.id != "vscode-dark");
     assert_eq!(
         theme_slots(&missing, &prefs),
-        ("github-light".into(), "codex-dark".into())
+        ("vscode-light".into(), "vscode-light".into())
     );
     assert_eq!(
         theme_slots(&themes, &Preferences::default()),
-        ("tide-light".into(), "one-dark".into())
+        ("vscode-light".into(), "vscode-dark".into())
     );
 }
 
@@ -193,25 +193,43 @@ fn custom_theme_selection_round_trips_without_changing_builtin_theme() {
 }
 
 #[test]
-fn terminal_grid_centers_columns_and_leaves_extra_height_below() {
+fn terminal_grid_leaves_remainder_on_the_end_sides() {
     let viewport = crate::backend::PixelViewport {
         width: 990.,
         height: 590.,
         cell_width: 10.,
         line_height: 20.,
+        horizontal_padding: crate::backend::PANE_PADDING,
+        vertical_padding: crate::backend::PANE_PADDING,
     };
     let (cols, rows) = viewport.terminal_size();
     let padding = crate::backend::PANE_PADDING;
-    let left = super::grid_inset(viewport.width, cols, viewport.cell_width, padding);
+    let left = super::leading_inset(viewport.width, cols, viewport.cell_width, padding);
     let right = viewport.width - left - cols as f32 * viewport.cell_width;
-    let top = super::grid_inset(viewport.height, rows, viewport.line_height, padding);
+    let top = super::leading_inset(viewport.height, rows, viewport.line_height, padding);
     let bottom = viewport.height - top - rows as f32 * viewport.line_height;
-    assert_eq!((cols, rows), (98, 29));
-    assert_eq!((left, right), (8., 2.));
-    assert_eq!((top, bottom), (8., 2.));
+    assert_eq!((cols, rows), (97, 28));
+    assert_eq!((left, right), (8., 12.));
+    assert_eq!((top, bottom), (8., 22.));
 
-    // A naturally larger inset stays centered instead of gaining another 8px.
-    assert_eq!(super::grid_inset(1000., 98, 10., padding), 10.);
+    // A naturally larger remainder still keeps the minimum at the leading edge.
+    assert_eq!(super::leading_inset(1000., 98, 10., padding), 8.);
+
+    let focus_viewport = crate::backend::PixelViewport {
+        vertical_padding: 0.,
+        ..viewport
+    };
+    let (_, focus_rows) = focus_viewport.terminal_size();
+    let focus_top = super::leading_inset(
+        focus_viewport.height,
+        focus_rows,
+        focus_viewport.line_height,
+        focus_viewport.vertical_padding,
+    );
+    let focus_bottom =
+        focus_viewport.height - focus_top - focus_rows as f32 * focus_viewport.line_height;
+    assert_eq!(focus_top, 0.);
+    assert_eq!(focus_bottom, 10.);
 }
 
 #[test]

@@ -11,9 +11,9 @@ pub use local::LocalBackend;
 pub const PANE_PADDING: f32 = 8.;
 pub const PANE_GAP: f32 = 1.;
 
-fn padded_cells(extent: f32, cell_size: f32) -> usize {
-    // Reserve the leading inset once; whole-cell rounding supplies the trailing remainder.
-    ((extent - PANE_PADDING).max(0.) / cell_size)
+fn padded_cells(extent: f32, cell_size: f32, leading_padding: f32) -> usize {
+    // Reserve the minimum inset on both sides; whole-cell rounding supplies the trailing remainder.
+    ((extent - 2. * leading_padding).max(0.) / cell_size)
         .floor()
         .max(2.) as usize
 }
@@ -33,13 +33,15 @@ pub struct PixelViewport {
     pub height: f32,
     pub cell_width: f32,
     pub line_height: f32,
+    pub horizontal_padding: f32,
+    pub vertical_padding: f32,
 }
 
 impl PixelViewport {
     pub fn terminal_size(self) -> (usize, usize) {
         (
-            padded_cells(self.width, self.cell_width),
-            padded_cells(self.height, self.line_height),
+            padded_cells(self.width, self.cell_width, self.horizontal_padding),
+            padded_cells(self.height, self.line_height, self.vertical_padding),
         )
     }
 }
@@ -47,8 +49,8 @@ impl PixelViewport {
 impl PaneBounds {
     pub fn terminal_size(&self, viewport: PixelViewport) -> (usize, usize) {
         (
-            padded_cells(self.width, viewport.cell_width),
-            padded_cells(self.height, viewport.line_height),
+            padded_cells(self.width, viewport.cell_width, viewport.horizontal_padding),
+            padded_cells(self.height, viewport.line_height, viewport.vertical_padding),
         )
     }
 }

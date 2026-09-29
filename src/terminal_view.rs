@@ -73,6 +73,7 @@ pub(crate) fn init(cx: &mut App) {
 
 struct PaintedText {
     col: usize,
+    #[cfg(debug_assertions)]
     columns: usize,
     shaped: ShapedLine,
 }
@@ -302,17 +303,24 @@ impl TerminalView {
         }
     }
 
-    fn queue_render(&mut self, command: RenderCommand, cx: &mut Context<Self>) {
+    fn queue_render(&mut self, command: RenderCommand, cx: &mut Context<Self>) -> bool {
+        if !self.flush_selection(cx) {
+            return false;
+        }
+        self.submit_command(command, cx)
+    }
+
+    fn submit_command(&mut self, command: RenderCommand, cx: &mut Context<Self>) -> bool {
         if !self.mailbox.push(command) {
             self.failure = Some(crate::t!("term.interaction_queue_full").to_string().into());
             cx.notify();
-            return;
+            return false;
         }
         if self.interactions_in_flight {
-            return;
+            return true;
         }
         let Some(session) = self.session.clone() else {
-            return;
+            return true;
         };
         self.interactions_in_flight = true;
         let mut commands = self.mailbox.take();
@@ -328,11 +336,15 @@ impl TerminalView {
                         cx.write_to_clipboard(ClipboardItem::new_string(text));
                     }
                     this.request_snapshot(cx);
-                    if this.mailbox.is_empty() {
+                    let queued = this.mailbox.take();
+                    this.flush_selection(cx);
+                    if queued.is_empty() && this.mailbox.is_empty() {
                         this.interactions_in_flight = false;
                         None
-                    } else {
+                    } else if queued.is_empty() {
                         Some(this.mailbox.take())
+                    } else {
+                        Some(queued)
                     }
                 });
                 match next {
@@ -341,11 +353,18 @@ impl TerminalView {
                 }
             }
         }));
+        true
     }
 
-    fn flush_selection(&mut self, cx: &mut Context<Self>) {
-        if let Some(anchor) = self.pending_anchor.take() {
-            self.queue_render(RenderCommand::Extend(anchor), cx);
+    fn flush_selection(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(anchor) = self.pending_anchor else {
+            return true;
+        };
+        if self.submit_command(RenderCommand::Extend(anchor), cx) {
+            self.pending_anchor = None;
+            true
+        } else {
+            false
         }
     }
 
@@ -383,8 +402,9 @@ impl TerminalView {
                 &event.modifiers,
                 mode,
             ) {
-                self.last_mouse_cell = Some(cell);
-                self.queue_render(RenderCommand::MouseMove(bytes), cx);
+                if self.queue_render(RenderCommand::MouseMove(bytes), cx) {
+                    self.last_mouse_cell = Some(cell);
+                }
             }
             return;
         }
@@ -461,10 +481,11 @@ impl TerminalView {
                     _ => SelectionType::Simple,
                 }
             };
-            self.queue_render(RenderCommand::Begin(anchor, ty), cx);
-            self.selecting = true;
-            self.block_selection = event.modifiers.alt;
-            self.selection_point = Some(anchor);
+            if self.queue_render(RenderCommand::Begin(anchor, ty), cx) {
+                self.selecting = true;
+                self.block_selection = event.modifiers.alt;
+                self.selection_point = Some(anchor);
+            }
             return false;
         }
         if event.modifiers.shift {
@@ -481,11 +502,14 @@ impl TerminalView {
         ) else {
             return false;
         };
-        self.last_mouse_cell = Some(cell);
-        self.reported_button = Some(event.button);
-        self.queue_render(RenderCommand::Input(bytes), cx);
-        window.prevent_default();
-        true
+        if self.queue_render(RenderCommand::Input(bytes), cx) {
+            self.last_mouse_cell = Some(cell);
+            self.reported_button = Some(event.button);
+            window.prevent_default();
+            true
+        } else {
+            false
+        }
     }
 
     fn mouse_up(&mut self, event: &MouseUpEvent, cx: &mut Context<Self>) -> bool {
@@ -496,7 +520,6 @@ impl TerminalView {
         if self.reported_button != Some(event.button) {
             return false;
         }
-        self.reported_button = None;
         let mode = self.session_mode();
         let cell = self.viewport_cell(event.position);
         let Some(bytes) = encode_mouse(
@@ -508,9 +531,13 @@ impl TerminalView {
         ) else {
             return false;
         };
-        self.last_mouse_cell = Some(cell);
-        self.queue_render(RenderCommand::Input(bytes), cx);
-        true
+        if self.queue_render(RenderCommand::Input(bytes), cx) {
+            self.last_mouse_cell = Some(cell);
+            self.reported_button = None;
+            true
+        } else {
+            false
+        }
     }
 
     fn handle_mouse_up(
@@ -601,7 +628,7 @@ impl TerminalView {
         text_font
     }
 
-    fn text_run(&self, text: &str, fg: u32, _underline_color: u32, flags: Flags) -> TextRun {
+    fn text_run(&self, text: &str, fg: u32, flags: Flags) -> TextRun {
         let mut text_font = self.terminal_font();
         text_font.features = FontFeatures(Arc::new(vec![
             ("calt".into(), u32::from(self.ligatures)),
@@ -629,7 +656,7 @@ impl TerminalView {
         let plan = build_row(&source, self.palette, &self.snapshot.colors);
         let mut text = Vec::with_capacity(plan.text.len());
         for run in plan.text {
-            let style = self.text_run(&run.text, run.fg, run.underline_color, run.flags);
+            let style = self.text_run(&run.text, run.fg, run.flags);
             let shaped = window.text_system().shape_line(
                 run.text.clone().into(),
                 px(self.font_size),
@@ -648,13 +675,14 @@ impl TerminalView {
             if aligned {
                 text.push(PaintedText {
                     col: run.col,
+                    #[cfg(debug_assertions)]
                     columns: run.columns,
                     shaped,
                 });
             } else {
                 for (offset, ch) in run.text.chars().enumerate() {
                     let s = ch.to_string();
-                    let style = self.text_run(&s, run.fg, run.underline_color, run.flags);
+                    let style = self.text_run(&s, run.fg, run.flags);
                     let shaped = window.text_system().shape_line(
                         s.into(),
                         px(self.font_size),
@@ -663,6 +691,7 @@ impl TerminalView {
                     );
                     text.push(PaintedText {
                         col: run.col + offset,
+                        #[cfg(debug_assertions)]
                         columns: 1,
                         shaped,
                     });
@@ -701,7 +730,7 @@ impl TerminalView {
             || self.measured_font_family != self.font_family
             || self.line_height != line_height;
         if font_changed {
-            let run = self.text_run("M", self.palette.text, self.palette.text, Flags::empty());
+            let run = self.text_run("M", self.palette.text, Flags::empty());
             let probe =
                 window
                     .text_system()

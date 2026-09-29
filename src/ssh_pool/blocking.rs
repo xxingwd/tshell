@@ -38,11 +38,15 @@ pub(crate) struct Writer {
 }
 impl Write for Writer {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let size = buf.len().min(32768);
         self.sender
-            .send_blocking(buf[..size].to_vec())
-            .map_err(|_| io::Error::from(io::ErrorKind::BrokenPipe))?;
-        Ok(size)
+            .try_send(buf.to_vec())
+            .map_err(|error| match error {
+                async_channel::TrySendError::Full(_) => io::Error::from(io::ErrorKind::WouldBlock),
+                async_channel::TrySendError::Closed(_) => {
+                    io::Error::from(io::ErrorKind::BrokenPipe)
+                }
+            })?;
+        Ok(buf.len())
     }
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
@@ -55,7 +59,7 @@ pub(crate) struct BlockingChannel {
     pub control: ChannelGuard,
 }
 impl BlockingChannel {
-    pub fn exec(host: &HostConfig, command: String) -> Result<Self> {
+    pub fn exec_pty(host: &HostConfig, command: String, cols: u32, rows: u32) -> Result<Self> {
         let host = host.clone();
         let (ready, result) = std::sync::mpsc::sync_channel(1);
         let (cancel, cancelled) = async_channel::bounded(1);
@@ -63,7 +67,8 @@ impl BlockingChannel {
         let (output, outputs) = async_channel::bounded(64);
         let (errors, error_rx) = async_channel::bounded(16);
         runtime().spawn(async move {
-            let mut channel = match super::exec_dedicated(&host, &command).await { Ok(channel) => { let _ = ready.send(Ok(())); channel }, Err(error) => { let _ = ready.send(Err(error)); return; } };
+            let result = super::exec_dedicated_pty(&host, &command, cols, rows).await;
+            let mut channel = match result { Ok(channel) => { let _ = ready.send(Ok(())); channel }, Err(error) => { let _ = ready.send(Err(error)); return; } };
             let mut input_open = true;
             loop {
                 tokio::select! {
@@ -97,5 +102,30 @@ impl BlockingChannel {
             },
             control: ChannelGuard { cancel },
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn full_control_write_queue_returns_without_blocking() {
+        let (sender, _receiver) = async_channel::bounded(1);
+        let mut writer = Writer { sender };
+        writer.write_all(b"first\n").unwrap();
+        assert_eq!(
+            writer.write_all(b"second\n").unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn long_control_write_is_enqueued_as_one_message() {
+        let (sender, receiver) = async_channel::bounded(1);
+        let mut writer = Writer { sender };
+        let command = vec![b'x'; 32769];
+        writer.write_all(&command).unwrap();
+        assert_eq!(receiver.try_recv().unwrap(), command);
     }
 }

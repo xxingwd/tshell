@@ -60,6 +60,32 @@ struct WindowsPlatformInner {
     validation_number: usize,
     main_receiver: PriorityQueueReceiver<RunnableVariant>,
     dispatcher: Arc<WindowsDispatcher>,
+    foreground_tasks: ForegroundTaskCoordinator,
+}
+
+#[derive(Default)]
+struct ForegroundTaskCoordinator {
+    running: Cell<bool>,
+}
+
+impl ForegroundTaskCoordinator {
+    fn try_begin(&self) -> Option<ForegroundTaskGuard<'_>> {
+        if self.running.replace(true) {
+            None
+        } else {
+            Some(ForegroundTaskGuard { coordinator: self })
+        }
+    }
+}
+
+struct ForegroundTaskGuard<'a> {
+    coordinator: &'a ForegroundTaskCoordinator,
+}
+
+impl Drop for ForegroundTaskGuard<'_> {
+    fn drop(&mut self) {
+        self.coordinator.running.set(false);
+    }
 }
 
 pub(crate) struct WindowsPlatformState {
@@ -977,6 +1003,7 @@ impl WindowsPlatformInner {
                 .main_receiver
                 .take()
                 .context("missing main receiver")?,
+            foreground_tasks: ForegroundTaskCoordinator::default(),
         }))
     }
 
@@ -1072,6 +1099,12 @@ impl WindowsPlatformInner {
     #[inline]
     fn run_foreground_task(&self) -> Option<isize> {
         const MAIN_TASK_TIMEOUT: u128 = 10;
+
+        // A nested COM message pump can dispatch this message while a foreground
+        // runnable still holds the AppCell; the outer loop will drain queued work.
+        let Some(_guard) = self.foreground_tasks.try_begin() else {
+            return Some(0);
+        };
 
         let start = std::time::Instant::now();
         'tasks: loop {
@@ -1570,7 +1603,16 @@ mod tests {
     use crate::{read_from_clipboard, write_to_clipboard};
     use gpui::ClipboardItem;
 
-    use super::encode_restart_arguments;
+    use super::{ForegroundTaskCoordinator, encode_restart_arguments};
+
+    #[test]
+    fn foreground_tasks_wait_for_the_outer_message_pump() {
+        let coordinator = ForegroundTaskCoordinator::default();
+        let guard = coordinator.try_begin().unwrap();
+        assert!(coordinator.try_begin().is_none());
+        drop(guard);
+        assert!(coordinator.try_begin().is_some());
+    }
 
     #[test]
     fn test_encode_restart_arguments() {

@@ -25,10 +25,10 @@ pub(crate) fn run_ui_check(output: PathBuf) -> bool {
             "event-driven title wakes workspace without polling", "terminal Tab input retains focus", "Ctrl+B toggles sidebar with terminal focus", "sidebar viewport and persisted state", "Zen preserves sidebar preference", "single and grouped terminal sidebar rendering", "host and key settings pages", "standalone host validation",
                             "terminal viewport unchanged", "settings restores terminal focus",
             "command palette focus and dispatch", "GPUI frame overlay and status item defaults", "Git mode", "file tree", "syntax editor", "status bar and notifications", "unread terminal notice acknowledgement",
-                            "settings dialog and pages", "component settings pages render after scrolling", "resource order, visibility, persistence and stop", "font preference", "ligature preference", "21 file-backed terminal themes", "theme selection", "theme persistence", "theme.json create, edit, delete and invalid-file fallback", "unified interface appearance", "opacity preference",
+                            "settings dialog and pages", "component settings pages render after scrolling", "resource order, visibility, persistence and stop", "font preference", "ligature preference", "2 file-backed terminal themes", "theme selection", "theme persistence", "theme.json create, edit, delete and invalid-file fallback", "unified interface appearance", "opacity preference",
             "shortcut recording and cancellation", "Escape removes overlay", "host rename dialog",
-            "language selector",
-            "new tab has no dialog", "session file state", "session directory and optional name", "session groups with compact tab separators", "named session creation and previous tab restoration"
+            "language selector", "session deletion persists and preserves other sessions", "host disconnect preserves configuration and other hosts",
+            "new tab has no dialog", "session file state", "Markdown and HTML preview", "session directory and optional name", "session groups with compact tab separators", "named session creation and previous tab restoration"
                         ]})
                     }
                     Err(error) => {
@@ -48,7 +48,7 @@ pub(crate) fn run_ui_check(output: PathBuf) -> bool {
 async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     let handle = cx.open_window(
         WindowOptions {
-            show: false,
+            show: std::env::var_os("TSHELL_UI_CHECK_VISIBLE").is_some(),
             focus: false,
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                 point(px(0.), px(0.)),
@@ -92,6 +92,82 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         Ok(())
     };
     draw(cx)?;
+    app.update(cx, |app, cx| {
+        let session = app.hosts[app.active].snapshot.session().unwrap().clone();
+        let key = (app.active, session.id.clone());
+        let before = app.hosts[app.active].snapshot.clone();
+        app.file_states.insert(
+            key.clone(),
+            SessionFileState {
+                dirty: true,
+                ..Default::default()
+            },
+        );
+        assert!(app.closes_session_with_unsaved_files(&Action::RemoveSession(session.id.clone())));
+        if session.windows.len() == 1 {
+            assert!(app.closes_session_with_unsaved_files(&Action::CloseWindow));
+            app.act(Action::CloseWindow, cx);
+            assert_eq!(app.hosts[app.active].snapshot, before);
+            if session.windows[0].panes.len() == 1 {
+                assert!(app.closes_session_with_unsaved_files(&Action::ClosePane));
+                app.act(Action::ClosePane, cx);
+                assert_eq!(app.hosts[app.active].snapshot, before);
+            }
+        }
+        app.act(Action::RemoveSession(session.id), cx);
+        assert_eq!(app.hosts[app.active].snapshot, before);
+        app.file_states.remove(&key);
+        app.message = None;
+        let index = app.hosts.len();
+        let config = HostConfig {
+            destination: "guard.test".into(),
+            name: "Guard test".into(),
+            user: "test".into(),
+            port: None,
+            identity_file: None,
+            tmux: false,
+            socket: None,
+        };
+        app.hosts.push(Host {
+            name: config.name.clone(),
+            config: Some(config),
+            backend: None,
+            snapshot: Snapshot::default(),
+            pending: Vec::new(),
+            views: BTreeMap::new(),
+            read_notices: BTreeMap::new(),
+            collapsed_sessions: BTreeSet::new(),
+            viewport: None,
+        });
+        let file_key = (index, "session".to_string());
+        app.file_states.insert(
+            file_key.clone(),
+            SessionFileState {
+                dirty: true,
+                ..Default::default()
+            },
+        );
+        app.remove_host(index, cx);
+        anyhow::ensure!(
+            app.hosts.len() == index + 1,
+            "unsaved host files were discarded"
+        );
+        app.file_states.get_mut(&file_key).unwrap().dirty = false;
+        let generation = app.file_request;
+        anyhow::ensure!(app.prepare_host_connection_change(index, cx));
+        anyhow::ensure!(
+            !app.file_states.contains_key(&file_key) && app.file_request == generation,
+            "inactive host change cancelled active file requests"
+        );
+        app.remove_host(index, cx);
+        anyhow::ensure!(app.hosts.len() == index, "saved host was not removed");
+        anyhow::ensure!(
+            app.file_request == generation,
+            "inactive host removal cancelled active file requests"
+        );
+        app.message = None;
+        Ok::<_, anyhow::Error>(())
+    })?;
     cx.update_window(handle.into(), |_, window, cx| {
         app.update(cx, |app, cx| {
             assert_eq!(
@@ -620,8 +696,104 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         anyhow::ensure!(!app.editor_dirty, "PNG preview marked the editor dirty");
         Ok::<_, anyhow::Error>(())
     })?;
+    cx.update_window(handle.into(), |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.open_path(app.cwd.join("README.md"), window, cx)
+        });
+    })?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    while app.read_with(cx, |app, _| app.file_loading.is_some()) {
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "Markdown read timed out"
+        );
+        cx.background_executor()
+            .timer(Duration::from_millis(25))
+            .await;
+    }
+    draw(cx)?;
+    app.read_with(cx, |app, _| {
+        anyhow::ensure!(app.preview_mode, "Markdown preview did not open");
+        anyhow::ensure!(
+            app.file_preview
+                .as_ref()
+                .and_then(|document| document.markdown_source())
+                .is_some_and(|source| source.starts_with("# TShell")),
+            "Markdown preview did not retain the source"
+        );
+        anyhow::ensure!(
+            !app.editor_dirty,
+            "Markdown preview marked the editor dirty"
+        );
+        Ok::<_, anyhow::Error>(())
+    })?;
+    #[cfg(windows)]
+    app.read_with(cx, |app, _| {
+        if let Some(web) = &app.web_preview {
+            anyhow::ensure!(!web.is_visible(), "WebView opened for Markdown");
+        }
+        Ok::<_, anyhow::Error>(())
+    })?;
+    let html = preview::parse(
+        "html",
+        "<h1>Safe</h1><script>not visible</script><p>Text &amp; more</p>",
+    );
+    anyhow::ensure!(
+        html.blocks.contains(&preview::Block::Heading {
+            level: 1,
+            text: "Safe".into(),
+        }) && html
+            .blocks
+            .contains(&preview::Block::Paragraph("Text & more".into()))
+            && !html
+                .blocks
+                .iter()
+                .any(|block| format!("{block:?}").contains("not visible")),
+        "HTML fallback preview did not filter active content"
+    );
+    app.update(cx, |app, cx| {
+        app.file_preview = Some(html);
+        app.editor_language = "html".into();
+        cx.notify();
+    });
+    draw(cx)?;
+    #[cfg(windows)]
+    app.read_with(cx, |app, _| {
+        if wry::webview_version().is_ok() {
+            anyhow::ensure!(
+                app.web_preview.as_ref().is_some_and(|web| {
+                    web.is_visible() && web.html().contains("<h1>Safe</h1>")
+                }),
+                "WebView did not load the HTML preview"
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })?;
+    app.update(cx, |app, cx| {
+        app.file_preview = Some(preview::parse("markdown", "# Back to Markdown"));
+        app.editor_language = "markdown".into();
+        cx.notify();
+    });
+    draw(cx)?;
+    #[cfg(windows)]
+    app.read_with(cx, |app, _| {
+        if let Some(web) = &app.web_preview {
+            anyhow::ensure!(!web.is_visible(), "WebView stayed visible over Markdown");
+        }
+        Ok::<_, anyhow::Error>(())
+    })?;
     app.update(cx, |app, cx| app.show_terminal(cx));
     draw(cx)?;
+    #[cfg(windows)]
+    app.read_with(cx, |app, _| {
+        if let Some(web) = &app.web_preview {
+            anyhow::ensure!(
+                !web.is_visible(),
+                "WebView stayed visible over the terminal"
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })?;
     cx.update_window(handle.into(), |_, window, cx| {
         app.update(cx, |app, cx| app.show_add(window, cx));
     })?;
@@ -636,6 +808,10 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             anyhow::ensure!(
                 app.destination.read(cx).focus_handle(cx).is_focused(window),
                 "host input not focused"
+            );
+            anyhow::ensure!(
+                !Theme::global(cx).focus_ring && Theme::global(cx).ring == Theme::global(cx).input,
+                "focused host input has an outer ring or a highlighted border"
             );
             app.destination
                 .update(cx, |input, cx| input.set_value("-invalid", window, cx));
@@ -1070,7 +1246,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
                 WindowBackgroundAppearance::Blurred
             );
             app.appearance = Appearance::Light;
-            app.set_terminal_theme("one-dark", window, cx);
+            app.set_terminal_theme("vscode-dark", window, cx);
             assert_eq!(app.palette.background, app.terminal_palette.terminal);
             for host in &app.hosts {
                 for view in host.views.values() {
@@ -1164,6 +1340,11 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
                     "interface background diverged from terminal"
                 );
                 anyhow::ensure!(
+                    !Theme::global(cx).focus_ring
+                        && Theme::global(cx).ring == Theme::global(cx).input,
+                    "theme change restored a focus ring or highlighted border"
+                );
+                anyhow::ensure!(
                     Theme::global(cx).tokens.background.background
                         == rgb(app.palette.background).into(),
                     "dialog background token diverged from theme"
@@ -1192,14 +1373,14 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     cx.update_window(handle.into(), |_, window, cx| {
         app.update(cx, |app, cx| {
             app.set_appearance(Appearance::System, window, cx);
-            app.select_theme(ThemeMode::Light, "github-light", window, cx);
+            app.select_theme(ThemeMode::Light, "vscode-light", window, cx);
             app.select_theme(ThemeMode::Dark, "vscode-dark", window, cx);
             anyhow::ensure!(
                 app.appearance == Appearance::System,
                 "selecting a theme disabled automatic mode"
             );
             anyhow::ensure!(
-                app.light_theme == "github-light" && app.dark_theme == "vscode-dark",
+                app.light_theme == "vscode-light" && app.dark_theme == "vscode-dark",
                 "theme slots were not retained"
             );
             let active_id = active_theme_id(
@@ -1216,13 +1397,13 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             );
             let saved = Preferences::load();
             anyhow::ensure!(
-                saved.light_theme.as_deref() == Some("github-light")
+                saved.light_theme.as_deref() == Some("vscode-light")
                     && saved.dark_theme.as_deref() == Some("vscode-dark"),
                 "theme slots were not persisted"
             );
             app.set_appearance(Appearance::Dark, window, cx);
             anyhow::ensure!(
-                app.light_theme == "github-light" && app.dark_theme == "vscode-dark",
+                app.light_theme == "vscode-light" && app.dark_theme == "vscode-dark",
                 "appearance replaced the selected schemes"
             );
             anyhow::ensure!(
@@ -1232,12 +1413,12 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             );
             app.set_appearance(Appearance::Light, window, cx);
             anyhow::ensure!(
-                app.light_theme == "github-light" && app.dark_theme == "vscode-dark",
+                app.light_theme == "vscode-light" && app.dark_theme == "vscode-dark",
                 "appearance replaced the selected schemes"
             );
             anyhow::ensure!(
                 app.terminal_palette.terminal_theme()
-                    == app.themes.selected("github-light").unwrap().colors(),
+                    == app.themes.selected("vscode-light").unwrap().colors(),
                 "light mode did not select light scheme"
             );
             app.select_theme(ThemeMode::Light, "vscode-light", window, cx);
@@ -1260,7 +1441,8 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     let original = std::fs::read(&theme_path)?;
     let first_id = app.read_with(cx, |app, _| app.themes.themes[0].id.clone());
     let mut edited_file: serde_json::Value = serde_json::from_slice(&original)?;
-    edited_file["themes"][0]["foreground"] = "#123456".into();
+    edited_file["themes"][0]["ink"] = "#123456".into();
+    edited_file["themes"][0]["interface"]["hover"] = "#E0E0E0".into();
     std::fs::write(&theme_path, serde_json::to_vec_pretty(&edited_file)?)?;
     cx.update_window(handle.into(), |_, window, cx| {
         app.update(cx, |app, cx| {
@@ -1270,6 +1452,12 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             anyhow::ensure!(
                 app.terminal_palette.text == 0x123456,
                 "theme file edit did not apply"
+            );
+            anyhow::ensure!(
+                app.palette.row_hover() == 0xe0e0e0
+                    && app.terminal_palette.selection
+                        == app.themes.selected(&first_id).unwrap().selection(),
+                "interface edit changed terminal selection or failed to apply"
             );
             anyhow::ensure!(
                 Preferences::load().light_theme.as_deref() == Some(first_id.as_str()),
@@ -1327,7 +1515,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             let template = app.themes.selected(&app.light_theme).unwrap().clone();
             let mut theme =
                 serde_json::to_value(ThemeDefinition::from_theme(&template, id.clone()))?;
-            theme["foreground"] = "#123456".into();
+            theme["ink"] = "#123456".into();
             app.settings_ui.theme_editor.update(cx, |editor, cx| {
                 editor.set_value(serde_json::to_string_pretty(&theme).unwrap(), window, cx)
             });
@@ -1362,7 +1550,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         app.update(cx, |app, cx| {
             let mut theme: serde_json::Value =
                 serde_json::from_str(app.settings_ui.theme_editor.read(cx).value().as_ref())?;
-            theme["foreground"] = "#654321".into();
+            theme["ink"] = "#654321".into();
             app.settings_ui.theme_editor.update(cx, |editor, cx| {
                 editor.set_value(serde_json::to_string_pretty(&theme).unwrap(), window, cx)
             });
@@ -1380,7 +1568,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             let id = app.light_theme.clone();
             app.delete_theme(&id, window, cx);
             anyhow::ensure!(
-                app.light_theme == "tide-light",
+                app.light_theme == "vscode-light",
                 "deleted light scheme did not use its fallback"
             );
             anyhow::ensure!(
@@ -1396,7 +1584,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     std::fs::write(AppView::theme_path(), before_editor)?;
     cx.update_window(handle.into(), |_, window, cx| {
         app.update(cx, |app, cx| {
-            app.set_terminal_theme("one-dark", window, cx);
+            app.set_terminal_theme("vscode-dark", window, cx);
             app.reload_theme_file(window, cx);
         });
     })?;
@@ -1798,5 +1986,145 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             Ok::<_, anyhow::Error>(())
         })?;
     }
+    app.update(cx, |app, cx| -> anyhow::Result<()> {
+        let deleted = app.hosts[0].snapshot.active_session.clone();
+        let remaining: Vec<_> = app.hosts[0]
+            .snapshot
+            .sessions
+            .iter()
+            .filter(|session| session.id != deleted)
+            .cloned()
+            .collect();
+        app.act(Action::RemoveSession(deleted.clone()), cx);
+        anyhow::ensure!(
+            !app.hosts[0]
+                .snapshot
+                .sessions
+                .iter()
+                .any(|session| session.id == deleted),
+            "deleted session remained in the sidebar"
+        );
+        anyhow::ensure!(
+            app.hosts[0].snapshot.sessions == remaining,
+            "deleting a session changed another session"
+        );
+        anyhow::ensure!(
+            !Preferences::load().sessions["local"]
+                .iter()
+                .any(|profile| profile.name == "launcher-search-session"),
+            "deleted session remained in saved profiles"
+        );
+        app.disconnect_host(0, cx);
+        anyhow::ensure!(
+            app.hosts[0].backend.is_some(),
+            "local host was disconnected"
+        );
+        let local = app.hosts[0].snapshot.clone();
+        let config = HostConfig {
+            name: "Disconnect test".into(),
+            destination: "example.invalid".into(),
+            user: "test".into(),
+            port: None,
+            identity_file: None,
+            tmux: false,
+            socket: None,
+        };
+        app.hosts.push(Host {
+            name: config.name.clone(),
+            config: Some(config.clone()),
+            backend: Some(Backend::Local(LocalBackend::restore(
+                std::env::temp_dir(),
+                None,
+                Some(Vec::new()),
+            )?)),
+            snapshot: Snapshot {
+                connection: Connection::Ready,
+                ..Default::default()
+            },
+            pending: vec![Action::NewSession],
+            views: BTreeMap::new(),
+            read_notices: BTreeMap::new(),
+            collapsed_sessions: BTreeSet::new(),
+            viewport: None,
+        });
+        let index = app.hosts.len() - 1;
+        let saved = app.session_profiles.clone();
+        let active = app.active;
+        let file_key = (index, "session".to_string());
+        app.file_states.insert(
+            file_key.clone(),
+            SessionFileState {
+                dirty: true,
+                ..Default::default()
+            },
+        );
+        app.disconnect_host(index, cx);
+        anyhow::ensure!(
+            app.hosts[index].backend.is_none(),
+            "remote backend remained connected"
+        );
+        anyhow::ensure!(
+            app.file_states
+                .get(&file_key)
+                .is_some_and(|state| state.dirty),
+            "disconnect discarded unsaved host files"
+        );
+        app.file_states.get_mut(&file_key).unwrap().dirty = false;
+        let request = app.file_request;
+        anyhow::ensure!(
+            app.prepare_host_connection_change(index, cx),
+            "saved host files prevented connection change"
+        );
+        anyhow::ensure!(
+            !app.file_states.contains_key(&file_key) && app.file_request == request,
+            "inactive connection change cancelled active file requests"
+        );
+        app.message = None;
+        anyhow::ensure!(app.active == active, "disconnect switched the active host");
+        anyhow::ensure!(
+            app.hosts[index].backend.is_none(),
+            "remote backend remained connected"
+        );
+        anyhow::ensure!(
+            app.hosts[index].views.is_empty(),
+            "disconnected terminal views remained"
+        );
+        anyhow::ensure!(
+            app.hosts[index].config.as_ref() == Some(&config),
+            "disconnect removed host configuration"
+        );
+        anyhow::ensure!(
+            app.session_profiles == saved,
+            "disconnect removed saved sessions"
+        );
+        anyhow::ensure!(
+            app.hosts[index].connection() == Connection::Closed,
+            "disconnect status not cleared"
+        );
+        anyhow::ensure!(
+            app.hosts[0].snapshot == local,
+            "disconnect changed another host"
+        );
+        app.active = index;
+        app.sync(cx);
+        app.show_files(cx);
+        anyhow::ensure!(
+            app.workspace_mode == WorkspaceMode::Terminal && app.remote_files().is_none(),
+            "disconnected host reopened Explorer or SFTP"
+        );
+        let git_request = app.git_request;
+        app.show_git(cx);
+        app.refresh_git(cx);
+        anyhow::ensure!(
+            app.workspace_mode == WorkspaceMode::Terminal && app.git_request == git_request,
+            "disconnected host started Git access"
+        );
+        anyhow::ensure!(
+            app.metrics_monitor.is_none(),
+            "disconnected host started metrics"
+        );
+        Ok(())
+    })?;
+    draw(cx)?;
     Ok(())
 }

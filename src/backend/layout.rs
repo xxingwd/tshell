@@ -1,5 +1,5 @@
 //! Pure local pane layout; no process or terminal IO.
-use super::{PANE_GAP, PANE_PADDING, PaneBounds, PaneInfo, SplitAxis};
+use super::{PANE_GAP, PaneBounds, PaneInfo, SplitAxis};
 
 #[derive(Clone)]
 pub(super) enum Layout {
@@ -12,6 +12,13 @@ pub(super) enum Layout {
     },
 }
 impl Layout {
+    pub(super) fn pane_count(&self) -> usize {
+        match self {
+            Self::Leaf(_) => 1,
+            Self::Split { first, second, .. } => first.pane_count() + second.pane_count(),
+        }
+    }
+
     fn axis_count(&self, axis: SplitAxis) -> usize {
         match self {
             Self::Split {
@@ -364,11 +371,13 @@ mod tests {
             height: 602.,
             cell_width: 8.,
             line_height: 21.,
+            horizontal_padding: super::super::PANE_PADDING,
+            vertical_padding: super::super::PANE_PADDING,
         };
-        assert_eq!(viewport.terminal_size(), (124, 28));
-        assert_eq!(panes[1].terminal_size(viewport), (61, 9));
-        assert!(61. * 8. + PANE_PADDING <= panes[1].width);
-        assert!(9. * 21. + PANE_PADDING <= panes[1].height);
+        assert_eq!(viewport.terminal_size(), (123, 27));
+        assert_eq!(panes[1].terminal_size(viewport), (60, 8));
+        assert!(60. * 8. + 2. * super::super::PANE_PADDING <= panes[1].width);
+        assert!(8. * 21. + 2. * super::super::PANE_PADDING <= panes[1].height);
     }
 
     fn geometry(layout: &Layout) -> Vec<(String, usize, usize, usize, usize)> {

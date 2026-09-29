@@ -12,7 +12,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
-    io::{Read, Write},
+    io::{self, Read, Write},
     process::Command,
     sync::{
         Arc,
@@ -61,6 +61,9 @@ impl HostConfig {
         if let Some(port) = self.port {
             command.args(["-p", &port.to_string()]);
         }
+        if let Some(identity_file) = &self.identity_file {
+            command.arg("-i").arg(identity_file);
+        }
         command.arg("--").arg(&self.destination);
         #[cfg(windows)]
         {
@@ -93,6 +96,7 @@ struct State {
 }
 enum Message {
     Wake,
+    StreamOpened(String, Result<streams::Stream, String>),
     StreamEvent(String, ControlEvent),
     StreamClosed(String, Option<String>),
     Reply(Response, bool, Vec<Vec<u8>>),
@@ -111,7 +115,12 @@ enum Response {
     Windows,
     Panes,
     Current,
-    Capture(String, bool),
+    Capture {
+        id: String,
+        alternate: bool,
+        cols: usize,
+        rows: usize,
+    },
     Modes(String),
     CreatedSession,
 }
@@ -269,6 +278,26 @@ fn request(command: impl Into<String>, response: Response) -> Request {
         leading_ignores: 0,
     }
 }
+fn capture_request(id: &str, alternate: bool, cols: usize, rows: usize) -> Request {
+    request(
+        format!("capture-pane -p -e -N -t {} -S -2000", q(id)),
+        Response::Capture {
+            id: id.to_owned(),
+            alternate,
+            cols,
+            rows,
+        },
+    )
+}
+fn capture_matches_size(screen: &Session, cols: usize, rows: usize) -> bool {
+    use alacritty_terminal::grid::Dimensions;
+
+    let term = screen.term.lock();
+    term.columns() == cols && term.screen_lines() == rows
+}
+fn should_capture_pane(fresh: bool, changed_window: bool, pending_recapture: bool) -> bool {
+    fresh || changed_window || pending_recapture
+}
 fn request_sequence(commands: Vec<String>, response: Response) -> Request {
     debug_assert!(!commands.is_empty());
     Request {
@@ -396,6 +425,7 @@ fn run(
     let mut dirty = true;
     let mut draft = Draft::default();
     let mut hydrating = BTreeSet::new();
+    let mut pending_recapture = BTreeSet::new();
     let mut last_active = String::new();
     let mut last_refresh = Instant::now();
     let mut resize: BTreeMap<String, (usize, usize)> = BTreeMap::new();
@@ -405,6 +435,7 @@ fn run(
     let mut exited = BTreeSet::new();
     let mut discovering = false;
     let mut retry_discovery = None::<Instant>;
+    let mut retry_send = None::<Instant>;
     let mut preferred_session = None::<String>;
     let mut discovery_requested = false;
     let mut streams = streams::Streams::new();
@@ -433,6 +464,9 @@ fn run(
         if let Some(retry) = retry_discovery.filter(|_| !refreshing && !discovering) {
             timeout = timeout.min(retry.saturating_duration_since(Instant::now()));
         }
+        if let Some(retry) = retry_send {
+            timeout = timeout.min(retry.saturating_duration_since(Instant::now()));
+        }
         if !resize.is_empty() {
             timeout = timeout.min(Duration::from_millis(120).saturating_sub(last_resize.elapsed()));
         }
@@ -447,6 +481,9 @@ fn run(
                 retry_discovery = None;
                 match result {
                     Ok(next) => {
+                        if next.sessions.is_empty() {
+                            retry_discovery = Some(Instant::now() + Duration::from_secs(30));
+                        }
                         draft = next;
                         Ok(Message::Reply(Response::Current, true, Vec::new()))
                     }
@@ -472,6 +509,34 @@ fn run(
         };
         match message {
             Ok(Message::Wake) => {}
+            Ok(Message::StreamOpened(session, result)) => {
+                match streams.opened(session.clone(), result) {
+                    Ok(true) => {
+                        let state = shared.lock();
+                        for pane in state
+                            .snapshot
+                            .sessions
+                            .iter()
+                            .filter(|item| item.id == session)
+                            .flat_map(|item| &item.windows)
+                            .flat_map(|window| &window.panes)
+                        {
+                            pending_recapture.insert(pane.id.clone());
+                        }
+                        dirty = true;
+                        urgent_refresh = true;
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        let mut state = shared.lock();
+                        state.snapshot.message = Some(
+                            crate::t!("tmux.read_failed", error = format!("{error:#}")).to_string(),
+                        );
+                        state.snapshot.revision += 1;
+                        retry_discovery = Some(Instant::now() + Duration::from_secs(10));
+                    }
+                }
+            }
             Ok(Message::Stop) => break,
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Ok(Message::StreamClosed(session, error)) => {
@@ -543,8 +608,9 @@ fn run(
                         .map(|l| String::from_utf8_lossy(l))
                         .collect::<Vec<_>>()
                         .join(" ");
-                    if let Response::Capture(id, _) = &response {
+                    if let Response::Capture { id, .. } = &response {
                         hydrating.remove(id);
+                        pending_recapture.insert(id.clone());
                     }
                     if let Response::Probe(_, sender) = &response {
                         let _ = sender.send_blocking(Err(anyhow::anyhow!(error.clone())));
@@ -635,22 +701,16 @@ fn run(
                             let changed = active != last_active;
                             last_active = active;
                             let active_window = next.window().cloned();
-                            let mut reconnected: BTreeSet<_> = next
-                                .sessions
-                                .iter()
-                                .filter(|s| !streams.contains(&s.id))
-                                .map(|s| s.id.clone())
-                                .collect();
-                            if let Err(error) = streams.reconcile(&config, &next.sessions, &tx) {
-                                next.message = Some(
-                                    crate::t!("tmux.read_failed", error = format!("{error:#}"))
-                                        .to_string(),
+                            if let Some(deadline) = streams.reconcile(&config, &next.sessions, &tx)
+                            {
+                                retry_discovery = Some(
+                                    retry_discovery
+                                        .map_or(deadline, |scheduled| scheduled.min(deadline)),
                                 );
-                                retry_discovery = Some(Instant::now() + Duration::from_secs(10));
                             }
-                            reconnected.retain(|id| streams.contains(id));
                             let mut state = shared.lock();
                             state.screens.retain(|id, _| pane_owners.contains_key(id));
+                            pending_recapture.retain(|id| pane_owners.contains_key(id));
                             {
                                 for pane in next
                                     .sessions
@@ -683,23 +743,19 @@ fn run(
                                     }
                                     let screen = state.screens.get(&pane.id).unwrap();
                                     *screen.title.lock() = pane.title.clone();
-                                    let old = screen.term.lock();
-                                    use alacritty_terminal::grid::Dimensions;
-                                    let resized = old.columns() != pane.cols
-                                        || old.screen_lines() != pane.rows;
-                                    drop(old);
+                                    let resized =
+                                        !capture_matches_size(screen, pane.cols, pane.rows);
                                     if resized {
                                         screen.remote_resize(pane.rows, pane.cols);
                                     }
                                     if active_window
                                         .as_ref()
                                         .is_some_and(|w| w.panes.iter().any(|p| p.id == pane.id))
-                                        && (fresh
-                                            || changed
-                                            || resized
-                                            || pane_owners
-                                                .get(&pane.id)
-                                                .is_some_and(|id| reconnected.contains(id)))
+                                        && should_capture_pane(
+                                            fresh,
+                                            changed,
+                                            pending_recapture.contains(&pane.id),
+                                        )
                                         && hydrating.insert(pane.id.clone())
                                     {
                                         let alternate = draft.panes.iter().any(|line| {
@@ -718,18 +774,18 @@ fn run(
                                             .unwrap();
                                         // Capture and subsequent live bytes must share one ordered
                                         // control stream, including while the command client switches.
-                                        if let Err(error) = streams.send(
+                                        if let Err((error, _)) = streams.send(
                                             &owner.id,
-                                            request(
-                                                format!(
-                                                    "capture-pane -p -e -t {} -S -2000",
-                                                    q(&pane.id)
-                                                ),
-                                                Response::Capture(pane.id.clone(), alternate),
+                                            capture_request(
+                                                &pane.id, alternate, pane.cols, pane.rows,
                                             ),
                                         ) {
                                             hydrating.remove(&pane.id);
+                                            pending_recapture.insert(pane.id.clone());
                                             state.snapshot.message = Some(error.to_string());
+                                            dirty = true;
+                                        } else {
+                                            pending_recapture.remove(&pane.id);
                                         }
                                     }
                                 }
@@ -746,25 +802,48 @@ fn run(
                                 state.snapshot = Snapshot { revision, ..next };
                             }
                         }
-                        Response::Capture(id, alternate) => {
+                        Response::Capture {
+                            id,
+                            alternate,
+                            cols,
+                            rows,
+                        } => {
                             let screen = shared.lock().screens.get(&id).cloned();
                             if let Some(screen) = screen {
-                                let mut capture = b"\x1bc".to_vec();
-                                if alternate {
-                                    capture.extend_from_slice(b"\x1b[?1049h");
-                                }
-                                for (i, line) in lines.iter().enumerate() {
-                                    if i > 0 {
-                                        capture.extend_from_slice(b"\r\n");
+                                if capture_matches_size(&screen, cols, rows) {
+                                    screen.remote_restore_capture(&lines, alternate);
+                                    let state = shared.lock();
+                                    if let Some(owner) = state.snapshot.sessions.iter().find(|s| {
+                                        s.windows.iter().any(|w| w.panes.iter().any(|p| p.id == id))
+                                    }) {
+                                        let mode_request = request(
+                                            format!("display-message -p -t {} '#{{cursor_x}}\t#{{cursor_y}}\t#{{cursor_flag}}\t#{{keypad_cursor_flag}}\t#{{bracketed_paste_flag}}\t#{{mouse_standard_flag}}\t#{{mouse_button_flag}}\t#{{mouse_all_flag}}\t#{{mouse_utf8_flag}}\t#{{mouse_sgr_flag}}\t#{{pane_private_modes}}'", q(&id)),
+                                            Response::Modes(id.clone()),
+                                        )
+                                        .session(Some(&owner.id));
+                                        match streams.send(&owner.id, mode_request) {
+                                            Ok(()) => {}
+                                            Err((error, request))
+                                                if error
+                                                    .downcast_ref::<io::Error>()
+                                                    .is_some_and(|error| {
+                                                        error.kind() == io::ErrorKind::WouldBlock
+                                                    }) =>
+                                            {
+                                                queue.push_front(request);
+                                                retry_send = Some(
+                                                    Instant::now() + Duration::from_millis(50),
+                                                );
+                                            }
+                                            Err((error, _)) => {
+                                                tracing::warn!(%error, "Could not restore pane modes");
+                                            }
+                                        }
                                     }
-                                    capture.extend_from_slice(line);
-                                }
-                                screen.remote_restore(&capture);
-                                let state = shared.lock();
-                                if let Some(owner) = state.snapshot.sessions.iter().find(|s| {
-                                    s.windows.iter().any(|w| w.panes.iter().any(|p| p.id == id))
-                                }) {
-                                    if let Err(error) = streams.send(&owner.id, request(format!("display-message -p -t {} '#{{cursor_x}}\t#{{cursor_y}}\t#{{cursor_flag}}\t#{{keypad_cursor_flag}}\t#{{bracketed_paste_flag}}\t#{{mouse_standard_flag}}\t#{{mouse_button_flag}}\t#{{mouse_all_flag}}\t#{{mouse_utf8_flag}}\t#{{mouse_sgr_flag}}\t#{{pane_private_modes}}'",q(&id)),Response::Modes(id.clone()))) { tracing::warn!(%error, "Could not restore pane modes"); }
+                                } else {
+                                    pending_recapture.insert(id.clone());
+                                    dirty = true;
+                                    urgent_refresh = true;
                                 }
                             }
                             hydrating.remove(&id);
@@ -979,6 +1058,19 @@ fn run(
                 let target = if streams.contains(&target) {
                     Some(target)
                 } else if request.target.is_some() {
+                    let session_exists = shared
+                        .lock()
+                        .snapshot
+                        .sessions
+                        .iter()
+                        .any(|session| session.id == target);
+                    if streams.is_opening(&target)
+                        || (session_exists && streams.is_retrying(&target))
+                    {
+                        queue.push_back(request);
+                        retry_send = streams.retry_deadline();
+                        continue;
+                    }
                     let mut state = shared.lock();
                     state.snapshot.message =
                         Some(crate::t!("tmux.session_not_ready").to_string().into());
@@ -989,19 +1081,38 @@ fn run(
                 };
                 let Some(target) = target else {
                     queue.push_front(request);
+                    retry_send = None;
                     break;
                 };
                 if !streams.can_send(&target) {
                     queue.push_back(request);
+                    retry_send = None;
                     continue;
                 }
-                if let Err(error) = streams.send(&target, request) {
-                    let mut state = shared.lock();
-                    state.snapshot.message = Some(
-                        crate::t!("tmux.command_failed", error = format!("{error:#}")).to_string(),
-                    );
-                    state.snapshot.revision += 1;
+                match streams.send(&target, request) {
+                    Ok(()) => retry_send = None,
+                    Err((error, request))
+                        if error
+                            .downcast_ref::<io::Error>()
+                            .is_some_and(|error| error.kind() == io::ErrorKind::WouldBlock) =>
+                    {
+                        queue.push_front(request);
+                        retry_send = Some(Instant::now() + Duration::from_millis(50));
+                        break;
+                    }
+                    Err((error, _)) => {
+                        retry_send = None;
+                        let mut state = shared.lock();
+                        state.snapshot.message = Some(
+                            crate::t!("tmux.command_failed", error = format!("{error:#}"))
+                                .to_string(),
+                        );
+                        state.snapshot.revision += 1;
+                    }
                 }
+            }
+            if queue.is_empty() {
+                retry_send = None;
             }
         }
     }
@@ -1604,6 +1715,89 @@ fn action_requests(action: Action, state: &Snapshot) -> Result<Vec<Request>> {
 mod tests {
     use super::*;
     #[test]
+    fn live_pane_resize_keeps_streaming_without_capture() {
+        use alacritty_terminal::{
+            index::{Column, Line},
+            vte::ansi::{Color, NamedColor},
+        };
+
+        assert!(should_capture_pane(true, false, false));
+        assert!(should_capture_pane(false, true, false));
+        assert!(should_capture_pane(false, false, true));
+
+        let screen = Session::remote("%7".into(), 3, 8, Arc::new(|_| Ok(())));
+        screen.remote_output(b"\x1b[?1049h\x1b[3;1H\x1b[46mFOOTER\x1b[0m");
+        screen.remote_resize(4, 10);
+        assert!(!should_capture_pane(false, false, false));
+        screen.remote_output(b"\x1b[1;1HX");
+
+        let term = screen.term.lock();
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'X');
+        assert_eq!(
+            term.grid()[Line(0)][Column(0)].bg,
+            Color::Named(NamedColor::Background)
+        );
+    }
+
+    #[test]
+    fn capture_preserves_trailing_cells_and_rejects_stale_resize_results() {
+        use alacritty_terminal::{
+            index::{Column, Line},
+            vte::ansi::{Color, NamedColor},
+        };
+
+        let capture = capture_request("%7", true, 80, 24);
+        assert_eq!(capture.command, "capture-pane -p -e -N -t '%7' -S -2000");
+        assert!(matches!(
+            capture.response,
+            Response::Capture {
+                id,
+                alternate: true,
+                cols: 80,
+                rows: 24,
+            } if id == "%7"
+        ));
+
+        let screen = Session::remote("%7".into(), 24, 80, Arc::new(|_| Ok(())));
+        assert!(capture_matches_size(&screen, 80, 24));
+        screen.remote_resize(24, 100);
+        assert!(!capture_matches_size(&screen, 80, 24));
+        assert!(capture_matches_size(&screen, 100, 24));
+
+        let mut parser = ControlParser::default();
+        assert!(
+            parser
+                .push(b"%begin 1 1 0\n\x1b[46mA  ")
+                .unwrap()
+                .is_empty()
+        );
+        let events = parser.push(b" \n\n\x1b[49mB\n%end 1 1 0\n").unwrap();
+        let [
+            ControlEvent::Response {
+                success: true,
+                lines,
+            },
+        ] = events.as_slice()
+        else {
+            panic!("missing capture response: {events:?}");
+        };
+        assert_eq!(lines[0], b"\x1b[46mA   ");
+        assert!(lines[1].is_empty());
+
+        let restored = Session::remote("%capture".into(), 3, 8, Arc::new(|_| Ok(())));
+        restored.remote_restore_capture(lines, true);
+        let term = restored.term.lock();
+        assert_eq!(
+            term.grid()[Line(0)][Column(3)].bg,
+            Color::Named(NamedColor::Cyan)
+        );
+        assert_eq!(
+            term.grid()[Line(1)][Column(0)].bg,
+            Color::Named(NamedColor::Background)
+        );
+    }
+
+    #[test]
     #[ignore = "requires TSHELL_SSH_TEST_HOST; uses an isolated tmux socket"]
     fn real_tmux_last_shell_exit_removes_session() {
         use super::*;
@@ -1706,6 +1900,25 @@ mod tests {
                 .unwrap();
         assert_eq!(old.destination, "server");
         assert!(!serde_json::to_string(&old).unwrap().contains("tmux_name"));
+    }
+
+    #[test]
+    fn ssh_config_query_uses_selected_identity_file() {
+        let host = HostConfig {
+            destination: "server".into(),
+            name: String::new(),
+            user: String::new(),
+            port: None,
+            identity_file: Some("key with spaces".into()),
+            tmux: false,
+            socket: None,
+        };
+        let command = host.ssh_command().unwrap();
+        let args: Vec<_> = command.get_args().collect();
+        assert!(
+            args.windows(2)
+                .any(|args| args == ["-i", "key with spaces"])
+        );
     }
 
     #[test]

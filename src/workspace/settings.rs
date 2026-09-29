@@ -100,31 +100,95 @@ fn setting_row(
     palette: Palette,
 ) -> AnyElement {
     div()
+        .w_full()
         .flex()
-        .flex_col()
-        .justify_center()
-        .gap_1()
-        .min_h(px(64.))
-        .px_4()
-        .py_2()
-        .border_1()
-        .border_color(rgb(palette.border))
-        .rounded_sm()
+        .items_center()
+        .justify_between()
+        .gap_3()
+        .min_h(px(44.))
         .child(
             div()
                 .flex()
-                .items_center()
-                .gap_4()
-                .child(div().flex_1().min_w_0().child(label))
-                .child(div().w(px(290.)).flex_shrink_0().child(control)),
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .text_size(px(13.))
+                .child(label)
+                .when_some(hint, |view, hint| {
+                    view.child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(rgb(palette.muted))
+                            .child(hint),
+                    )
+                }),
         )
-        .when_some(hint, |view, hint| {
-            view.child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(rgb(palette.muted))
-                    .child(hint),
-            )
+        .child(div().w(px(290.)).flex_shrink_0().child(control))
+        .into_any_element()
+}
+
+#[derive(Clone, Copy)]
+enum AppearanceSection {
+    Theme,
+    Font,
+    Window,
+    Background,
+}
+
+fn settings_page_action(page: usize, owner: WeakEntity<AppView>) -> AnyElement {
+    let (id, icon, label) = match page {
+        8 => (
+            "reload-themes",
+            IconName::RefreshCw,
+            crate::t!("settings.reload_theme"),
+        ),
+        1 => (
+            "reset-shortcuts",
+            IconName::Undo2,
+            crate::t!("settings.reset"),
+        ),
+        2 => (
+            "reset-metrics",
+            IconName::Undo2,
+            crate::t!("settings.reset"),
+        ),
+        5 => (
+            "settings-add-host",
+            IconName::Plus,
+            crate::t!("ws.add_host"),
+        ),
+        6 => ("refresh-keys", IconName::RefreshCw, crate::t!("ws.refresh")),
+        _ => return div().into_any_element(),
+    };
+    let button = match page {
+        8 => icon_button(id, icon, label),
+        1 | 2 => Button::new(id).ghost().small().label(label),
+        5 | 6 => Button::new(id).small().icon(icon).label(label),
+        _ => unreachable!(),
+    };
+    button
+        .on_click(move |_, window, cx| {
+            let _ = owner.update(cx, |app, cx| match page {
+                8 => app.reload_theme_file(window, cx),
+                1 => {
+                    app.keybindings.clear();
+                    app.shortcut_map = shortcuts::Keymap::new(&app.keybindings);
+                    app.settings_ui.recording = None;
+                    app.settings_ui.notice = None;
+                    app.save(cx);
+                    cx.notify();
+                }
+                2 => {
+                    app.metrics_config = metrics_config::Config::default();
+                    app.sync_metrics(cx);
+                    app.sync_latency_monitor(window, cx);
+                    app.save(cx);
+                    cx.notify();
+                }
+                5 => app.show_add(window, cx),
+                6 => app.refresh_keys(cx),
+                _ => {}
+            });
         })
         .into_any_element()
 }
@@ -320,25 +384,6 @@ impl AppView {
             .flex()
             .flex_col()
             .gap_3()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_size(px(16.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(crate::t!("settings.hosts")),
-                    )
-                    .child(
-                        Button::new("settings-add-host")
-                            .small()
-                            .icon(IconName::Plus)
-                            .label(crate::t!("ws.add_host"))
-                            .on_click(cx.listener(|app, _, window, cx| app.show_add(window, cx))),
-                    ),
-            )
             .children(self.hosts.iter().enumerate().map(|(index, host)| {
                 let detail = host
                     .config
@@ -356,21 +401,19 @@ impl AppView {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .min_h(px(58.))
-                    .px_3()
-                    .border_1()
-                    .border_color(rgb(p.border))
-                    .rounded_sm()
+                    .min_h(px(48.))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .flex()
                             .flex_col()
+                            .line_height(relative(1.25))
                             .child(host.name.clone())
                             .child(
                                 div()
                                     .text_size(px(11.))
+                                    .line_height(relative(1.25))
                                     .text_color(rgb(p.muted))
                                     .truncate()
                                     .child(detail),
@@ -421,25 +464,6 @@ impl AppView {
             .flex()
             .flex_col()
             .gap_3()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_size(px(16.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(crate::t!("settings.keys")),
-                    )
-                    .child(
-                        Button::new("refresh-keys")
-                            .small()
-                            .icon(IconName::RefreshCw)
-                            .label(crate::t!("ws.refresh"))
-                            .on_click(cx.listener(|app, _, _, cx| app.refresh_keys(cx))),
-                    ),
-            )
             .when(self.settings_ui.keys.is_empty(), |view| {
                 view.child(
                     div()
@@ -482,21 +506,19 @@ impl AppView {
                             .flex()
                             .items_center()
                             .gap_3()
-                            .min_h(px(64.))
-                            .px_3()
-                            .border_1()
-                            .border_color(rgb(p.border))
-                            .rounded_sm()
+                            .min_h(px(52.))
                             .child(
                                 div()
                                     .flex_1()
                                     .min_w_0()
                                     .flex()
                                     .flex_col()
+                                    .line_height(relative(1.25))
                                     .child(div().truncate().child(key.path.display().to_string()))
                                     .child(
                                         div()
                                             .text_size(px(11.))
+                                            .line_height(relative(1.25))
                                             .text_color(rgb(p.muted))
                                             .child(key.fingerprint.clone()),
                                     )
@@ -504,6 +526,7 @@ impl AppView {
                                         details.child(
                                             div()
                                                 .text_size(px(11.))
+                                                .line_height(relative(1.25))
                                                 .text_color(rgb(p.muted))
                                                 .truncate()
                                                 .child(assigned),
@@ -668,10 +691,7 @@ impl AppView {
         });
         window.open_dialog(cx, move |dialog, window, cx| {
             let height = 460_f32.min((f32::from(window.viewport_size().height) - 180.).max(180.));
-            dialog
-                .bg(cx.theme().popover)
-                .border_color(cx.theme().border)
-                .text_color(cx.theme().popover_foreground)
+            workspace_dialog(dialog, cx)
                 .title(crate::t!("settings.edit_theme"))
                 .width(px(640.))
                 .margin_top(((window.viewport_size().height - px(height + 80.)) / 2.).max(px(24.)))
@@ -690,14 +710,15 @@ impl AppView {
                 crate::t!("settings.theme_file_changed")
             );
             let text = self.settings_ui.theme_editor.read(cx).value();
-            let theme: ThemeDefinition = serde_json::from_str(&text)?;
+            let mut theme: ThemeDefinition = serde_json::from_str(&text)?;
+            theme.ensure_interface();
             let mut file = self.themes.clone();
             if let Some(old_id) = &self.settings_ui.editing_theme_id {
                 let index = file
                     .themes
                     .iter()
                     .position(|item| item.id == *old_id)
-                    .ok_or_else(|| anyhow::anyhow!("theme no longer exists"))?;
+                    .ok_or_else(|| anyhow::anyhow!("{}", crate::t!("settings.theme_missing")))?;
                 file.themes[index] = theme.clone();
             } else {
                 file.themes.push(theme.clone());
@@ -752,7 +773,7 @@ impl AppView {
     pub(super) fn delete_theme(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let mut file = self.themes.clone();
         if file.themes.len() <= 1 {
-            self.theme_error = Some("theme file must contain at least one theme".into());
+            self.theme_error = Some(crate::t!("settings.theme_last_required").to_string());
             cx.notify();
             return;
         }
@@ -787,7 +808,6 @@ impl AppView {
             .flex()
             .flex_col()
             .gap_2()
-            .p_3()
             .child(
                 div()
                     .flex_1()
@@ -837,28 +857,6 @@ impl AppView {
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_size(px(16.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(crate::t!("settings.terminal_theme")),
-                    )
-                    .child(
-                        icon_button(
-                            "reload-themes",
-                            IconName::RefreshCw,
-                            crate::t!("settings.reload_theme"),
-                        )
-                        .on_click(
-                            cx.listener(|app, _, window, cx| app.reload_theme_file(window, cx)),
-                        ),
-                    ),
-            )
             .children(self.themes.themes.iter().enumerate().map(|(index, theme)| {
                 let edit_id = theme.id.clone();
                 let delete_id = theme.id.clone();
@@ -923,12 +921,25 @@ impl AppView {
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .text_size(px(16.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(crate::t!("settings.theme_settings")),
-            )
+            .child(setting_row(
+                crate::t!("settings.language").to_string(),
+                Some(crate::t!("settings.language_hint").to_string()),
+                div().flex().justify_end().gap_2().children(
+                    crate::i18n::Language::ALL
+                        .iter()
+                        .enumerate()
+                        .map(|(index, &language)| {
+                            Button::new(("language", index))
+                                .small()
+                                .label(language.label())
+                                .when(self.language == language, |b| b.primary())
+                                .on_click(cx.listener(move |app, _, _, cx| {
+                                    app.set_language(language, cx);
+                                }))
+                        }),
+                ),
+                p,
+            ))
             .child(setting_row(
                 crate::t!("settings.interface_theme").to_string(),
                 Some(crate::t!("settings.appearance_hint").to_string()),
@@ -1085,6 +1096,17 @@ impl AppView {
             }
         })
         .detach();
+        for input in [
+            &self.settings_ui.window_width,
+            &self.settings_ui.window_height,
+        ] {
+            cx.subscribe_in(input, window, |app, _, event, window, cx| {
+                if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                    app.apply_window_size(window, cx);
+                }
+            })
+            .detach();
+        }
         cx.subscribe_in(
             &self.settings_ui.opacity,
             window,
@@ -1205,13 +1227,6 @@ impl AppView {
             .flex()
             .flex_col()
             .gap_2()
-            .child(
-                div()
-                    .pt_3()
-                    .text_size(px(16.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(crate::t!("settings.font")),
-            )
             .child(setting_row(
                 crate::t!("settings.font_family").to_string(),
                 Some(crate::t!("settings.font_mono_hint").to_string()),
@@ -1328,36 +1343,6 @@ impl AppView {
             .flex()
             .flex_col()
             .gap_3()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_size(px(16.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(crate::t!("settings.metrics")),
-                    )
-                    .child(
-                        Button::new("reset-metrics")
-                            .ghost()
-                            .small()
-                            .label(crate::t!("settings.reset"))
-                            .on_click(cx.listener(|app, _, window, cx| {
-                                app.metrics_config = metrics_config::Config::default();
-                                app.sync_metrics(cx);
-                                app.sync_latency_monitor(window, cx);
-                                app.save(cx);
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .child(
-                div()
-                    .text_color(rgb(self.palette.muted))
-                    .child(crate::t!("settings.metrics_hint")),
-            )
             .children(
                 [metrics_config::Side::Left, metrics_config::Side::Right]
                     .into_iter()
@@ -1436,8 +1421,7 @@ impl AppView {
             .py_2()
             .min_h(px(48.))
             .border_1()
-            .rounded_sm()
-            .border_color(rgb(self.palette.border))
+            .border_color(rgba(0))
             .drag_over::<MetricDrag>(move |style, drag, _, _| {
                 if drag.metric == metric {
                     return style;
@@ -1551,20 +1535,49 @@ impl AppView {
         Settings::new(SharedString::from(format!(
             "workspace-settings-{selected_page}"
         )))
-        .sidebar_width(px(170.))
-        .sidebar_size_range(px(160.)..px(220.))
         .default_selected_index(SelectIndex {
             page_ix: selected_page,
             group_ix: None,
         })
         .pages(pages.into_iter().map(|(page, label, icon)| {
             let owner = owner.clone();
+            if page == 0 {
+                let sections = [
+                    (
+                        AppearanceSection::Theme,
+                        crate::t!("settings.theme_settings"),
+                    ),
+                    (AppearanceSection::Font, crate::t!("settings.font")),
+                    (AppearanceSection::Window, crate::t!("settings.window")),
+                    (
+                        AppearanceSection::Background,
+                        crate::t!("settings.background"),
+                    ),
+                ];
+                return SettingPage::new(label.clone()).icon(icon).groups(
+                    sections.into_iter().map(|(section, section_label)| {
+                        let owner = owner.clone();
+                        let section_label = section_label.into_owned();
+                        let keywords = [label.clone(), section_label.clone()];
+                        SettingGroup::new().title(section_label).item(
+                            SettingItem::render(move |_, window, cx| {
+                                owner
+                                    .update(cx, |app, cx| {
+                                        app.settings_content(page, Some(section), window, cx)
+                                    })
+                                    .unwrap_or_else(|_| div().into_any_element())
+                            })
+                            .keywords(keywords),
+                        )
+                    }),
+                );
+            }
             let keywords = [label.clone()];
             SettingPage::new(label).icon(icon).group(
                 SettingGroup::new().item(
                     SettingItem::render(move |_, window, cx| {
                         owner
-                            .update(cx, |app, cx| app.settings_content(page, window, cx))
+                            .update(cx, |app, cx| app.settings_content(page, None, window, cx))
                             .unwrap_or_else(|_| div().into_any_element())
                     })
                     .keywords(keywords),
@@ -1582,287 +1595,237 @@ impl AppView {
             .into_any_element()
     }
 
-    fn settings_content(&self, page: usize, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+    fn settings_content(
+        &self,
+        page: usize,
+        appearance_section: Option<AppearanceSection>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let p = self.palette;
-        match page {
-            #[cfg(windows)]
-            7 => self.update_settings(cx),
-            6 => self.key_settings(cx),
-            5 => self.host_settings(cx),
-            8 => self.scheme_settings(cx),
-            2 => self.metrics_settings(cx),
-            1 => div()
+        let content =
+            match page {
+                #[cfg(windows)]
+                7 => self.update_settings(cx),
+                6 => self.key_settings(cx),
+                5 => self.host_settings(cx),
+                8 => self.scheme_settings(cx),
+                2 => self.metrics_settings(cx),
+                1 => div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .when_some(self.settings_ui.notice.clone(), |v, notice| {
+                        v.child(div().text_color(rgb(p.error)).child(notice))
+                    })
+                    .children(
+                        shortcuts::BINDINGS
+                            .iter()
+                            .enumerate()
+                            .map(|(index, binding)| {
+                                let recording = self.settings_ui.recording == Some(index);
+                                let label = if recording {
+                                    crate::t!("settings.shortcuts_recording").to_string()
+                                } else {
+                                    shortcuts::keys(binding, &self.keybindings)
+                                        .iter()
+                                        .map(|s| shortcuts::display(s))
+                                        .collect::<Vec<_>>()
+                                        .join(" / ")
+                                };
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .py_2()
+                                    .min_h(px(48.))
+                                    .child(div().flex_1().child(binding.label()))
+                                    .child(
+                                        Button::new(("shortcut", index))
+                                            .small()
+                                            .label(label)
+                                            .when(recording, |b| b.primary())
+                                            .on_click(cx.listener(move |app, _, window, cx| {
+                                                app.settings_ui.recording = Some(index);
+                                                app.settings_ui.notice = None;
+                                                window.focus(&app.settings_ui.focus, cx);
+                                                cx.notify();
+                                            })),
+                                    )
+                            }),
+                    )
+                    .into_any_element(),
+                _ => div()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .when(
+                        matches!(appearance_section, Some(AppearanceSection::Theme)),
+                        |view| view.child(self.theme_settings(cx)),
+                    )
+                    .when(
+                        matches!(appearance_section, Some(AppearanceSection::Font)),
+                        |view| view.child(self.font_settings(window, cx)),
+                    )
+                    .when(
+                        matches!(appearance_section, Some(AppearanceSection::Window)),
+                        |view| {
+                            view.child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .child(setting_row(
+                                        crate::t!("settings.initial_window_size").to_string(),
+                                        None,
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_end()
+                                            .gap_2()
+                                            .child(crate::t!("settings.window_width"))
+                                            .child(
+                                                Input::new(&self.settings_ui.window_width)
+                                                    .small()
+                                                    .w(px(76.)),
+                                            )
+                                            .child(crate::t!("settings.window_height"))
+                                            .child(
+                                                Input::new(&self.settings_ui.window_height)
+                                                    .small()
+                                                    .w(px(76.)),
+                                            ),
+                                        p,
+                                    ))
+                                    .when(self.settings_ui.window_size_error, |view| {
+                                        view.child(
+                                            div()
+                                                .text_color(rgb(p.error))
+                                                .child(crate::t!("settings.window_size_invalid")),
+                                        )
+                                    }),
+                            )
+                            .child(setting_row(
+                                crate::t!("settings.show_top_title").to_string(),
+                                None,
+                                div().flex().justify_end().child(
+                                    Checkbox::new("show-top-title")
+                                        .checked(self.show_top_title)
+                                        .on_click(cx.listener(|app, enabled, _, cx| {
+                                            app.show_top_title = *enabled;
+                                            app.save(cx);
+                                            cx.notify();
+                                        })),
+                                ),
+                                p,
+                            ))
+                            .child(setting_row(
+                                crate::t!("settings.show_status_bar").to_string(),
+                                None,
+                                div().flex().justify_end().child(
+                                    Checkbox::new("show-status-bar")
+                                        .checked(self.show_status_bar)
+                                        .on_click(cx.listener(|app, enabled, window, cx| {
+                                            app.show_status_bar = *enabled;
+                                            app.sync_latency_monitor(window, cx);
+                                            app.save(cx);
+                                            cx.notify();
+                                        })),
+                                ),
+                                p,
+                            ))
+                        },
+                    )
+                    .when(
+                        matches!(appearance_section, Some(AppearanceSection::Background)),
+                        |view| {
+                            view.child(setting_row(
+                                crate::t!("settings.opacity").to_string(),
+                                Some(crate::t!("settings.opacity_hint").to_string()),
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .child(Slider::new(&self.settings_ui.opacity).w_full()),
+                                    )
+                                    .child(format!(
+                                        "{}%",
+                                        ((1. - self.background_opacity) * 100.).round() as u32
+                                    )),
+                                p,
+                            ))
+                            .child(setting_row(
+                                crate::t!("settings.sidebar_opacity").to_string(),
+                                None,
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(div().flex_1().child(
+                                        Slider::new(&self.settings_ui.sidebar_opacity).w_full(),
+                                    ))
+                                    .child(format!(
+                                        "{}%",
+                                        ((1. - self.sidebar_opacity) * 100.).round() as u32
+                                    )),
+                                p,
+                            ))
+                            .child(setting_row(
+                                crate::t!("settings.acrylic").to_string(),
+                                Some(crate::t!("settings.acrylic_hint").to_string()),
+                                div().flex().justify_end().child(
+                                    Checkbox::new("acrylic-background")
+                                        .checked(self.acrylic_background)
+                                        .on_click(cx.listener(|app, enabled, window, cx| {
+                                            app.acrylic_background = *enabled;
+                                            app.apply_opacity(window, cx);
+                                            app.save(cx);
+                                        })),
+                                ),
+                                p,
+                            ))
+                        },
+                    )
+                    .into_any_element(),
+            };
+        let description = match page {
+            8 => Some(crate::t!("settings.theme_description")),
+            1 => Some(crate::t!("settings.shortcuts_hint")),
+            2 => Some(crate::t!("settings.metrics_hint")),
+            5 => Some(crate::t!("settings.hosts_description")),
+            6 => Some(crate::t!("settings.keys_description")),
+            _ => None,
+        };
+        if let Some(description) = description {
+            div()
+                .w_full()
                 .flex()
                 .flex_col()
                 .gap_3()
                 .child(
                     div()
+                        .w_full()
+                        .min_h(px(32.))
                         .flex()
                         .items_center()
+                        .justify_between()
+                        .gap_3()
                         .child(
                             div()
                                 .flex_1()
-                                .text_size(px(16.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(crate::t!("settings.shortcuts")),
+                                .min_w_0()
+                                .text_color(rgb(p.muted))
+                                .child(description),
                         )
-                        .child(
-                            Button::new("reset-shortcuts")
-                                .ghost()
-                                .small()
-                                .label(crate::t!("settings.reset"))
-                                .on_click(cx.listener(|app, _, _, cx| {
-                                    app.keybindings.clear();
-                                    app.shortcut_map = shortcuts::Keymap::new(&app.keybindings);
-                                    app.settings_ui.recording = None;
-                                    app.settings_ui.notice = None;
-                                    app.save(cx);
-                                    cx.notify();
-                                })),
-                        ),
+                        .child(settings_page_action(page, cx.entity().downgrade())),
                 )
-                .child(
-                    div()
-                        .text_color(rgb(p.muted))
-                        .child(crate::t!("settings.shortcuts_hint")),
-                )
-                .when_some(self.settings_ui.notice.clone(), |v, notice| {
-                    v.child(div().text_color(rgb(p.error)).child(notice))
-                })
-                .children(
-                    shortcuts::BINDINGS
-                        .iter()
-                        .enumerate()
-                        .map(|(index, binding)| {
-                            let recording = self.settings_ui.recording == Some(index);
-                            let label = if recording {
-                                crate::t!("settings.shortcuts_recording").to_string()
-                            } else {
-                                shortcuts::keys(binding, &self.keybindings)
-                                    .iter()
-                                    .map(|s| shortcuts::display(s))
-                                    .collect::<Vec<_>>()
-                                    .join(" / ")
-                            };
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .px_4()
-                                .py_2()
-                                .min_h(px(48.))
-                                .border_1()
-                                .rounded_sm()
-                                .border_color(rgb(p.border))
-                                .child(div().flex_1().child(binding.label()))
-                                .child(
-                                    Button::new(("shortcut", index))
-                                        .small()
-                                        .label(label)
-                                        .when(recording, |b| b.primary())
-                                        .on_click(cx.listener(move |app, _, window, cx| {
-                                            app.settings_ui.recording = Some(index);
-                                            app.settings_ui.notice = None;
-                                            window.focus(&app.settings_ui.focus, cx);
-                                            cx.notify();
-                                        })),
-                                )
-                        }),
-                )
-                .into_any_element(),
-            _ => div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div()
-                        .text_size(px(16.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(crate::t!("settings.appearance")),
-                )
-                .child(self.theme_settings(cx))
-                .child(setting_row(
-                    crate::t!("settings.language").to_string(),
-                    Some(crate::t!("settings.language_hint").to_string()),
-                    div().flex().justify_end().gap_2().children(
-                        crate::i18n::Language::ALL
-                            .iter()
-                            .enumerate()
-                            .map(|(index, &language)| {
-                                Button::new(("language", index))
-                                    .small()
-                                    .label(language.label())
-                                    .when(self.language == language, |b| b.primary())
-                                    .on_click(cx.listener(move |app, _, _, cx| {
-                                        app.set_language(language, cx);
-                                    }))
-                            }),
-                    ),
-                    p,
-                ))
-                .child(self.font_settings(window, cx))
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_2()
-                        .child(
-                            div()
-                                .pt_3()
-                                .text_size(px(16.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(crate::t!("settings.window")),
-                        )
-                        .child(setting_row(
-                            crate::t!("settings.initial_window_size").to_string(),
-                            None,
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .justify_end()
-                                        .gap_2()
-                                        .child(crate::t!("settings.window_width"))
-                                        .child(
-                                            Input::new(&self.settings_ui.window_width)
-                                                .small()
-                                                .w(px(76.)),
-                                        )
-                                        .child(crate::t!("settings.window_height"))
-                                        .child(
-                                            Input::new(&self.settings_ui.window_height)
-                                                .small()
-                                                .w(px(76.)),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .justify_end()
-                                        .gap_2()
-                                        .child(
-                                            Button::new("apply-window-size")
-                                                .small()
-                                                .label(crate::t!("settings.window_size_apply"))
-                                                .on_click(cx.listener(|app, _, window, cx| {
-                                                    app.apply_window_size(window, cx);
-                                                })),
-                                        )
-                                        .child(
-                                            Button::new("reset-window-size")
-                                                .ghost()
-                                                .small()
-                                                .label(crate::t!("settings.window_size_reset"))
-                                                .on_click(cx.listener(|app, _, window, cx| {
-                                                    app.set_window_size(
-                                                        DEFAULT_WINDOW_SIZE,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                })),
-                                        ),
-                                ),
-                            p,
-                        ))
-                        .when(self.settings_ui.window_size_error, |view| {
-                            view.child(
-                                div()
-                                    .text_color(rgb(p.error))
-                                    .child(crate::t!("settings.window_size_invalid")),
-                            )
-                        }),
-                )
-                .child(setting_row(
-                    crate::t!("settings.show_top_title").to_string(),
-                    None,
-                    div().flex().justify_end().child(
-                        Checkbox::new("show-top-title")
-                            .checked(self.show_top_title)
-                            .on_click(cx.listener(|app, enabled, _, cx| {
-                                app.show_top_title = *enabled;
-                                app.save(cx);
-                                cx.notify();
-                            })),
-                    ),
-                    p,
-                ))
-                .child(setting_row(
-                    crate::t!("settings.show_status_bar").to_string(),
-                    None,
-                    div().flex().justify_end().child(
-                        Checkbox::new("show-status-bar")
-                            .checked(self.show_status_bar)
-                            .on_click(cx.listener(|app, enabled, window, cx| {
-                                app.show_status_bar = *enabled;
-                                app.sync_latency_monitor(window, cx);
-                                app.save(cx);
-                                cx.notify();
-                            })),
-                    ),
-                    p,
-                ))
-                .child(
-                    div()
-                        .pt_3()
-                        .text_size(px(16.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(crate::t!("settings.background")),
-                )
-                .child(setting_row(
-                    crate::t!("settings.opacity").to_string(),
-                    Some(crate::t!("settings.opacity_hint").to_string()),
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .flex_1()
-                                .child(Slider::new(&self.settings_ui.opacity).w_full()),
-                        )
-                        .child(format!(
-                            "{}%",
-                            ((1. - self.background_opacity) * 100.).round() as u32
-                        )),
-                    p,
-                ))
-                .child(setting_row(
-                    crate::t!("settings.sidebar_opacity").to_string(),
-                    None,
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .flex_1()
-                                .child(Slider::new(&self.settings_ui.sidebar_opacity).w_full()),
-                        )
-                        .child(format!(
-                            "{}%",
-                            ((1. - self.sidebar_opacity) * 100.).round() as u32
-                        )),
-                    p,
-                ))
-                .child(setting_row(
-                    crate::t!("settings.acrylic").to_string(),
-                    Some(crate::t!("settings.acrylic_hint").to_string()),
-                    div().flex().justify_end().child(
-                        Checkbox::new("acrylic-background")
-                            .checked(self.acrylic_background)
-                            .on_click(cx.listener(|app, enabled, window, cx| {
-                                app.acrylic_background = *enabled;
-                                app.apply_opacity(window, cx);
-                                app.save(cx);
-                            })),
-                    ),
-                    p,
-                ))
-                .into_any_element(),
+                .child(content)
+                .into_any_element()
+        } else {
+            content
         }
     }
 }

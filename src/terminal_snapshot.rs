@@ -271,6 +271,24 @@ mod tests {
     }
 
     #[test]
+    fn mouse_motion_preserves_scrollback_and_selection() {
+        let s = session(5, 20);
+        for row in 0..30 {
+            s.remote_output(format!("line {row}\r\n").as_bytes());
+        }
+        let (before, _) = s.render_snapshot(VecDeque::from([
+            RenderCommand::Scroll(Scroll::Delta(3)),
+            RenderCommand::Begin(anchor(1, 1, Side::Left), SelectionType::Simple),
+            RenderCommand::Extend(anchor(1, 4, Side::Right)),
+        ]));
+        let (after, _) = s.render_snapshot(VecDeque::from([RenderCommand::MouseMove(
+            b"mouse".to_vec(),
+        )]));
+        assert_eq!(after.display_offset, before.display_offset);
+        assert_eq!(after.selection, before.selection);
+    }
+
+    #[test]
     fn sparse_output_replaces_one_row_without_mutating_previous_snapshot() {
         let s = session(40, 120);
         let (before, _) = s.render_snapshot(VecDeque::new());
@@ -565,11 +583,12 @@ pub(crate) fn apply_commands<T: EventListener>(
                     copies.push(text);
                 }
             }
-            RenderCommand::Input(data) | RenderCommand::MouseMove(data) => {
+            RenderCommand::Input(data) => {
                 term.scroll_display(Scroll::Bottom);
                 term.selection = None;
                 inputs.push(data);
             }
+            RenderCommand::MouseMove(data) => inputs.push(data),
         }
     }
     (copies, inputs)

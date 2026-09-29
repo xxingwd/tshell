@@ -32,6 +32,7 @@ pub(crate) fn run_render_check(output: std::path::PathBuf) -> bool {
 }
 
 async fn render_check_inner(cx: &mut AsyncApp) -> anyhow::Result<serde_json::Value> {
+    check_full_mailbox_selection(cx).await?;
     check_drag_release(cx).await?;
     use alacritty_terminal::index::{Column, Line, Point as GridPoint, Side};
     use std::collections::VecDeque;
@@ -133,7 +134,7 @@ async fn render_check_inner(cx: &mut AsyncApp) -> anyhow::Result<serde_json::Val
         handle.update(cx, |view, window, _| {
             let before_family = view.font_family.clone();
             view.font_family = "JetBrains Mono".into();
-            let probe = view.text_run("M", view.palette.text, view.palette.text, Flags::empty());
+            let probe = view.text_run("M", view.palette.text, Flags::empty());
             view.cell_width = f32::from(
                 window
                     .text_system()
@@ -240,7 +241,7 @@ async fn render_check_inner(cx: &mut AsyncApp) -> anyhow::Result<serde_json::Val
         "extended underline not drawn"
     );
     let faint_ink = handle.update(cx, |view, _, _| {
-        view.text_run("faint", 0x273244, 0x273244, Flags::DIM).color
+        view.text_run("faint", 0x273244, Flags::DIM).color
     })?;
     anyhow::ensure!(
         (faint_ink.a - 0.5).abs() < 0.001,
@@ -489,6 +490,64 @@ async fn render_check_inner(cx: &mut AsyncApp) -> anyhow::Result<serde_json::Val
         "sparse_updates": sparse_updates,
         "includes_gpu_presentation": false,
     }))
+}
+
+async fn check_full_mailbox_selection(cx: &mut AsyncApp) -> anyhow::Result<()> {
+    use alacritty_terminal::index::{Column, Line, Point as GridPoint, Side};
+    use std::collections::VecDeque;
+
+    let session = Session::remote("%full-mailbox".into(), 5, 20, Arc::new(|_| Ok(())));
+    session.remote_output(b"abcdefghijklmnop");
+    let start = Anchor {
+        point: GridPoint::new(Line(0), Column(1)),
+        side: Side::Left,
+    };
+    let end = Anchor {
+        point: GridPoint::new(Line(0), Column(4)),
+        side: Side::Right,
+    };
+    session.apply_interactions(VecDeque::from([RenderCommand::Begin(
+        start,
+        SelectionType::Simple,
+    )]));
+    let source = session.clone();
+    let view = cx.new(|cx| {
+        let mut view = TerminalView::from_session(
+            source,
+            14.,
+            Palette::new(gpui_kit::component::ThemeMode::Dark),
+            cx,
+        );
+        view._output_task = Task::ready(());
+        assert!(view.queue_render(RenderCommand::Scroll(Scroll::Delta(0)), cx));
+        for _ in 0..256 {
+            assert!(view.mailbox.push(RenderCommand::Scroll(Scroll::Delta(0))));
+        }
+        view.selecting = true;
+        view.pending_anchor = Some(end);
+        view.finish_selection(cx);
+        assert_eq!(view.pending_anchor, Some(end));
+        view.copy(cx);
+        assert_eq!(view.pending_anchor, Some(end));
+        view
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while view.read_with(cx, |view, _| view.interactions_in_flight) {
+        anyhow::ensure!(Instant::now() < deadline, "full mailbox did not drain");
+        cx.background_executor()
+            .timer(Duration::from_millis(1))
+            .await;
+    }
+    anyhow::ensure!(
+        view.read_with(cx, |view, _| view.pending_anchor.is_none()),
+        "selection endpoint was not retried"
+    );
+    let copies = session.apply_interactions(VecDeque::from([RenderCommand::Copy]));
+    anyhow::ensure!(
+        copies == ["bcde"],
+        "selection endpoint was lost: {copies:?}"
+    );
+    Ok(())
 }
 
 async fn check_drag_release(cx: &mut AsyncApp) -> anyhow::Result<()> {

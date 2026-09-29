@@ -13,12 +13,12 @@ impl AppView {
         self.need_focus = true;
         cx.notify();
     }
-    fn open_tools(&mut self, mode: WorkspaceMode, cx: &mut Context<Self>) {
-        self.workspace_mode = mode;
-        self.need_focus = false;
+    pub(super) fn open_tools(&mut self, mode: WorkspaceMode, cx: &mut Context<Self>) {
         let Some(key) = self.active_file_session.clone() else {
             return;
         };
+        self.workspace_mode = mode;
+        self.need_focus = false;
         if self.tool_roots.contains_key(&key) {
             self.refresh_tools(cx);
             return;
@@ -125,6 +125,9 @@ impl AppView {
         cx.notify();
     }
     pub(super) fn refresh_git(&mut self, cx: &mut Context<Self>) {
+        if self.active_file_session.is_none() || self.hosts[self.active].backend.is_none() {
+            return;
+        }
         self.git_request += 1;
         let request = self.git_request;
         let root = self.cwd.clone();

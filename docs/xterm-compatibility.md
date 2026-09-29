@@ -2,18 +2,16 @@
 
 TShell uses **xterm.js 6.0.0** as the reference for terminal behavior, with WebGL custom glyphs enabled, `drawBoldTextInBrightColors=true`, `minimumContrastRatio=1`, and Windows keyboard behavior. User-selected font, palette, opacity and workspace shortcuts remain application preferences. Rust/GPUI remains the runtime; no browser or JavaScript interpreter is embedded.
 
-The built-in palette definitions in [`defaults.json`](../src/terminal_theme/defaults.json) retain their
-checked-in colour values; One Dark remains the default dark slot. Four additional
-Codex and VS Code Modern palettes are application extensions. Workspace surfaces
-and dialog tokens derive from the selected terminal background, foreground and
-cursor. Users configure independent light/dark scheme IDs; automatic mode chooses
+The built-in palette definitions in [`defaults.json`](../src/terminal_theme/defaults.json) contain
+only the VS Code Light/Dark Modern pair. Each scheme in `theme.json` stores shared
+surface/ink/accent colors, terminal selection and ANSI colors, and separate
+interface tokens for panel, border, muted text, hover, selected and error states.
+Interface tokens feed GPUI Kit without changing the terminal color reports.
+Version 2 schemes migrate into this single file. Users configure independent light/dark scheme IDs; automatic mode chooses
 between them using only Windows lightness, never its accent colours. Legacy
-Codex/VS Code choices migrate to their matching pairs; legacy single schemes
-retain the matching lightness slot. Codex's red, green and magenta ANSI entries
-use the supplied semantic colours; other ANSI entries reuse the existing light
-and One Dark tables. VS Code Modern's terminal foreground and workspace colours
-follow the locally installed default theme; its ANSI colours use the existing
-light and One Dark tables because those theme files do not specify them. Theme
+built-in themes are removed from the catalog while unknown user schemes are
+preserved. VS Code Modern's terminal foreground and workspace colours follow
+the locally installed default theme. Theme
 changes update existing/new panes, selection/cursor colours and protocol reports
 together. DIM still follows xterm's alpha-compositing rules. This is an
 application preference, not a change to the xterm.js baseline.
@@ -156,7 +154,7 @@ PowerShell manual check inside TShell:
 
 ## Event-driven workspace metadata
 
-The workspace subscribes to title/exit and tmux snapshot notifications instead of polling every 33 ms. Notifications have capacity one and a 4 ms coalescing window; parsing still consumes every byte in order. tmux titles are decoded from the live `%output` stream using the same Rust ANSI processor, independently of synthetic capture restoration. Query responses cannot overwrite titles received after a query began. External tmux title and path changes use quoted format subscriptions (tmux limits these to once per second). Subscription values update the matching pane directly; version checks keep older in-flight snapshots from replacing newer metadata. These changes do not alter background output parsing, OSC handling or screen restoration. Layout notifications request a snapshot with a 16 ms coalescing interval. Healthy sessions do not periodically query session/window/pane lists; failed discovery or a disconnected control stream retries after 10 seconds. Format subscriptions still use tmux's own one-second change checks. Without a live control stream, external changes cannot notify the client; reconnect to discover externally created sessions. This is native workspace scheduling, not a claim of new xterm protocol parity. Sources: [tmux 3.6 control subscriptions](https://github.com/tmux/tmux/blob/3.6/tmux.1) and [OSC title handling](https://github.com/tmux/tmux/blob/3.6/input.c).
+The workspace subscribes to title/exit and tmux snapshot notifications instead of polling every 33 ms. Notifications have capacity one and a 4 ms coalescing window; parsing still consumes every byte in order. tmux titles are decoded from the live `%output` stream using the same Rust ANSI processor, independently of synthetic capture restoration. Query responses cannot overwrite titles received after a query began. External tmux title and path changes use quoted format subscriptions (tmux limits these to once per second). Subscription values update the matching pane directly; version checks keep older in-flight snapshots from replacing newer metadata. These changes do not alter background output parsing, OSC handling or screen restoration. Layout notifications request a snapshot with a 16 ms coalescing interval. Healthy sessions do not periodically query session/window/pane lists; failed discovery or a disconnected control stream retries after 10 seconds. With no tmux sessions, discovery runs every 30 seconds so sessions created outside TShell appear without reconnecting. Format subscriptions still use tmux's own one-second change checks. This is native workspace scheduling, not a claim of new xterm protocol parity. Sources: [tmux 3.6 control subscriptions](https://github.com/tmux/tmux/blob/3.6/tmux.1) and [OSC title handling](https://github.com/tmux/tmux/blob/3.6/input.c).
 
 ## OSC 52 clipboard writes
 

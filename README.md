@@ -26,13 +26,19 @@ xterm.js or OpenSSH feature parity.
   required.
 - A built-in editor for UTF-8 text files, background syntax highlighting,
   search, and conflict-aware remote saves.
-- Unified workspace and terminal colors, with 21 built-in palettes including
-  Codex Light/Dark and VS Code Light/Dark Modern. Edit color schemes separately;
-  assign any scheme to the light and dark theme slots, then select light, dark,
-  or automatic mode. Automatic mode reads the Windows light/dark setting only.
-  Dialog surfaces follow the active scheme. Fonts, line height,
+- Markdown opens in a native rich-text preview; HTML uses a read-only WebView2
+  preview on Windows. Both have a one-click switch back to editing. The HTML
+  preview renders inline styles but blocks scripts and external resources.
+- Unified workspace and terminal colors with VS Code Light/Dark Modern schemes.
+  A single `theme.json` stores terminal colors and interface tokens per scheme;
+  version 2 schemes migrate in place. Edit custom color schemes separately; assign the VS Code schemes to the light
+  and dark slots, then select light, dark, or automatic mode. Automatic mode
+  reads the Windows light/dark setting only.
+  Form dialogs use one title and consistent spacing and surfaces that follow
+  the active scheme; confirmation prompts remain compact. Fonts, line height,
   programming ligatures, opacity, acrylic background, and interface language
-  are configurable.
+  are configurable. Appearance settings are grouped by theme, font, window,
+  and background rather than by individual control.
 - xterm-compatible keyboard, paste, selection, ANSI/256-color/true-color SGR,
   custom box glyphs, cursor styles, OSC 7 working-directory metadata, OSC 52
   clipboard writes, and native OSC 9/777 notifications.
@@ -79,6 +85,21 @@ persist their name and starting directory, then start fresh processes on the
 next launch. tmux persists its own sessions, windows, panes, layouts, and
 working directories on the remote server; TShell does not duplicate those
 snapshots in local configuration.
+
+The host selector keeps its original appearance. Its dropdown shows a
+connection-status dot for each host and a disconnect button beside each
+connected remote host. The button disconnects only that host without switching
+the current host or removing its configuration; selecting that host again
+reconnects it. Disconnecting ordinary SSH closes its terminals, while tmux
+sessions remain on the server. Explorer and Git do not access a disconnected
+host. Reconnecting restores its file drafts. A session's context menu offers
+Delete Session; deleting a session or closing its last tab or pane is blocked
+while its files have unsaved edits or a file operation is running.
+Save open files before changing a host's connection or removing it. TShell
+prevents those actions while the affected host has unsaved edits or a file
+operation is running. Disconnecting the same host preserves its file drafts.
+Changing connection details clears that host's file and tool
+views so paths from the previous connection are not reused.
 
 The command palette is available with `Ctrl+Shift+K`. Important defaults are:
 
@@ -130,6 +151,16 @@ writes use SFTP; a remote save compares the original contents, writes a sibling
 temporary file, and atomically replaces the target when the server supports
 `posix-rename@openssh.com`. External edits produce a conflict instead of being
 silently overwritten.
+
+Markdown (`.md`, `.mdx`) and HTML (`.html`, `.htm`) files show a read-only
+preview when opened at up to 256 KiB; larger files stay in the source editor.
+Markdown source renders directly through GPUI Kit's native `TextView::markdown`
+on all platforms. On Windows, an embedded WebView2 displays HTML
+layout and inline CSS. HTML preview pages cannot run scripts, load external
+resources, submit forms, or navigate away. Relative assets are not loaded,
+including for remote files. Other platforms and systems without WebView2 use
+the text-oriented native HTML fallback. Use the Edit/Preview controls in the
+file header to switch views; saving always writes the original UTF-8 source.
 
 Git view reports `git status --porcelain` for the active tool directory. It is a
 read-only browser: staging, commits, pushes, and history editing are outside

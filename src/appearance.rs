@@ -76,39 +76,49 @@ pub struct Palette {
     pub muted: u32,
     pub accent: u32,
     pub selected: u32,
+    pub hover: u32,
     pub terminal: u32,
     pub selection: u32,
     pub error: u32,
     pub ansi: [u32; 16],
 }
 impl Palette {
-    pub fn for_terminal(terminal: Self, id: &str) -> Self {
+    pub fn row_hover(self) -> u32 {
+        self.hover
+    }
+
+    pub fn row_selected(self) -> u32 {
+        self.selected
+    }
+
+    pub fn for_terminal(terminal: Self) -> Self {
         let mut palette = terminal;
         palette.background = terminal.terminal;
         palette.panel = mix(terminal.terminal, terminal.text, 18);
         palette.border = mix(terminal.terminal, terminal.text, 38);
         palette.muted = mix(terminal.text, terminal.terminal, 100);
-        palette.selected = mix(palette.panel, terminal.accent, 45);
-        match id {
-            "codex-light" => palette.error = 0xba2623,
-            "codex-dark" => palette.error = 0xfa423e,
-            "vscode-light" => {
-                palette.panel = 0xf8f8f8;
-                palette.border = 0xe5e5e5;
-                palette.muted = 0x767676;
-                palette.selected = 0xe8e8e8;
-                palette.error = 0xf85149;
-            }
-            "vscode-dark" => {
-                palette.panel = 0x181818;
-                palette.border = 0x2b2b2b;
-                palette.muted = 0x9d9d9d;
-                palette.selected = 0x2b2b2b;
-                palette.error = 0xf85149;
-            }
-            _ => {}
-        }
+        palette.hover = mix(palette.panel, palette.text, 20);
+        palette.selected = if palette.terminal_theme().light() {
+            mix(palette.panel, palette.text, 36)
+        } else {
+            mix(palette.panel, 0x000000, 30)
+        };
         palette
+    }
+
+    pub fn with_interface(
+        mut self,
+        colors: Option<crate::terminal_theme::InterfaceColors>,
+    ) -> Self {
+        if let Some(colors) = colors {
+            self.panel = colors.panel;
+            self.border = colors.border;
+            self.muted = colors.muted;
+            self.hover = colors.hover;
+            self.selected = colors.selected;
+            self.error = colors.error;
+        }
+        self
     }
 
     pub fn apply_ui(self, theme: &mut gpui_kit::component::Theme) {
@@ -118,8 +128,8 @@ impl Palette {
         let accent_hover = rgb(mix(self.accent, self.text, 25)).into();
         theme.background = rgb(self.background).into();
         theme.foreground = rgb(self.text).into();
-        theme.accent = rgb(self.selected).into();
-        theme.accent_foreground = rgb(self.text).into();
+        theme.accent = rgb(self.accent).into();
+        theme.accent_foreground = accent_foreground;
         theme.accordion = rgb(self.panel).into();
         theme.group_box = rgb(self.panel).into();
         theme.group_box_foreground = rgb(self.text).into();
@@ -130,7 +140,7 @@ impl Palette {
         theme.sidebar = rgb(self.panel).into();
         theme.sidebar_foreground = rgb(self.text).into();
         theme.sidebar_border = rgb(self.border).into();
-        theme.sidebar_accent = rgb(self.selected).into();
+        theme.sidebar_accent = rgb(self.row_selected()).into();
         theme.sidebar_accent_foreground = rgb(self.text).into();
         theme.sidebar_primary = rgb(self.accent).into();
         theme.sidebar_primary_foreground = accent_foreground;
@@ -146,27 +156,27 @@ impl Palette {
         theme.overlay = overlay.alpha(if light { 0.26 } else { 0.55 });
         theme.button = rgb(self.panel).into();
         theme.button_foreground = rgb(self.text).into();
-        theme.button_hover = rgb(self.selected).into();
+        theme.button_hover = rgb(self.row_hover()).into();
         theme.button_primary = rgb(self.accent).into();
         theme.button_primary_hover = accent_hover;
         theme.button_primary_active = accent_hover;
         theme.button_primary_foreground = accent_foreground;
         theme.secondary = rgb(self.panel).into();
         theme.secondary_foreground = rgb(self.text).into();
-        theme.secondary_hover = rgb(self.selected).into();
+        theme.secondary_hover = rgb(self.row_hover()).into();
         theme.colors.list = rgb(self.panel).into();
-        theme.list_hover = rgb(self.selected).into();
-        theme.list_active = rgb(self.selected).into();
+        theme.list_hover = rgb(self.row_hover()).into();
+        theme.list_active = rgb(self.row_selected()).into();
         theme.list_active_border = rgb(self.border).into();
         theme.list_head = rgb(self.panel).into();
         theme.tab_bar = rgb(self.panel).into();
         theme.tab_bar_segmented = rgb(self.panel).into();
         theme.tab = rgb(self.panel).into();
-        theme.tab_active = rgb(self.selected).into();
+        theme.tab_active = rgb(self.row_selected()).into();
         theme.tab_active_foreground = rgb(self.text).into();
         theme.table = rgb(self.panel).into();
-        theme.table_hover = rgb(self.selected).into();
-        theme.table_active = rgb(self.selected).into();
+        theme.table_hover = rgb(self.row_hover()).into();
+        theme.table_active = rgb(self.row_selected()).into();
         theme.table_head = rgb(self.panel).into();
         theme.table_foot = rgb(self.panel).into();
         theme.primary = rgb(self.accent).into();
@@ -180,7 +190,9 @@ impl Palette {
         theme.scrollbar = rgb(self.panel).into();
         theme.scrollbar_thumb = rgb(self.border).into();
         theme.scrollbar_thumb_hover = rgb(self.muted).into();
-        theme.ring = rgb(self.accent).into();
+        // The ring renderer replaces alpha, so a transparent color cannot hide it.
+        theme.focus_ring = false;
+        theme.ring = theme.input;
         theme.caret = rgb(self.accent).into();
         theme.tokens = (&theme.colors).into();
     }
@@ -197,29 +209,31 @@ impl Palette {
         if mode == ThemeMode::Light {
             Self {
                 background: 0xffffff,
-                panel: 0xf5f6f8,
-                border: 0xe6e8ed,
-                text: 0x303846,
-                muted: 0x788190,
-                accent: 0x5274ba,
-                selected: 0xe9edf4,
+                panel: 0xffffff,
+                border: 0xe5e5e5,
+                text: 0x000000,
+                muted: 0x666666,
+                accent: 0x007acc,
+                selected: 0xe5e5e5,
+                hover: 0xececec,
                 terminal: 0xffffff,
-                selection: 0xcbdffc,
-                error: 0xb42336,
+                selection: 0xadd6ff,
+                error: 0xee0000,
                 ansi: DEFAULT_ANSI,
             }
         } else {
             Self {
-                background: 0x101622,
-                panel: 0x161d29,
-                border: 0x293342,
-                text: 0xdbe4f0,
-                muted: 0x8996aa,
-                accent: 0x70a7f7,
-                selected: 0x28364b,
-                terminal: 0x101622,
-                selection: 0x29476a,
-                error: 0xfca5a5,
+                background: 0x1e1e1e,
+                panel: 0x1e1e1e,
+                border: 0x3e3e42,
+                text: 0xd4d4d4,
+                muted: 0x858585,
+                accent: 0x007acc,
+                selected: 0x151515,
+                hover: 0x2d2d2d,
+                terminal: 0x1e1e1e,
+                selection: 0x264f78,
+                error: 0xf44747,
                 ansi: DEFAULT_ANSI,
             }
         }
@@ -238,13 +252,14 @@ mod tests {
             terminal.text = 0xe8edf0;
             terminal.accent = 0x339cff;
             terminal.selection = 0x345678;
-            let palette = Palette::for_terminal(terminal, "custom-1");
+            let palette = Palette::for_terminal(terminal);
             assert_eq!(palette.background, terminal.terminal);
             assert_eq!(palette.text, terminal.text);
             assert_eq!(palette.accent, terminal.accent);
             assert_eq!(palette.panel, mix(terminal.terminal, terminal.text, 18));
             assert_eq!(palette.border, mix(terminal.terminal, terminal.text, 38));
-            assert_eq!(palette.selected, mix(palette.panel, terminal.accent, 45));
+            assert_eq!(palette.hover, mix(palette.panel, palette.text, 20));
+            assert_eq!(palette.selected, palette.row_selected());
             assert_eq!(palette.terminal_theme(), terminal.terminal_theme());
             assert_eq!(palette.selection, terminal.selection);
         }
@@ -262,19 +277,54 @@ mod tests {
     fn named_interface_palettes_keep_their_semantic_colors() {
         let themes = crate::terminal_theme::ThemeFile::default();
         for (id, panel, error) in [
-            ("vscode-light", 0xf8f8f8, 0xf85149),
-            ("vscode-dark", 0x181818, 0xf85149),
+            ("vscode-light", 0xffffff, 0xee0000),
+            ("vscode-dark", 0x1e1e1e, 0xf44747),
         ] {
-            let terminal = themes.selected(id).unwrap().palette();
-            let ui = Palette::for_terminal(terminal, id);
+            let ui = themes.selected(id).unwrap().ui_palette();
             assert_eq!(ui.panel, panel);
             assert_eq!(ui.error, error);
-            assert_eq!(ui.background, terminal.terminal);
-            assert_eq!(ui.terminal_theme(), terminal.terminal_theme());
+            assert_eq!(ui.background, ui.terminal);
+            assert_eq!(ui.panel, ui.background);
+            assert_eq!(ui.terminal_theme(), themes.selected(id).unwrap().colors());
         }
-        for (id, error) in [("codex-light", 0xba2623), ("codex-dark", 0xfa423e)] {
-            let terminal = themes.selected(id).unwrap().palette();
-            assert_eq!(Palette::for_terminal(terminal, id).error, error);
+    }
+
+    #[test]
+    fn row_hover_contrasts_with_the_panel_in_both_modes() {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            let palette = Palette::new(mode);
+            assert_ne!(palette.row_hover(), palette.panel);
+            if mode == ThemeMode::Light {
+                assert!(palette.row_hover() < palette.panel);
+            } else {
+                assert!(palette.row_hover() > palette.panel);
+            }
+        }
+    }
+
+    #[test]
+    fn row_selected_is_deeper_than_the_panel_in_both_modes() {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            let palette = Palette::new(mode);
+            assert!(palette.row_selected() < palette.panel);
+            assert!(palette.row_selected() < palette.row_hover());
+        }
+    }
+
+    #[test]
+    fn focused_controls_keep_regular_border_without_outer_ring() {
+        let schemes = crate::terminal_theme::ThemeFile::default();
+        let mut theme = gpui_kit::component::Theme::default();
+        for palette in [ThemeMode::Light, ThemeMode::Dark]
+            .into_iter()
+            .map(Palette::new)
+            .chain(schemes.themes.iter().map(|scheme| scheme.ui_palette()))
+        {
+            theme.focus_ring = true;
+            palette.apply_ui(&mut theme);
+            assert!(!theme.focus_ring);
+            assert_eq!(theme.ring, theme.input);
+            assert_eq!(theme.input, gpui_kit::rgb(palette.border).into());
         }
     }
 
@@ -284,7 +334,7 @@ mod tests {
         let schemes = crate::terminal_theme::ThemeFile::default();
         for scheme in &schemes.themes {
             let id = scheme.id.as_str();
-            let palette = Palette::for_terminal(schemes.selected(id).unwrap().palette(), id);
+            let palette = scheme.ui_palette();
             let light = palette.terminal_theme().light();
             theme.mode = if light {
                 ThemeMode::Light

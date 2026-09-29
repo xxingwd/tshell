@@ -283,7 +283,9 @@ impl AppView {
                     let destination = source
                         .file_name()
                         .and_then(|name| name.to_str())
-                        .ok_or_else(|| anyhow::anyhow!("Invalid directory name"))
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("{}", crate::t!("explorer.invalid_directory_name"))
+                        })
                         .and_then(|name| file_ops::child(&parent, name, false));
                     match destination {
                         Ok(destination) => {
@@ -422,9 +424,9 @@ impl AppView {
                         remote_files::upload(&remote, paths, &target)
                     } else {
                         for source in paths {
-                            let name = source
-                                .file_name()
-                                .ok_or_else(|| anyhow::anyhow!("Source has no file name"))?;
+                            let name = source.file_name().ok_or_else(|| {
+                                anyhow::anyhow!("{}", crate::t!("explorer.source_name_missing"))
+                            })?;
                             let destination = target.join(name);
                             file_ops::execute(
                                 None,
@@ -495,10 +497,10 @@ impl AppView {
         let host = self.active;
         let remote = self.hosts[host].config.is_some();
         let focus_input = input.clone();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let (owner, input, path, key) =
                 (owner.clone(), input.clone(), path.clone(), key.clone());
-            dialog
+            workspace_dialog(dialog, cx)
                 .button_props(
                     gpui_kit::component::dialog::DialogButtonProps::default()
                         .ok_text(crate::t!("explorer.confirm"))
@@ -621,6 +623,8 @@ impl AppView {
                                 path: app.open_file.clone(),
                                 text: app.file_editor.read(cx).value().to_string(),
                                 image: app.image_preview.clone(),
+                                preview: app.file_preview.clone(),
+                                preview_mode: app.preview_mode,
                                 saved_text: app.saved_file_text.clone(),
                                 language: app.editor_language.clone(),
                                 dirty: app.editor_dirty,
@@ -676,6 +680,10 @@ fn update_file(state: &mut SessionFileState, operation: &Operation) -> bool {
                 ))
             });
             state.language = workbench::language_for_path(state.path.as_ref().unwrap()).to_owned();
+            state.preview_mode = preview::can_preview(&state.language, &state.text);
+            state.preview = state
+                .preview_mode
+                .then(|| preview::parse(&state.language, &state.text));
             true
         }
         Operation::Delete(from) if path.starts_with(from) && !state.dirty => {

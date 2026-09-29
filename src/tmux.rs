@@ -23,6 +23,16 @@ impl ControlParser {
             bail!("tmux control line exceeds 4 MiB");
         }
         self.pending.extend_from_slice(data);
+        // tmux -CC wraps control output in a DCS 1000 envelope. The payload
+        // remains the same control protocol used by -C after the envelope is
+        // removed. tmux escapes literal ESC bytes in pane output, so these
+        // two raw sequences are safe framing markers here.
+        while let Some(start) = self.pending.windows(7).position(|w| w == b"\x1bP1000p") {
+            self.pending.drain(start..start + 7);
+        }
+        while let Some(end) = self.pending.windows(2).position(|w| w == b"\x1b\\") {
+            self.pending.drain(end..end + 2);
+        }
         let mut events = Vec::new();
         while let Some(end) = self.pending.iter().position(|b| *b == b'\n') {
             let mut line: Vec<_> = self.pending.drain(..=end).collect();
@@ -182,6 +192,18 @@ mod tests {
                 },
                 ControlEvent::Line("%layout-change @1 layout".into()),
             ]
+        );
+    }
+    #[test]
+    fn strips_tmux_cc_dcs_envelope_even_when_fragmented() {
+        let mut parser = ControlParser::default();
+        assert!(parser.push(b"\x1bP100").unwrap().is_empty());
+        assert_eq!(
+            parser.push(b"0p%output %7 hello\\012\n\x1b\\").unwrap(),
+            vec![ControlEvent::Output {
+                pane: "%7".into(),
+                bytes: b"hello\n".to_vec(),
+            }]
         );
     }
     #[test]

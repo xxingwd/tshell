@@ -296,6 +296,7 @@ pub(crate) async fn exec_aux(host: &HostConfig, command: &str) -> Result<SharedC
     confirmed(&mut channel).await?;
     Ok(channel)
 }
+#[cfg(test)]
 pub(crate) async fn exec_dedicated(host: &HostConfig, command: &str) -> Result<SharedChannel> {
     let entry = Arc::new(Entry {
         connection: tokio::sync::Mutex::new(Vec::new()),
@@ -304,6 +305,28 @@ pub(crate) async fn exec_dedicated(host: &HostConfig, command: &str) -> Result<S
         short_slots: Arc::new(tokio::sync::Semaphore::new(1)),
     });
     let mut channel = open_entry(host, entry, false).await?;
+    channel.exec(true, command).await?;
+    confirmed(&mut channel).await?;
+    Ok(channel)
+}
+
+pub(crate) async fn exec_dedicated_pty(
+    host: &HostConfig,
+    command: &str,
+    cols: u32,
+    rows: u32,
+) -> Result<SharedChannel> {
+    let entry = Arc::new(Entry {
+        connection: tokio::sync::Mutex::new(Vec::new()),
+        connecting: tokio::sync::Mutex::new(()),
+        slots: Arc::new(tokio::sync::Semaphore::new(1)),
+        short_slots: Arc::new(tokio::sync::Semaphore::new(1)),
+    });
+    let mut channel = open_entry(host, entry, false).await?;
+    channel
+        .request_pty(true, "xterm-256color", cols, rows, 0, 0, &[])
+        .await?;
+    confirmed(&mut channel).await?;
     channel.exec(true, command).await?;
     confirmed(&mut channel).await?;
     Ok(channel)

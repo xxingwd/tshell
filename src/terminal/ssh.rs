@@ -46,6 +46,7 @@ impl Session {
             }),
         );
         Arc::get_mut(&mut screen).unwrap().ssh_commands = Some(sender);
+        screen.ready.store(false, Ordering::Release);
         let weak = Arc::downgrade(&screen);
         crate::ssh_pool::runtime().spawn(async move {
             let result = async {
@@ -58,11 +59,20 @@ impl Session {
                 } else { channel.request_shell(true).await?; }
                 crate::ssh_pool::confirmed(&mut channel).await?;
                 let mut clipboard = crate::terminal_clipboard::Clipboard::default();
+                let Some(screen) = weak.upgrade() else { return Ok(()); };
+                screen.ready.store(true, Ordering::Release);
+                screen.metadata.notify();
+                drop(screen);
                 loop {
                     tokio::select! {
                         command = receiver.recv() => match command {
                             Ok(Command::Input(data)) => channel.data(data.as_slice()).await?,
-                            Ok(Command::Resize(rows, cols)) => channel.window_change(cols as u32, rows as u32, 0, 0).await?,
+                            Ok(Command::Resize { rows, cols, generation }) => {
+                                channel.window_change(cols as u32, rows as u32, 0, 0).await?;
+                                if let Some(screen) = weak.upgrade() {
+                                    screen.resize_barrier.complete(generation);
+                                }
+                            }
                             Ok(Command::Stop) | Err(_) => break,
                         },
                         message = channel.wait() => match message {
@@ -80,7 +90,11 @@ impl Session {
                 Ok::<_, anyhow::Error>(())
             }.await;
             if let Some(screen) = weak.upgrade() {
-                if let Err(error) = result { *screen.error.lock() = Some(format!("{error:#}")); }
+                if let Err(error) = result {
+                    screen.resize_barrier.fail();
+                    *screen.error.lock() = Some(format!("{error:#}"));
+                }
+                screen.resize_barrier.fail();
                 screen.exited.store(true, Ordering::Release);
                 screen.metadata.notify();
                 screen.updates.notify();

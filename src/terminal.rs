@@ -6,11 +6,11 @@ use crate::terminal_snapshot::{RenderCommand, RenderSnapshot, apply_commands};
 use alacritty_terminal::{
     event::{Event, EventListener},
     grid::Dimensions,
-    term::{Config, Term, TermMode},
+    term::{Config, Term, TermMode, cell::Cell},
     vte::ansi::{CursorShape, CursorStyle},
 };
 use anyhow::{Context, Result};
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 use portable_pty::{ChildKiller, CommandBuilder, PtySize, native_pty_system};
 use std::{
     io::{Read, Write},
@@ -59,8 +59,78 @@ pub fn validate_destination(value: &str) -> Result<String> {
 
 enum Command {
     Input(Vec<u8>),
-    Resize(u16, u16),
+    Resize {
+        rows: u16,
+        cols: u16,
+        generation: u64,
+    },
     Stop,
+}
+
+#[derive(Default)]
+struct ResizeState {
+    requested: u64,
+    completed: u64,
+    failed: bool,
+}
+
+/// Keeps user input behind the latest PTY resize without blocking the UI thread.
+/// The transport acknowledges the resize; the bounded wait is only a failure
+/// fallback for a transport that closes while a resize is pending.
+#[derive(Default)]
+struct ResizeBarrier {
+    state: Mutex<ResizeState>,
+    wake: Condvar,
+}
+
+impl ResizeBarrier {
+    fn enqueue(&self, rows: u16, cols: u16, send: impl FnOnce(Command) -> bool) -> bool {
+        let mut state = self.state.lock();
+        let generation = state.requested.saturating_add(1);
+        if !send(Command::Resize {
+            rows,
+            cols,
+            generation,
+        }) {
+            return false;
+        }
+        state.requested = generation;
+        true
+    }
+
+    fn complete(&self, generation: u64) {
+        let mut state = self.state.lock();
+        state.completed = state.completed.max(generation);
+        self.wake.notify_all();
+    }
+
+    fn fail(&self) {
+        let mut state = self.state.lock();
+        state.failed = true;
+        self.wake.notify_all();
+    }
+
+    fn wait_for_latest(&self) {
+        const RESIZE_ACK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
+        loop {
+            let mut state = self.state.lock();
+            let target = state.requested;
+            while !state.failed && state.completed < target {
+                if self
+                    .wake
+                    .wait_for(&mut state, RESIZE_ACK_TIMEOUT)
+                    .timed_out()
+                {
+                    return;
+                }
+            }
+            let stable = state.failed || state.requested == target;
+            drop(state);
+            if stable {
+                return;
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -159,9 +229,11 @@ pub struct Session {
     pub title: Arc<Mutex<String>>,
     pub revision: Arc<AtomicU64>,
     pub exited: Arc<AtomicBool>,
+    pub(crate) ready: AtomicBool,
     pub bytes_read: Arc<AtomicU64>,
     pub notice_count: Arc<AtomicU64>,
     pub error: Arc<Mutex<Option<String>>>,
+    resize_barrier: Arc<ResizeBarrier>,
     tx: Option<SyncSender<Command>>,
     killer: Option<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
     remote_input: Option<Arc<dyn Fn(Vec<u8>) -> Result<()> + Send + Sync>>,
@@ -219,10 +291,12 @@ impl Session {
         )));
         let updates = OutputWake::default();
         let mode = Arc::new(AtomicU32::new(term.lock().mode().bits()));
+        let resize_barrier = Arc::new(ResizeBarrier::default());
         let read_mode = mode.clone();
         let write_updates = updates.clone();
         let write_error = error.clone();
         let write_metadata = metadata.clone();
+        let write_resize = resize_barrier.clone();
         thread::Builder::new()
             .name("pty-write".into())
             .spawn(move || {
@@ -232,15 +306,28 @@ impl Session {
                             .write_all(&data)
                             .and_then(|_| writer.flush())
                             .map_err(anyhow::Error::from),
-                        Command::Resize(rows, cols) => master.resize(PtySize {
+                        Command::Resize {
                             rows,
                             cols,
-                            pixel_width: 0,
-                            pixel_height: 0,
-                        }),
+                            generation,
+                        } => {
+                            let result = master.resize(PtySize {
+                                rows,
+                                cols,
+                                pixel_width: 0,
+                                pixel_height: 0,
+                            });
+                            if result.is_ok() {
+                                write_resize.complete(generation);
+                            } else {
+                                write_resize.fail();
+                            }
+                            result
+                        }
                         Command::Stop => break,
                     };
                     if let Err(err) = result {
+                        write_resize.fail();
                         *write_error.lock() = Some(err.to_string());
                         write_updates.notify();
                         write_metadata.notify();
@@ -261,6 +348,7 @@ impl Session {
             bytes_read.clone(),
             error.clone(),
         );
+        let read_resize = resize_barrier.clone();
         thread::Builder::new()
             .name("pty-read".into())
             .spawn(move || {
@@ -315,6 +403,7 @@ impl Session {
                         }
                     }
                 }
+                read_resize.fail();
                 read_updates.notify();
                 read_metadata.notify();
             })?;
@@ -340,9 +429,11 @@ impl Session {
             title,
             revision,
             exited,
+            ready: AtomicBool::new(true),
             bytes_read,
             notice_count,
             error,
+            resize_barrier,
             tx: Some(tx),
             killer: Some(killer),
             remote_input: None,
@@ -384,9 +475,11 @@ impl Session {
             title,
             revision,
             exited: Arc::new(AtomicBool::new(false)),
+            ready: AtomicBool::new(true),
             bytes_read: Arc::new(AtomicU64::new(0)),
             notice_count: Arc::new(AtomicU64::new(0)),
             error: Arc::new(Mutex::new(None)),
+            resize_barrier: Arc::new(ResizeBarrier::default()),
             tx: None,
             killer: None,
             remote_input: Some(input),
@@ -428,7 +521,7 @@ impl Session {
         drop(term);
         drop(parser);
         for reply in output.replies {
-            if let Err(error) = self.input(reply) {
+            if let Err(error) = self.send_input(reply) {
                 *self.error.lock() = Some(error.to_string());
             }
         }
@@ -449,6 +542,32 @@ impl Session {
         let mut term = self.term.lock();
         let mut parser: alacritty_terminal::vte::ansi::Processor = Default::default();
         parser.advance(&mut *term, bytes);
+        self.replies.lock().clear();
+        self.mode.store(term.mode().bits(), Ordering::Release);
+        self.revision.fetch_add(1, Ordering::Release);
+        drop(term);
+        self.updates.notify();
+    }
+
+    /// tmux capture carries SGR state across lines. Even with -N, unallocated
+    /// trailing cells are absent; synthetic line feeds must not fill scrolled
+    /// blank rows with the previous line's cell attributes.
+    pub fn remote_restore_capture(&self, lines: &[Vec<u8>], alternate: bool) {
+        let mut term = self.term.lock();
+        let mut parser: alacritty_terminal::vte::ansi::Processor = Default::default();
+        parser.advance(&mut *term, b"\x1bc");
+        if alternate {
+            parser.advance(&mut *term, b"\x1b[?1049h");
+        }
+        for (index, line) in lines.iter().enumerate() {
+            if index > 0 {
+                let template =
+                    std::mem::replace(&mut term.grid_mut().cursor.template, Cell::default());
+                parser.advance(&mut *term, b"\r\n");
+                term.grid_mut().cursor.template = template;
+            }
+            parser.advance(&mut *term, line);
+        }
         self.replies.lock().clear();
         self.mode.store(term.mode().bits(), Ordering::Release);
         self.revision.fetch_add(1, Ordering::Release);
@@ -519,7 +638,8 @@ impl Session {
             notify
         };
         if notify {
-            if let Err(error) = self.input(theme.report()) {
+            // Resize and protocol reports share the transport queue; theme changes run on the UI thread.
+            if let Err(error) = self.send_input(theme.report()) {
                 *self.error.lock() = Some(error.to_string());
                 self.updates.notify();
             }
@@ -532,6 +652,11 @@ impl Session {
             "{}",
             crate::t!("term.paste_too_large")
         );
+        self.resize_barrier.wait_for_latest();
+        self.send_input(data)
+    }
+
+    fn send_input(&self, data: Vec<u8>) -> Result<()> {
         if let Some(input) = &self.remote_input {
             return input(data);
         }
@@ -548,12 +673,15 @@ impl Session {
             let term = self.term.lock();
             let changed = term.screen_lines() != rows || term.columns() != cols;
             drop(term);
-            if changed
-                && sender
-                    .try_send(Command::Resize(rows as u16, cols as u16))
-                    .is_ok()
-            {
-                self.remote_resize(rows, cols);
+            if changed {
+                if self
+                    .resize_barrier
+                    .enqueue(rows as u16, cols as u16, |command| {
+                        sender.try_send(command).is_ok()
+                    })
+                {
+                    self.remote_resize(rows, cols);
+                }
             }
             return;
         }
@@ -563,10 +691,15 @@ impl Session {
         let (rows, cols) = (rows.clamp(2, 500), cols.clamp(2, 1000));
         let mut term = self.term.lock();
         if term.screen_lines() != rows || term.columns() != cols {
-            if self.tx.as_ref().is_some_and(|tx| {
-                tx.try_send(Command::Resize(rows as u16, cols as u16))
-                    .is_ok()
-            }) {
+            let Some(tx) = self.tx.as_ref() else {
+                return;
+            };
+            if self
+                .resize_barrier
+                .enqueue(rows as u16, cols as u16, |command| {
+                    tx.try_send(command).is_ok()
+                })
+            {
                 term.resize(Size { rows, cols });
                 self.revision.fetch_add(1, Ordering::Release);
                 self.updates.notify();
@@ -658,6 +791,7 @@ print('THEME'+'-RESULT:'+data.hex(),flush=True)
 
 #[cfg(test)]
 mod tests {
+    use alacritty_terminal::vte::ansi::{Color, NamedColor};
     #[test]
     fn interactions_do_not_wait_for_snapshot_serialization() {
         let sent = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
@@ -680,6 +814,86 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn resize_barrier_tracks_latest_generation_and_failure() {
+        let barrier = ResizeBarrier::default();
+        let (sender, _receiver) = async_channel::bounded(2);
+        assert!(barrier.enqueue(24, 80, |command| sender.try_send(command).is_ok()));
+        let first = barrier.state.lock().requested;
+        assert!(barrier.enqueue(25, 80, |command| sender.try_send(command).is_ok()));
+        let latest = barrier.state.lock().requested;
+        assert_eq!(first + 1, latest);
+
+        barrier.complete(first);
+        {
+            let state = barrier.state.lock();
+            assert_eq!(state.requested, latest);
+            assert_eq!(state.completed, first);
+            assert!(!state.failed);
+        }
+
+        barrier.fail();
+        barrier.wait_for_latest();
+        assert!(barrier.state.lock().failed);
+    }
+
+    #[test]
+    fn full_resize_queue_does_not_disable_later_barriers() {
+        let barrier = Arc::new(ResizeBarrier::default());
+        let (sender, receiver) = async_channel::bounded(1);
+        assert!(barrier.enqueue(24, 80, |command| sender.try_send(command).is_ok()));
+        assert!(!barrier.enqueue(25, 80, |command| sender.try_send(command).is_ok()));
+        assert_eq!(barrier.state.lock().requested, 1);
+        receiver.try_recv().unwrap();
+        barrier.complete(1);
+        assert!(barrier.enqueue(26, 80, |command| sender.try_send(command).is_ok()));
+
+        let (done, finished) = std::sync::mpsc::sync_channel(1);
+        let waiting = barrier.clone();
+        let worker = std::thread::spawn(move || {
+            waiting.wait_for_latest();
+            done.send(()).unwrap();
+        });
+        assert!(
+            finished
+                .recv_timeout(std::time::Duration::from_millis(20))
+                .is_err()
+        );
+        barrier.complete(2);
+        finished
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn theme_report_does_not_wait_for_pending_resize() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let output = sent.clone();
+        let session = Session::remote(
+            "%theme-resize".into(),
+            24,
+            80,
+            Arc::new(move |data| {
+                output.lock().push(data);
+                Ok(())
+            }),
+        );
+        let previous = session.protocol.lock().theme;
+        session.protocol.lock().subscribed = true;
+        assert!(session.resize_barrier.enqueue(25, 80, |_| true));
+
+        let theme = TerminalTheme {
+            background: if previous.light() { 0x101010 } else { 0xf0f0f0 },
+            ..previous
+        };
+        let started = std::time::Instant::now();
+        session.set_theme(theme);
+        assert!(started.elapsed() < std::time::Duration::from_millis(100));
+        assert_eq!(*sent.lock(), vec![theme.report()]);
+    }
+
     #[test]
     fn osc_zero_and_two_update_the_terminal_title() {
         let session = Session::remote("%title".into(), 24, 80, Arc::new(|_| Ok(())));
@@ -687,6 +901,47 @@ mod tests {
         assert_eq!(&*session.title.lock(), "Build logs");
         session.remote_restore(b"\x1b]0;Project API\x1b\\");
         assert_eq!(&*session.title.lock(), "Project API");
+    }
+
+    #[test]
+    fn tmux_capture_scroll_keeps_empty_rows_default_without_losing_sgr() {
+        use alacritty_terminal::{
+            index::{Column, Line},
+            term::cell::Flags,
+        };
+
+        let session = Session::remote("%capture".into(), 3, 8, Arc::new(|_| Ok(())));
+        session.remote_resize(4, 8);
+        session.remote_restore_capture(
+            &[
+                b"\x1b[31;7;46mX".to_vec(),
+                Vec::new(),
+                b"\x1b[46mA  ".to_vec(),
+                b"B".to_vec(),
+                b"\x1b[49mC".to_vec(),
+            ],
+            true,
+        );
+
+        let term = session.term.lock();
+        assert!(term.mode().contains(TermMode::ALT_SCREEN));
+        let grid = term.grid();
+        let default = Color::Named(NamedColor::Background);
+        let cyan = Color::Named(NamedColor::Cyan);
+        assert!((0..8).all(|col| grid[Line(0)][Column(col)].bg == default));
+        assert_eq!(
+            grid[Line(0)][Column(0)].fg,
+            Color::Named(NamedColor::Foreground)
+        );
+        assert!(!grid[Line(0)][Column(0)].flags.contains(Flags::INVERSE));
+        assert_eq!(grid[Line(1)][Column(0)].c, 'A');
+        assert_eq!(grid[Line(1)][Column(1)].bg, cyan);
+        assert_eq!(grid[Line(1)][Column(2)].bg, cyan);
+        assert_eq!(grid[Line(1)][Column(3)].bg, default);
+        assert_eq!(grid[Line(2)][Column(0)].c, 'B');
+        assert_eq!(grid[Line(2)][Column(0)].bg, cyan);
+        assert_eq!(grid[Line(3)][Column(0)].c, 'C');
+        assert_eq!(grid[Line(3)][Column(0)].bg, default);
     }
 
     #[test]

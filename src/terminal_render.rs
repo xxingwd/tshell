@@ -16,7 +16,6 @@ pub(crate) struct TextRunPlan {
     pub columns: usize,
     pub text: String,
     pub fg: u32,
-    pub underline_color: u32,
     pub flags: Flags,
     // Only printable ASCII without combining marks is shaped across cell boundaries.
     pub ascii: bool,
@@ -168,7 +167,6 @@ pub(crate) fn build_row(cells: &[Cell], palette: Palette, colors: &Colors) -> Ro
             && last.col + last.columns == col
             && last.fg == fg
             && last.flags == flags
-            && last.underline_color == underline_color
         {
             last.text.push(cell.c);
             last.columns += 1;
@@ -182,7 +180,6 @@ pub(crate) fn build_row(cells: &[Cell], palette: Palette, colors: &Colors) -> Ro
                 columns,
                 text,
                 fg,
-                underline_color,
                 flags,
                 ascii,
             });
@@ -442,7 +439,7 @@ mod tests {
             assert!(run('H').flags.contains(Flags::BOLD));
             assert_eq!(plan.glyphs[0].color, run('B').fg);
             assert!(plan.glyphs[0].faint);
-            assert_eq!(run('U').underline_color, 0x204060);
+            assert_eq!(plan.decorations[0].color, 0x204060);
             assert!(!plan.decorations[0].faint); // Explicit SGR 58 colour stays opaque in xterm.
             if mode == ThemeMode::Light {
                 assert_eq!(dim(run('B').fg, p.terminal), 0x9399a2);

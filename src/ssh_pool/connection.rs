@@ -140,10 +140,10 @@ impl client::Handler for Handler {
             .filter(|path| path.is_file())
             .collect();
         for file in &files {
-            // Reject marker entries we cannot faithfully validate (revocations / host CAs).
+            // russh ignores marker records; reject only those that could apply here.
             let contents = std::fs::read_to_string(file)?;
             ensure!(
-                !contents.lines().any(|line| line.starts_with('@')),
+                !has_relevant_marker(&contents, host, port),
                 "{}",
                 crate::t!("ssh.known_hosts_markers")
             );
@@ -182,6 +182,57 @@ impl client::Handler for Handler {
             _ => bail!("{}", crate::t!("ssh.unknown_host_key")),
         }
     }
+}
+
+fn has_relevant_marker(contents: &str, host: &str, port: u16) -> bool {
+    let targets = if port == 22 {
+        vec![host.to_owned(), format!("[{host}]:{port}")]
+    } else {
+        vec![format!("[{host}]:{port}")]
+    };
+    contents.lines().any(|line| {
+        let Some(patterns) = line
+            .strip_prefix('@')
+            .and_then(|line| line.split_whitespace().nth(1))
+        else {
+            return line.starts_with('@');
+        };
+        patterns.split(',').any(|pattern| {
+            pattern.starts_with("|1|")
+                || targets
+                    .iter()
+                    .any(|target| marker_pattern_matches(pattern.as_bytes(), target.as_bytes()))
+        })
+    })
+}
+
+fn marker_pattern_matches(pattern: &[u8], target: &[u8]) -> bool {
+    let (mut pattern_index, mut target_index) = (0, 0);
+    let (mut star, mut retry) = (None, 0);
+    while target_index < target.len() {
+        if pattern.get(pattern_index) == Some(&b'?')
+            || pattern
+                .get(pattern_index)
+                .zip(target.get(target_index))
+                .is_some_and(|(pattern, target)| {
+                    pattern.to_ascii_lowercase() == target.to_ascii_lowercase()
+                })
+        {
+            pattern_index += 1;
+            target_index += 1;
+        } else if pattern.get(pattern_index) == Some(&b'*') {
+            star = Some(pattern_index);
+            pattern_index += 1;
+            retry = target_index;
+        } else if let Some(star_index) = star {
+            retry += 1;
+            target_index = retry;
+            pattern_index = star_index + 1;
+        } else {
+            return false;
+        }
+    }
+    pattern[pattern_index..].iter().all(|byte| *byte == b'*')
 }
 
 pub(super) struct Connection {
@@ -579,6 +630,40 @@ mod tests {
             profile.known_hosts_files(),
             vec![PathBuf::from("first"), PathBuf::from("second")]
         );
+    }
+
+    #[test]
+    fn unrelated_known_hosts_markers_do_not_block_a_host() {
+        assert!(!has_relevant_marker(
+            "@cert-authority other.test ssh-ed25519 AAAA\n",
+            "target.test",
+            22
+        ));
+        assert!(has_relevant_marker(
+            "@revoked target.test ssh-ed25519 AAAA\n",
+            "target.test",
+            22
+        ));
+        assert!(has_relevant_marker(
+            "@cert-authority *.test ssh-ed25519 AAAA\n",
+            "target.test",
+            22
+        ));
+        assert!(has_relevant_marker(
+            "@revoked TARGET.TEST ssh-ed25519 AAAA\n",
+            "target.test",
+            22
+        ));
+        assert!(has_relevant_marker(
+            "@revoked [target.test]:22 ssh-ed25519 AAAA\n",
+            "target.test",
+            22
+        ));
+        assert!(!has_relevant_marker(
+            "@cert-authority *.other.test ssh-ed25519 AAAA\n",
+            "target.test",
+            22
+        ));
     }
     #[test]
     fn proxy_arguments_keep_spaces_and_percent_literal() {

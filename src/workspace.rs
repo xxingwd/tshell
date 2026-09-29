@@ -1,8 +1,8 @@
 use crate::{
     appearance::{Appearance, Palette},
     backend::{
-        Action, Backend, LocalBackend, PANE_GAP, PANE_PADDING, PaneBounds, PixelViewport, Snapshot,
-        SplitAxis,
+        Action, Backend, Connection, LocalBackend, PANE_GAP, PANE_PADDING, PaneBounds,
+        PixelViewport, Snapshot, SplitAxis,
     },
     shortcuts::{self, Shortcut},
     terminal::validate_destination,
@@ -18,7 +18,6 @@ use gpui_kit::component::{
     checkbox::Checkbox,
     command::{Command, CommandGroup, CommandItem, CommandState},
     form::{Field, Form},
-    group_box::GroupBox,
     input::{EditorState, Input, InputEvent, InputState},
     kbd::Kbd,
     list::ListItem,
@@ -52,6 +51,7 @@ mod metrics_config;
 mod metrics_transport;
 #[cfg(test)]
 mod preferences_tests;
+mod preview;
 mod remote_files;
 mod sessions;
 mod ssh_auth;
@@ -199,7 +199,7 @@ fn theme_slots(themes: &ThemeFile, prefs: &Preferences) -> (String, String) {
             .or_else(|| {
                 themes
                     .selected(if light {
-                        "tide-light"
+                        "vscode-light"
                     } else {
                         terminal_theme::DEFAULT_THEME_ID
                     })
@@ -245,6 +245,104 @@ struct Host {
     collapsed_sessions: BTreeSet<String>,
     viewport: Option<(String, PixelViewport)>,
 }
+impl Host {
+    fn connection(&self) -> Connection {
+        if self.backend.is_some() {
+            self.snapshot.connection
+        } else {
+            Connection::Closed
+        }
+    }
+
+    fn can_disconnect(&self) -> bool {
+        self.config.is_some() && self.backend.is_some()
+    }
+
+    fn disconnect(&mut self) -> bool {
+        if !self.can_disconnect() {
+            return false;
+        }
+        self.pending.clear();
+        self.views.clear();
+        self.read_notices.clear();
+        self.collapsed_sessions.clear();
+        self.viewport = None;
+        self.backend = None;
+        self.snapshot = Snapshot {
+            connection: Connection::Closed,
+            ..Default::default()
+        };
+        true
+    }
+}
+
+#[cfg(test)]
+mod host_tests {
+    use super::{Action, Backend, Connection, Host, HostConfig, LocalBackend, Snapshot};
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn host(config: Option<HostConfig>) -> Host {
+        Host {
+            pending: vec![Action::NewSession],
+            name: "Test host".into(),
+            config,
+            backend: Some(Backend::Local(
+                LocalBackend::restore(std::env::temp_dir(), None, Some(Vec::new())).unwrap(),
+            )),
+            snapshot: Snapshot {
+                connection: Connection::Ready,
+                ..Default::default()
+            },
+            views: BTreeMap::new(),
+            read_notices: BTreeMap::from([("pane".into(), 1)]),
+            collapsed_sessions: BTreeSet::from(["session".into()]),
+            viewport: None,
+        }
+    }
+
+    #[test]
+    fn disconnect_preserves_remote_configuration_and_clears_live_state() {
+        let config = HostConfig {
+            name: "Test host".into(),
+            destination: "example.invalid".into(),
+            user: "test".into(),
+            port: None,
+            identity_file: None,
+            tmux: true,
+            socket: None,
+        };
+        let mut host = host(Some(config.clone()));
+        assert_eq!(host.connection(), Connection::Ready);
+        assert!(host.disconnect());
+        assert_eq!(host.config, Some(config));
+        assert!(host.backend.is_none());
+        assert_eq!(host.connection(), Connection::Closed);
+        assert!(host.snapshot.sessions.is_empty());
+        assert!(host.pending.is_empty());
+        assert!(host.read_notices.is_empty());
+        assert!(host.collapsed_sessions.is_empty());
+        assert!(!host.can_disconnect());
+        assert!(!host.disconnect());
+    }
+
+    #[test]
+    fn local_host_cannot_be_disconnected() {
+        let mut host = host(None);
+        assert!(!host.can_disconnect());
+        assert!(!host.disconnect());
+        assert!(host.backend.is_some());
+        assert_eq!(host.connection(), Connection::Ready);
+        assert_eq!(host.pending.len(), 1);
+    }
+
+    #[test]
+    fn host_without_a_backend_is_not_connecting_or_connected() {
+        let mut host = host(None);
+        host.backend = None;
+        host.snapshot = Snapshot::default();
+        assert_eq!(host.connection(), Connection::Closed);
+    }
+}
 struct ResizeDrag {
     id: String,
     axis: SplitAxis,
@@ -257,6 +355,8 @@ struct SessionFileState {
     path: Option<PathBuf>,
     text: String,
     image: Option<std::sync::Arc<Image>>,
+    preview: Option<preview::Document>,
+    preview_mode: bool,
     dirty: bool,
     language: String,
     saved_text: String,
@@ -282,6 +382,16 @@ enum ModalKind {
     NewTab,
     Commands,
     ThemeEditor,
+}
+
+fn workspace_dialog(
+    dialog: gpui_kit::component::dialog::Dialog,
+    cx: &App,
+) -> gpui_kit::component::dialog::Dialog {
+    dialog
+        .bg(cx.theme().popover)
+        .border_color(cx.theme().border)
+        .text_color(cx.theme().popover_foreground)
 }
 
 fn command_icon(action: Shortcut) -> IconName {
@@ -393,6 +503,12 @@ pub struct AppView {
     pending_file_state: Option<SessionFileState>,
     open_file: Option<PathBuf>,
     image_preview: Option<std::sync::Arc<Image>>,
+    file_preview: Option<preview::Document>,
+    #[cfg(windows)]
+    web_preview: Option<preview::WebPreview>,
+    #[cfg(windows)]
+    web_preview_failed: bool,
+    preview_mode: bool,
     editor_dirty: bool,
     editor_language: String,
     saved_file_text: String,
@@ -499,8 +615,8 @@ fn active_dividers(
     .collect()
 }
 
-fn grid_inset(extent: f32, cells: usize, cell_size: f32, minimum: f32) -> f32 {
-    ((extent - cells as f32 * cell_size) / 2.).max(minimum)
+fn leading_inset(extent: f32, cells: usize, cell_size: f32, minimum: f32) -> f32 {
+    (extent - cells as f32 * cell_size).max(0.).min(minimum)
 }
 
 fn chrome_line_height(window: &Window, size: f32) -> Pixels {
@@ -578,11 +694,11 @@ impl AppView {
             prefs.appearance,
             window.appearance(),
         );
-        let terminal_palette = themes
+        let selected_theme = themes
             .selected(&active_theme)
-            .expect("selected theme must exist")
-            .palette();
-        let palette = Palette::for_terminal(terminal_palette, &active_theme);
+            .expect("selected theme must exist");
+        let terminal_palette = selected_theme.palette();
+        let palette = selected_theme.ui_palette();
         crate::terminal_protocol::set_default_theme(terminal_palette.terminal_theme());
         let fonts = window.text_system().all_font_names();
         let font_family = if fonts.contains(&prefs.font_family) {
@@ -777,6 +893,12 @@ impl AppView {
             pending_file_state: None,
             open_file: None,
             image_preview: None,
+            file_preview: None,
+            #[cfg(windows)]
+            web_preview: None,
+            #[cfg(windows)]
+            web_preview_failed: false,
+            preview_mode: false,
             editor_dirty: false,
             editor_language: "plaintext".into(),
             saved_file_text: String::new(),
@@ -838,6 +960,13 @@ impl AppView {
         cx.subscribe_in(&this.file_editor, window, |this, _, event, _, cx| {
             if matches!(event, InputEvent::Change) && this.open_file.is_some() {
                 this.editor_dirty = true;
+                if this.preview_mode {
+                    let text = this.file_editor.read(cx).value().to_string();
+                    this.preview_mode = preview::can_preview(&this.editor_language, &text);
+                    this.file_preview = this
+                        .preview_mode
+                        .then(|| preview::parse(&this.editor_language, &text));
+                }
                 cx.notify();
             }
         })
@@ -909,18 +1038,13 @@ impl AppView {
             self.appearance,
             window.appearance(),
         );
-        self.terminal_palette = self
+        let selected_theme = self
             .themes
             .selected(&active_theme)
-            .map(ThemeDefinition::palette)
-            .unwrap_or_else(|| {
-                self.themes
-                    .selected(self.themes.fallback_id())
-                    .unwrap()
-                    .palette()
-            });
+            .unwrap_or_else(|| self.themes.selected(self.themes.fallback_id()).unwrap());
+        self.terminal_palette = selected_theme.palette();
         let terminal_theme = self.terminal_palette.terminal_theme();
-        self.palette = Palette::for_terminal(self.terminal_palette, &active_theme);
+        self.palette = selected_theme.ui_palette();
         crate::terminal_protocol::set_default_theme(terminal_theme);
         let mode = if terminal_theme.light() {
             ThemeMode::Light
@@ -1104,6 +1228,8 @@ impl AppView {
                         path: self.open_file.clone(),
                         text: self.file_editor.read(cx).value().to_string(),
                         image: self.image_preview.clone(),
+                        preview: self.file_preview.clone(),
+                        preview_mode: self.preview_mode,
                         dirty: self.editor_dirty,
                         language: self.editor_language.clone(),
                         saved_text: self.saved_file_text.clone(),
@@ -1124,6 +1250,8 @@ impl AppView {
             self.active_file_session = file_key;
             self.open_file = None;
             self.editor_dirty = false;
+            self.file_preview = None;
+            self.preview_mode = false;
         }
         let root = self
             .active_file_session
@@ -1185,6 +1313,9 @@ impl AppView {
                         return None;
                     }
                     let host = &this.hosts[this.active];
+                    if host.backend.is_none() || !host.snapshot.connected() {
+                        return None;
+                    }
                     host.config.clone().map(|config| {
                         let tmux = host.backend.as_ref().and_then(|backend| match backend {
                             Backend::Tmux(client) => Some(client.clone()),
@@ -1255,6 +1386,11 @@ impl AppView {
     }
 
     fn act(&mut self, action: Action, cx: &mut Context<Self>) {
+        if self.closes_session_with_unsaved_files(&action) {
+            self.message = Some(crate::t!("ws.session_files_busy").to_string());
+            cx.notify();
+            return;
+        }
         self.message = None;
         if let Some(b) = &mut self.hosts[self.active].backend {
             if let Err(e) = b.apply(action) {
@@ -1314,6 +1450,29 @@ impl AppView {
             }
         }
         self.switch_host(self.active, cx);
+    }
+    fn disconnect_host(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self
+            .hosts
+            .get(index)
+            .is_none_or(|host| host.config.is_none() || host.backend.is_none())
+        {
+            return;
+        }
+        let Some(host) = self.hosts.get_mut(index) else {
+            return;
+        };
+        if !host.disconnect() {
+            return;
+        }
+        if index == self.active {
+            self.message = None;
+            self.drag = None;
+            self.latency_task = None;
+            self.connection_latency = ConnectionLatency::default();
+        }
+        self.sync(cx);
+        cx.notify();
     }
     fn add_host(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let name = self.label.read(cx).value().trim().to_owned();
@@ -1393,13 +1552,16 @@ impl AppView {
 
             socket: None,
         };
-        if let Some(index) = self.editing_host.take() {
+        if let Some(index) = self.editing_host {
             let old = self.hosts[index].config.as_ref().unwrap();
             let changed = old.destination != config.destination
                 || old.user != config.user
                 || old.port != config.port
                 || old.identity_file != config.identity_file
                 || old.tmux != config.tmux;
+            if changed && !self.prepare_host_connection_change(index, cx) {
+                return;
+            }
             self.hosts[index].name = config.name.clone();
             self.hosts[index].config = Some(config.clone());
             if changed {
@@ -1515,18 +1677,8 @@ impl AppView {
             };
             let height = height.min((f32::from(window.viewport_size().height) - 180.).max(180.));
             let owner = owner.clone();
-            dialog
-                .bg(cx.theme().popover)
-                .border_color(cx.theme().border)
-                .text_color(cx.theme().popover_foreground)
-                .when(
-                    !matches!(kind, ModalKind::NewTab | ModalKind::Host),
-                    |dialog| dialog.title(title.clone()),
-                )
-                .when(
-                    matches!(kind, ModalKind::NewTab | ModalKind::Host),
-                    |dialog| dialog.close_button(false).overlay(false),
-                )
+            workspace_dialog(dialog, cx)
+                .title(title.clone())
                 .width(px(match kind {
                     ModalKind::Settings => 1120.,
                     ModalKind::Host => 560.,
@@ -1544,9 +1696,14 @@ impl AppView {
                         (window.viewport_size().height - px(height + 80.)) / 2.
                     },
                 )
-                .on_close(move |_, _, cx| {
+                .on_close(move |_, window, cx| {
                     let _ = owner.update(cx, |app, cx| match kind {
-                        ModalKind::Host => app.host_editor_closed(cx),
+                        ModalKind::Host => {
+                            app.host_editor_closed(cx);
+                            if app.settings {
+                                window.focus(&app.settings_ui.focus, cx);
+                            }
+                        }
                         _ => app.modal_closed(cx),
                     });
                 })
@@ -2201,13 +2358,110 @@ impl AppView {
             cx.notify();
         }
     }
+    fn host_files_busy(&self, index: usize) -> bool {
+        self.file_saving
+            || self.file_operation
+            || self
+                .file_states
+                .iter()
+                .any(|((host, _), state)| *host == index && state.dirty)
+            || (self.active == index
+                && (self.editor_dirty
+                    || self
+                        .pending_file_state
+                        .as_ref()
+                        .is_some_and(|state| state.dirty)))
+    }
+
+    fn session_files_busy(&self, session_id: &str) -> bool {
+        self.file_saving
+            || self.file_operation
+            || self
+                .file_states
+                .iter()
+                .any(|((host, id), state)| *host == self.active && id == session_id && state.dirty)
+            || (self
+                .active_file_session
+                .as_ref()
+                .is_some_and(|(host, id)| *host == self.active && id == session_id)
+                && (self.editor_dirty
+                    || self
+                        .pending_file_state
+                        .as_ref()
+                        .is_some_and(|state| state.dirty)))
+    }
+
+    fn closes_session_with_unsaved_files(&self, action: &Action) -> bool {
+        let snapshot = &self.hosts[self.active].snapshot;
+        let session_id = match action {
+            Action::RemoveSession(id) => Some(id.as_str()),
+            Action::CloseWindow => snapshot
+                .session()
+                .filter(|session| session.windows.len() == 1)
+                .map(|session| session.id.as_str()),
+            Action::ClosePane => snapshot
+                .session()
+                .filter(|session| session.windows.len() == 1 && session.windows[0].panes.len() == 1)
+                .map(|session| session.id.as_str()),
+            _ => None,
+        };
+        session_id.is_some_and(|id| self.session_files_busy(id))
+    }
+
+    fn prepare_host_connection_change(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
+        if self.host_files_busy(index) {
+            self.message = Some(crate::t!("ws.host_files_busy").to_string());
+            cx.notify();
+            return false;
+        }
+        self.file_states.retain(|(host, _), _| *host != index);
+        self.tool_roots.retain(|(host, _), _| *host != index);
+        self.tool_modes.retain(|(host, _), _| *host != index);
+        self.sftp_sessions.retain(|(host, _), _| *host != index);
+        if self.active == index {
+            self.file_request += 1;
+            self.tool_request += 1;
+            self.git_request += 1;
+            self.git_diff_request += 1;
+            self.tree_request += 1;
+            self.active_file_session = None;
+            self.pending_file_state = Some(SessionFileState::default());
+            self.open_file = None;
+            self.file_loading = None;
+            self.image_preview = None;
+            self.file_preview = None;
+            self.preview_mode = false;
+            self.editor_dirty = false;
+            self.saved_file_text.clear();
+            self.workspace_mode = WorkspaceMode::Terminal;
+            self.tree_loading.clear();
+            self.tree_loaded.clear();
+            self.git_changes.clear();
+            self.git_diff = None;
+        }
+        true
+    }
+
     fn remove_host(&mut self, index: usize, cx: &mut Context<Self>) {
         if index == 0 || index >= self.hosts.len() {
             return;
         }
+        if self.host_files_busy(index) {
+            self.message = Some(crate::t!("ws.host_files_busy").to_string());
+            cx.notify();
+            return;
+        }
+        let removed_active = self.active == index;
+        let shifted_active = self.active > index;
         self.hosts.remove(index);
-        self.tool_request += 1;
-        self.git_request += 1;
+        if removed_active {
+            self.file_request += 1;
+            self.tool_request += 1;
+            self.git_request += 1;
+            self.git_diff_request += 1;
+            self.tree_request += 1;
+        }
+        self.sftp_sessions.clear();
         self.tool_roots = std::mem::take(&mut self.tool_roots)
             .into_iter()
             .filter_map(|((host, tab), root)| {
@@ -2245,6 +2499,15 @@ impl AppView {
         self.need_focus = true;
         self.save(cx);
         self.sync(cx);
+        if shifted_active
+            && self.workspace_mode != WorkspaceMode::Terminal
+            && self
+                .active_file_session
+                .as_ref()
+                .is_some_and(|key| !self.tool_roots.contains_key(key))
+        {
+            self.open_tools(self.workspace_mode, cx);
+        }
         cx.notify();
     }
     fn measure(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
@@ -2274,6 +2537,8 @@ impl AppView {
                     height: f32::from(bounds.size.height),
                     cell_width: self.cell_width,
                     line_height: self.line_height,
+                    horizontal_padding: PANE_PADDING,
+                    vertical_padding: if self.zen { PANE_PADDING } else { 0. },
                 },
             );
             if h.viewport.as_ref() != Some(&desired) {
@@ -2321,7 +2586,7 @@ impl AppView {
                 .text_color(rgb(self.palette.muted))
                 .child(if h.snapshot.connected() {
                     crate::t!("ws.no_terminal")
-                } else if h.snapshot.message.is_some() {
+                } else if h.connection() == Connection::Closed {
                     crate::t!("ws.disconnected")
                 } else {
                     crate::t!("ws.connecting")
@@ -2354,7 +2619,7 @@ impl AppView {
             _ => None,
         };
         let local_viewport = pixel_layout.as_ref().map(|(_, viewport)| *viewport);
-        let (geometry, surface_width, surface_height, gap_x, gap_y, padding) =
+        let (geometry, surface_width, surface_height, gap_x, gap_y, padding_x, padding_y) =
             if let Some((panes, viewport)) = pixel_layout {
                 (
                     panes,
@@ -2363,6 +2628,7 @@ impl AppView {
                     PANE_GAP,
                     PANE_GAP,
                     PANE_PADDING,
+                    viewport.vertical_padding,
                 )
             } else {
                 (
@@ -2380,6 +2646,7 @@ impl AppView {
                     w.rows as f32 * self.line_height,
                     self.cell_width,
                     self.line_height,
+                    0.,
                     0.,
                 )
             };
@@ -2405,8 +2672,8 @@ impl AppView {
             };
             let (inset_left, inset_top, inset_right, inset_bottom) = content_size
                 .map(|(cols, rows)| {
-                    let left = grid_inset(width, cols, self.cell_width, padding);
-                    let top = grid_inset(height, rows, self.line_height, padding);
+                    let left = leading_inset(width, cols, self.cell_width, padding_x);
+                    let top = leading_inset(height, rows, self.line_height, padding_y);
                     (
                         left,
                         top,
@@ -2414,7 +2681,7 @@ impl AppView {
                         (height - top - rows as f32 * self.line_height).max(0.),
                     )
                 })
-                .unwrap_or((padding, padding, padding, padding));
+                .unwrap_or((padding_x, padding_y, padding_x, padding_y));
             let content = view.map(|v| v.into_any_element()).unwrap_or_else(|| {
                 div()
                     .text_color(rgb(self.palette.muted))
@@ -2527,11 +2794,21 @@ impl AppView {
                 .filter(|(id, _)| id == &w.id)
                 .map(|(_, viewport)| {
                     (
-                        grid_inset(viewport.width, w.cols, self.cell_width, PANE_PADDING),
-                        grid_inset(viewport.height, w.rows, self.line_height, PANE_PADDING),
+                        leading_inset(
+                            viewport.width,
+                            w.cols,
+                            self.cell_width,
+                            viewport.horizontal_padding,
+                        ),
+                        leading_inset(
+                            viewport.height,
+                            w.rows,
+                            self.line_height,
+                            viewport.vertical_padding,
+                        ),
                     )
                 })
-                .unwrap_or((PANE_PADDING, PANE_PADDING))
+                .unwrap_or((0., 0.))
         } else {
             (0., 0.)
         };
@@ -2649,6 +2926,7 @@ impl AppView {
     }
 
     fn host_list(&self, cx: &mut Context<Self>) -> AnyElement {
+        let p = self.palette;
         let menu_item = |label: String| {
             PopupMenuItem::element(move |_, _| {
                 div()
@@ -2656,6 +2934,7 @@ impl AppView {
                     .min_w_0()
                     .truncate()
                     .text_size(px(14.))
+                    .line_height(relative(1.4))
                     .font_weight(FontWeight::MEDIUM)
                     .child(label.clone())
             })
@@ -2665,7 +2944,14 @@ impl AppView {
             .hosts
             .iter()
             .enumerate()
-            .map(|(index, host)| (index, host.name.clone(), host.config.is_some()))
+            .map(|(index, host)| {
+                (
+                    index,
+                    host.name.clone(),
+                    host.config.is_some(),
+                    host.connection(),
+                )
+            })
             .collect();
         let owner = cx.entity().downgrade();
         div()
@@ -2693,26 +2979,104 @@ impl AppView {
                             .text_left()
                             .truncate()
                             .text_size(px(14.))
+                            .line_height(relative(1.4))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(self.hosts[current].name.clone()),
                     )
                     .dropdown_caret(true)
                     .dropdown_menu(move |mut menu, _, _| {
-                        for (index, name, remote) in &hosts {
+                        menu = menu.min_w(px(220.));
+                        for (index, name, remote, connection) in &hosts {
                             let index = *index;
+                            let name = name.clone();
+                            let connection = *connection;
+                            let status = match connection {
+                                Connection::Connecting => crate::t!("ws.connecting"),
+                                Connection::Ready => crate::t!("ws.connected"),
+                                Connection::Closed => crate::t!("ws.not_connected"),
+                            }
+                            .to_string();
                             let owner = owner.clone();
+                            let disconnect_owner = owner.clone();
+                            let show_disconnect = *remote && connection == Connection::Ready;
                             menu = menu.item(
-                                menu_item(name.clone())
-                                    .icon(if *remote {
-                                        IconName::Server
-                                    } else {
-                                        IconName::Monitor
-                                    })
-                                    .checked(index == current)
-                                    .on_click(move |_, _, cx| {
-                                        let _ = owner
-                                            .update(cx, |this, cx| this.switch_host(index, cx));
-                                    }),
+                                PopupMenuItem::element(move |_, _| {
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_size(px(14.))
+                                                .line_height(relative(1.4))
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .child(name.clone()),
+                                        )
+                                        .child(
+                                            div()
+                                                .id(SharedString::from(format!(
+                                                    "host-status-{index}"
+                                                )))
+                                                .size(px(6.))
+                                                .flex_none()
+                                                .rounded_full()
+                                                .bg(rgb(if connection == Connection::Ready {
+                                                    p.accent
+                                                } else {
+                                                    p.muted
+                                                }))
+                                                .tooltip({
+                                                    let status = status.clone();
+                                                    move |window, cx| {
+                                                        gpui_kit::component::tooltip::Tooltip::new(
+                                                            status.clone(),
+                                                        )
+                                                        .build(window, cx)
+                                                    }
+                                                }),
+                                        )
+                                        .when(show_disconnect, |row| {
+                                            let disconnect_owner = disconnect_owner.clone();
+                                            row.child(
+                                                icon_button(
+                                                    SharedString::from(format!(
+                                                        "disconnect-host-{index}"
+                                                    )),
+                                                    IconName::Unplug,
+                                                    crate::t!("ws.disconnect"),
+                                                )
+                                                .w(px(22.))
+                                                .h(px(22.))
+                                                .flex_shrink_0()
+                                                .on_click(move |_, window, cx| {
+                                                    cx.stop_propagation();
+                                                    let _ =
+                                                        disconnect_owner.update(cx, |this, cx| {
+                                                            this.disconnect_host(index, cx);
+                                                        });
+                                                    window.dispatch_action(
+                                                        Box::new(gpui_kit::base::actions::Cancel),
+                                                        cx,
+                                                    );
+                                                }),
+                                            )
+                                        })
+                                })
+                                .icon(if *remote {
+                                    IconName::Server
+                                } else {
+                                    IconName::Monitor
+                                })
+                                .checked(index == current)
+                                .on_click(move |_, _, cx| {
+                                    let _ =
+                                        owner.update(cx, |this, cx| this.switch_host(index, cx));
+                                }),
                             );
                         }
                         let add = owner.clone();
@@ -3012,6 +3376,54 @@ impl AppView {
                     .components()
                     .map(|part| part.as_os_str().to_string_lossy().into_owned()),
             );
+            let previewable = self.image_preview.is_none()
+                && preview::can_preview(
+                    &self.editor_language,
+                    self.file_editor.read(cx).value().as_ref(),
+                );
+            let owner = cx.entity().downgrade();
+            let file_mode = if previewable {
+                let edit_owner = owner.clone();
+                let preview_owner = owner;
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .flex_shrink_0()
+                    .child(
+                        button("file-edit", IconName::Pencil, crate::t!("file.edit"))
+                            .when(!self.preview_mode, |button| {
+                                button.bg(rgba((self.palette.accent << 8) | 42))
+                            })
+                            .on_click(move |_, _, cx| {
+                                let _ = edit_owner.update(cx, |this, cx| {
+                                    this.preview_mode = false;
+                                    this.file_preview = None;
+                                    this.need_focus = true;
+                                    cx.notify();
+                                });
+                            }),
+                    )
+                    .child(
+                        button("file-preview", IconName::Eye, crate::t!("file.preview"))
+                            .when(self.preview_mode, |button| {
+                                button.bg(rgba((self.palette.accent << 8) | 42))
+                            })
+                            .on_click(move |_, _, cx| {
+                                let _ = preview_owner.update(cx, |this, cx| {
+                                    let text = this.file_editor.read(cx).value().to_string();
+                                    this.file_preview =
+                                        Some(preview::parse(&this.editor_language, &text));
+                                    this.preview_mode = true;
+                                    this.need_focus = false;
+                                    cx.notify();
+                                });
+                            }),
+                    )
+                    .into_any_element()
+            } else {
+                div().into_any_element()
+            };
             div()
                 .size_full()
                 .flex()
@@ -3029,19 +3441,26 @@ impl AppView {
                         .text_size(px(11.))
                         .line_height(relative(1.2))
                         .child(
-                            Breadcrumb::new()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .text_size(px(11.))
-                                .children(parts.into_iter().map(|part| {
-                                    BreadcrumbItem::new(part)
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_color(rgb(self.terminal_palette.text))
-                                })),
-                        ),
+                            div().min_w_0().flex_1().overflow_hidden().child(
+                                Breadcrumb::new()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .text_size(px(11.))
+                                    .children(parts.into_iter().map(|part| {
+                                        BreadcrumbItem::new(part)
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_color(rgb(self.terminal_palette.text))
+                                    })),
+                            ),
+                        )
+                        .child(file_mode),
                 )
-                .children(self.editor_search_bar(cx))
+                .children(
+                    (!self.preview_mode)
+                        .then(|| self.editor_search_bar(cx))
+                        .flatten(),
+                )
                 .child(if let Some(image) = &self.image_preview {
                     div()
                         .flex_1()
@@ -3053,6 +3472,75 @@ impl AppView {
                                 .object_fit(ObjectFit::Contain),
                         )
                         .into_any_element()
+                } else if self.preview_mode {
+                    if self.editor_language == "markdown" {
+                        self.file_preview
+                            .as_ref()
+                            .and_then(|document| preview::render_markdown(document, self.palette))
+                            .unwrap_or_else(|| div().size_full().into_any_element())
+                    } else {
+                        let fallback = self.file_preview
+                            .as_ref()
+                            .map(|document| preview::render(document, self.palette, &self.font_family))
+                            .unwrap_or_else(|| div().size_full().into_any_element());
+                        #[cfg(windows)]
+                        {
+                            let owner = cx.entity().downgrade();
+                            div()
+                                .relative()
+                                .flex_1()
+                                .min_h_0()
+                                .child(fallback)
+                                .child(
+                                    canvas(
+                                        move |bounds, window, cx| {
+                                            window.defer(cx, move |window, cx| {
+                                                let _ = owner.update(cx, |this, cx| {
+                                                    if this.workspace_mode != WorkspaceMode::Files
+                                                        || this.editor_language != "html"
+                                                        || !this.preview_mode
+                                                        || this.settings
+                                                        || this.command_palette
+                                                        || window.has_active_dialog(cx)
+                                                    {
+                                                        return;
+                                                    }
+                                                    let Some(html) = this.file_preview.as_ref().and_then(|document| document.web_html()) else {
+                                                        return;
+                                                    };
+                                                    let result = if let Some(web) = &mut this.web_preview {
+                                                        web.show(html, bounds)
+                                                    } else if this.web_preview_failed {
+                                                        return;
+                                                    } else {
+                                                        match preview::WebPreview::new(html, bounds, window) {
+                                                            Ok(web) => {
+                                                                this.web_preview = Some(web);
+                                                                Ok(())
+                                                            }
+                                                            Err(error) => Err(error),
+                                                        }
+                                                    };
+                                                    if let Err(error) = result {
+                                                        tracing::warn!(%error, "WebView preview unavailable; using native fallback");
+                                                        this.web_preview = None;
+                                                        this.web_preview_failed = true;
+                                                    }
+                                                });
+                                            });
+                                        },
+                                        |_, _, _, _| {},
+                                    )
+                                    .absolute()
+                                    .size_full(),
+                                )
+                                .into_any_element()
+                        }
+                        #[cfg(not(windows))]
+                        {
+                            fallback
+                        }
+                    }
                 } else {
                     div()
                         .flex_1()
@@ -3279,6 +3767,8 @@ impl AppView {
                     )))
                     .right(if self.image_preview.is_some() {
                         "PNG".to_string()
+                    } else if self.preview_mode {
+                        crate::t!("file.preview").to_string()
                     } else {
                         format!(
                             "{}  {}",
@@ -3330,19 +3820,6 @@ impl AppView {
                     window.prevent_default();
                 }
             }))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_size(px(12.))
-                    .child(div().flex_1().child(crate::t!("ws.new_session")))
-                    .child(
-                        div()
-                            .text_color(rgb(p.muted))
-                            .child(self.hosts[self.active].name.clone()),
-                    ),
-            )
             .child(
                 Field::new()
                     .label(crate::t!("ws.name_optional").to_string())
@@ -3518,7 +3995,6 @@ impl AppView {
             .flex()
             .flex_col()
             .gap_3()
-            .p_3()
             .child(
                 div()
                     .id("host-form-content")
@@ -3529,21 +4005,7 @@ impl AppView {
                     .flex()
                     .flex_col()
                     .gap_3()
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(if self.editing_host.is_some() {
-                                crate::t!("ws.edit_host_title")
-                            } else {
-                                crate::t!("ws.add_host_title")
-                            }),
-                    )
-                    .child(
-                        GroupBox::new()
-                            .title(crate::t!("ws.connection_info"))
-                            .child(form),
-                    )
+                    .child(form)
                     .when(!name_only, |v| {
                         v.child(
                             Checkbox::new("use-tmux")
@@ -3614,6 +4076,8 @@ impl Render for AppView {
             self.saved_file_text = state.saved_text;
             self.open_file = None;
             self.image_preview = state.image;
+            self.file_preview = state.preview.clone();
+            self.preview_mode = state.preview_mode;
             self.file_editor.update(cx, |editor, cx| {
                 editor.set_value(state.text, window, cx);
                 editor.set_highlighter(
@@ -3633,6 +4097,19 @@ impl Render for AppView {
                 state.language
             };
         }
+        #[cfg(windows)]
+        if self.workspace_mode != WorkspaceMode::Files
+            || !self.preview_mode
+            || self.editor_language != "html"
+            || self.file_preview.is_none()
+            || self.settings
+            || self.command_palette
+            || window.has_active_dialog(cx)
+        {
+            if let Some(web) = &mut self.web_preview {
+                web.hide();
+            }
+        }
         self.sync_editor_search(window, cx);
         if self.need_focus
             && !window.has_active_dialog(cx)
@@ -3642,13 +4119,18 @@ impl Render for AppView {
         {
             match self.workspace_mode {
                 WorkspaceMode::Files
-                    if self.open_file.is_some() && self.image_preview.is_none() =>
+                    if self.open_file.is_some()
+                        && self.image_preview.is_none()
+                        && !self.preview_mode =>
                 {
                     self.file_editor
                         .update(cx, |editor, cx| editor.focus(window, cx));
                     self.need_focus = false;
                 }
                 WorkspaceMode::Files if self.image_preview.is_some() => {
+                    self.need_focus = false;
+                }
+                WorkspaceMode::Files if self.preview_mode => {
                     self.need_focus = false;
                 }
                 WorkspaceMode::Files | WorkspaceMode::Git => {}
