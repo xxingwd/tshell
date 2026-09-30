@@ -242,4 +242,30 @@ impl Client {
         }
         result
     }
+
+    pub async fn replace(&self, temporary: &str, target: &str) -> Result<()> {
+        if self.posix_rename {
+            let mut data = Vec::with_capacity(8 + temporary.len() + target.len());
+            for path in [temporary, target] {
+                data.extend_from_slice(&(path.len() as u32).to_be_bytes());
+                data.extend_from_slice(path.as_bytes());
+            }
+            match self
+                .session
+                .extended("posix-rename@openssh.com", data)
+                .await?
+            {
+                Packet::Status(status) if status.status_code == StatusCode::Ok => return Ok(()),
+                Packet::Status(status) => return Err(Error::Status(status).into()),
+                _ => bail!("{}", crate::t!("sftp.rename_invalid")),
+            }
+        }
+        match self.session.remove(target).await {
+            Ok(_) => {}
+            Err(error) if is_status(&error, StatusCode::NoSuchFile) => {}
+            Err(error) => return Err(error.into()),
+        }
+        self.session.rename(temporary, target).await?;
+        Ok(())
+    }
 }

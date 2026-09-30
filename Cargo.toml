@@ -11,6 +11,9 @@ default-run = "tshell"
 name = "tshell"
 path = "src/main.rs"
 
+[features]
+ui-check-screenshots = ["gpui-kit/test-support"]
+
 [dependencies]
 async-channel = "2"
 base64 = "=0.22.1"

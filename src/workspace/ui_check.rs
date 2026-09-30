@@ -28,7 +28,8 @@ pub(crate) fn run_ui_check(output: PathBuf) -> bool {
                             "settings dialog and pages", "component settings pages render after scrolling", "resource order, visibility, persistence and stop", "font preference", "ligature preference", "2 file-backed terminal themes", "theme selection", "theme persistence", "theme.json create, edit, delete and invalid-file fallback", "unified interface appearance", "opacity preference",
             "shortcut recording and cancellation", "Escape removes overlay", "host rename dialog",
             "language selector", "session deletion persists and preserves other sessions", "host disconnect preserves configuration and other hosts",
-            "new tab has no dialog", "session file state", "Markdown and HTML preview", "session directory and optional name", "session groups with compact tab separators", "named session creation and previous tab restoration"
+            "new tab has no dialog", "session file state", "Markdown and HTML preview", "session directory and optional name", "session groups with compact tab separators", "named session creation and previous tab restoration",
+            "transfer panel dark and light layout", "transfer header drag and viewport constraints", "transfer launcher collapse and expansion", "individual transfer cancellation and clearing", "transfer hover retention and automatic collapse"
                         ]})
                     }
                     Err(error) => {
@@ -38,7 +39,12 @@ pub(crate) fn run_ui_check(output: PathBuf) -> bool {
                 if std::fs::write(output, serde_json::to_vec_pretty(&json).unwrap()).is_err() {
                     result.store(false, Ordering::Release);
                 }
-                cx.update(|cx| cx.quit());
+                cx.update(|cx| {
+                    for handle in cx.windows() {
+                        let _ = handle.update(cx, |_, window, _| window.remove_window());
+                    }
+                    cx.quit();
+                });
             })
             .detach();
         });
@@ -2126,5 +2132,6 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         Ok(())
     })?;
     draw(cx)?;
+    transfer_queue::check_transfer_panel(handle, app, cx).await?;
     Ok(())
 }

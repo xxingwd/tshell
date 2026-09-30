@@ -198,15 +198,20 @@ fn remote_file_round_trip_and_conflict() -> Result<()> {
     upload(&host, vec![source, folder], Path::new(&root))?;
     let uploaded = Path::new(&root).join("upload.bin");
     assert_eq!(read_bytes(&host, &uploaded)?, [0, 255, 42]);
+    let source = local.join("upload.bin");
+    std::fs::write(&source, [9, 8, 7])?;
+    upload(&host, vec![source], Path::new(&root))?;
+    assert_eq!(read_bytes(&host, &uploaded)?, [9, 8, 7]);
     assert_eq!(
         read(&host, &Path::new(&root).join("upload-folder/nested.txt"))?,
         "nested"
     );
     let downloaded = local.join("download.bin");
     download(&host, &uploaded, &downloaded)?;
-    assert_eq!(std::fs::read(&downloaded)?, [0, 255, 42]);
-    assert!(download(&host, &uploaded, &downloaded).is_err());
-    assert_eq!(std::fs::read(&downloaded)?, [0, 255, 42]);
+    assert_eq!(std::fs::read(&downloaded)?, [9, 8, 7]);
+    std::fs::write(&downloaded, [1, 2, 3])?;
+    download(&host, &uploaded, &downloaded)?;
+    assert_eq!(std::fs::read(&downloaded)?, [9, 8, 7]);
     let downloaded_folder = local.join("downloaded-folder");
     download(
         &host,
@@ -217,14 +222,11 @@ fn remote_file_round_trip_and_conflict() -> Result<()> {
         std::fs::read_to_string(downloaded_folder.join("nested.txt"))?,
         "nested"
     );
-    assert!(
-        download(
-            &host,
-            &Path::new(&root).join("upload-folder"),
-            &downloaded_folder
-        )
-        .is_err()
-    );
+    download(
+        &host,
+        &Path::new(&root).join("upload-folder"),
+        &downloaded_folder,
+    )?;
     operate(
         &host,
         crate::workspace::file_ops::Operation::Delete(uploaded),

@@ -26,6 +26,10 @@ xterm.js or OpenSSH feature parity.
   required.
 - A built-in editor for UTF-8 text files, background syntax highlighting,
   search, and conflict-aware remote saves.
+- A global SFTP transfer queue with concurrent uploads/downloads, directory
+  scanning, byte progress, a draggable panel that auto-collapses to the right
+  edge, and per-task cancellation/clearing. See
+  [SFTP transfers](docs/sftp-transfers.md).
 - Markdown opens in a native rich-text preview; HTML uses a read-only WebView2
   preview on Windows. Both have a one-click switch back to editing. The HTML
   preview renders inline styles but blocks scripts and external resources.

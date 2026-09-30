@@ -56,6 +56,7 @@ mod remote_files;
 mod sessions;
 mod ssh_auth;
 mod tools;
+mod transfer_queue;
 #[cfg(windows)]
 mod updates;
 mod workbench;
@@ -488,6 +489,7 @@ pub struct AppView {
     file_clipboard: Option<explorer::FileClipboard>,
     sftp_sessions: BTreeMap<(usize, String), remote_files::Session>,
     file_operation: bool,
+    transfer_queue: transfer_queue::TransferQueue,
     file_picker: Entity<SelectState<SearchableVec<String>>>,
     file_editor: Entity<EditorState>,
     file_states: BTreeMap<(usize, String), SessionFileState>,
@@ -878,6 +880,7 @@ impl AppView {
             file_clipboard: None,
             sftp_sessions: BTreeMap::new(),
             file_operation: false,
+            transfer_queue: Default::default(),
             file_picker,
             file_editor,
             file_states: BTreeMap::new(),
@@ -4315,6 +4318,7 @@ impl Render for AppView {
             .track_focus(&self.root_focus)
             .capture_key_down(cx.listener(Self::keyboard))
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
+                this.move_transfer_panel(e, window, cx);
                 if let Some((origin, width)) = this.sidebar_drag {
                     let max = (f32::from(window.viewport_size().width) - 320.).clamp(160., 520.);
                     this.sidebar_width =
@@ -4334,7 +4338,8 @@ impl Render for AppView {
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
+                cx.listener(|this, _, window, cx| {
+                    this.end_transfer_panel_drag(window, cx);
                     this.float_drag = None;
                     if this.sidebar_drag.take().is_some() {
                         this.save(cx);
@@ -4344,7 +4349,8 @@ impl Render for AppView {
             )
             .on_mouse_up_out(
                 MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
+                cx.listener(|this, _, window, cx| {
+                    this.end_transfer_panel_drag(window, cx);
                     this.float_drag = None;
                     if this.sidebar_drag.take().is_some() {
                         this.save(cx);
@@ -4451,6 +4457,9 @@ impl Render for AppView {
                             }),
                         ),
                 )
+            })
+            .when_some(self.transfer_panel(window, cx), |view, panel| {
+                view.child(panel)
             })
             .children(dialog_layer)
             .children(sheet_layer)

@@ -99,6 +99,7 @@ impl AppView {
         self.editor_dirty
             || self.file_saving
             || self.file_operation
+            || self.transfer_queue.has_pending()
             || self.file_states.values().any(|state| state.dirty)
             || self
                 .pending_file_state

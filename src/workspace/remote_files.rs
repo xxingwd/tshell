@@ -6,6 +6,7 @@ mod pool;
 pub(crate) use pool::Session;
 mod sftp;
 mod transfer;
+pub(super) use transfer::{TransferControl, TransferProgress};
 
 pub(super) use super::workbench::Node;
 
@@ -146,10 +147,19 @@ pub(super) fn read_bytes(host: &Session, path: &Path) -> Result<Vec<u8>> {
 }
 
 pub(super) fn download(host: &Session, source: &Path, destination: &Path) -> Result<()> {
+    download_with_control(host, source, destination, TransferControl::new())
+}
+
+pub(super) fn download_with_control(
+    host: &Session,
+    source: &Path,
+    destination: &Path,
+    control: TransferControl,
+) -> Result<()> {
     let source = source.to_string_lossy().into_owned();
     let destination = destination.to_owned();
     run_transfer(host, move |client| {
-        Box::pin(async move { transfer::download(client, &source, &destination).await })
+        Box::pin(async move { transfer::download(client, &source, &destination, &control).await })
     })
 }
 
@@ -158,9 +168,18 @@ pub(super) fn upload(
     sources: Vec<std::path::PathBuf>,
     target: &Path,
 ) -> Result<()> {
+    upload_with_control(host, sources, target, TransferControl::new())
+}
+
+pub(super) fn upload_with_control(
+    host: &Session,
+    sources: Vec<std::path::PathBuf>,
+    target: &Path,
+    control: TransferControl,
+) -> Result<()> {
     let target = target.to_string_lossy().into_owned();
     run_transfer(host, move |client| {
-        Box::pin(async move { transfer::upload(client, &sources, &target).await })
+        Box::pin(async move { transfer::upload(client, &sources, &target, &control).await })
     })
 }
 

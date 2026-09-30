@@ -20,6 +20,9 @@ GPUI 的应用中。终端引擎使用 Rust 原生实现和 `alacritty_terminal`
 - 面向本地和远程工作目录的 Explorer 与只读 Git 视图。远程文件使用 SFTP，
   远程 Git 使用目标主机上的 Git，不需要远程 Python 或文件挂载。
 - 内置 UTF-8 文本编辑器、后台语法高亮、搜索和带冲突检测的远程保存。
+- 全局 SFTP 传输队列，支持并发上传/下载、目录扫描、字节进度、拖动面板、
+  自动收起到右侧以及单个任务取消/清除。
+  详见 [SFTP 传输](docs/sftp-transfers.md)。
 - Markdown 使用原生富文本预览；HTML 在 Windows 上使用只读 WebView2 预览，均可一键切回编辑。HTML 预览不会执行脚本或加载外部资源。
 - 工作区与终端共用色调，目前内置 VS Code Modern 的亮色/深色方案。
   同一个 `theme.json` 为每套方案保存终端色与界面语义色，旧版文件自动迁移。

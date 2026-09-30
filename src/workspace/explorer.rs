@@ -329,36 +329,7 @@ impl AppView {
         let Some(remote) = self.remote_files() else {
             return;
         };
-        if self.file_operation {
-            window.push_notification(Notification::warning(crate::t!("explorer.busy")), cx);
-            return;
-        }
-        self.file_operation = true;
-        cx.spawn_in(window, async move |view, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    remote_files::download(&remote, &source, &destination)?;
-                    Ok::<_, anyhow::Error>(destination)
-                })
-                .await;
-            let _ = view.update_in(cx, |app, window, cx| {
-                app.file_operation = false;
-                match result {
-                    Ok(path) => window.push_notification(
-                        Notification::success(
-                            crate::t!("explorer.downloaded", path = path.display().to_string())
-                                .to_string(),
-                        ),
-                        cx,
-                    ),
-                    Err(error) => {
-                        window.push_notification(Notification::error(format!("{error:#}")), cx)
-                    }
-                }
-            });
-        })
-        .detach();
+        self.queue_download(remote, source, destination, window, cx);
     }
 
     fn explorer_pick_upload(
@@ -407,12 +378,14 @@ impl AppView {
         if paths.is_empty() {
             return;
         }
+        if let Some(remote) = self.remote_files() {
+            self.queue_upload(remote, paths, target, window, cx);
+            return;
+        }
         if self.file_operation {
             window.push_notification(Notification::warning(crate::t!("explorer.busy")), cx);
             return;
         }
-        let remote = self.remote_files();
-        let is_remote = remote.is_some();
         let key = self.active_file_session.clone();
         let host = self.active;
         self.file_operation = true;
@@ -420,24 +393,20 @@ impl AppView {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    if let Some(remote) = remote {
-                        remote_files::upload(&remote, paths, &target)
-                    } else {
-                        for source in paths {
-                            let name = source.file_name().ok_or_else(|| {
-                                anyhow::anyhow!("{}", crate::t!("explorer.source_name_missing"))
-                            })?;
-                            let destination = target.join(name);
-                            file_ops::execute(
-                                None,
-                                &Operation::Copy {
-                                    from: source,
-                                    to: destination,
-                                },
-                            )?;
-                        }
-                        Ok(())
+                    for source in paths {
+                        let name = source.file_name().ok_or_else(|| {
+                            anyhow::anyhow!("{}", crate::t!("explorer.source_name_missing"))
+                        })?;
+                        let destination = target.join(name);
+                        file_ops::execute(
+                            None,
+                            &Operation::Copy {
+                                from: source,
+                                to: destination,
+                            },
+                        )?;
                     }
+                    Ok::<(), anyhow::Error>(())
                 })
                 .await;
             let _ = view.update_in(cx, |app, window, cx| {
@@ -445,11 +414,7 @@ impl AppView {
                 match result {
                     Ok(()) => {
                         window.push_notification(
-                            Notification::success(if is_remote {
-                                crate::t!("explorer.uploaded")
-                            } else {
-                                crate::t!("explorer.copied")
-                            }),
+                            Notification::success(crate::t!("explorer.copied")),
                             cx,
                         );
                         if app.active == host && app.active_file_session == key {
