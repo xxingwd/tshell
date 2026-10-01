@@ -454,10 +454,8 @@ pub(super) async fn check(
             })?;
             draw(cx)?;
             cx.update_window(handle.into(), |_, window, cx| {
-                anyhow::ensure!(
-                    TextSelection::selected_text(window, cx) == "中文",
-                    "scrolled diff word selection lost Unicode"
-                );
+                let copied = TextSelection::selected_text(window, cx);
+                anyhow::ensure!(copied == "中文", "scrolled diff word selection lost Unicode: pane={pane}, position={position:?}, copied={copied:?}; {}", app.read(cx).git_diff.as_ref().unwrap().selection[pane].read(cx).check_debug(window, cx));
                 anyhow::ensure!(
                     app.read(cx).git_diff.as_ref().unwrap().selection[pane]
                         .read(cx)
