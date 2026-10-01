@@ -4,7 +4,7 @@ use anyhow::Result;
 use collections::FxHashMap;
 use itertools::Itertools;
 use windows::Win32::{
-    Foundation::{HANDLE, HGLOBAL},
+    Foundation::{HANDLE, HGLOBAL, HWND},
     System::{
         DataExchange::{
             CloseClipboard, CountClipboardFormats, EmptyClipboard, EnumClipboardFormats,
@@ -67,8 +67,8 @@ fn get_clipboard_data(format: u32) -> Option<LockedGlobal> {
     LockedGlobal::lock(global)
 }
 
-pub(crate) fn write_to_clipboard(item: ClipboardItem) {
-    let Some(_clip) = ClipboardGuard::open() else {
+pub(crate) fn write_to_clipboard(item: ClipboardItem, owner: HWND) {
+    let Some(_clip) = ClipboardGuard::open(Some(owner)) else {
         return;
     };
 
@@ -90,7 +90,7 @@ pub(crate) fn write_to_clipboard(item: ClipboardItem) {
 }
 
 pub(crate) fn read_from_clipboard() -> Option<ClipboardItem> {
-    let _clip = ClipboardGuard::open()?;
+    let _clip = ClipboardGuard::open(None)?;
 
     let mut entries = Vec::new();
     let mut have_text = false;
@@ -337,8 +337,8 @@ fn gpui_to_image_format(value: ImageFormat) -> Option<image::ImageFormat> {
 struct ClipboardGuard;
 
 impl ClipboardGuard {
-    fn open() -> Option<Self> {
-        match unsafe { OpenClipboard(None) } {
+    fn open(owner: Option<HWND>) -> Option<Self> {
+        match unsafe { OpenClipboard(owner) } {
             Ok(()) => Some(Self),
             Err(e) => {
                 log::error!("Failed to open clipboard: {e}");

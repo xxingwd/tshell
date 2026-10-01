@@ -48,10 +48,20 @@ struct PaneTitle {
 #[derive(Default)]
 pub(crate) struct LiveTitles(BTreeMap<String, PaneTitle>);
 impl LiveTitles {
+    #[cfg(test)]
     pub fn advance(&mut self, id: &str, bytes: &[u8], snapshot: &mut Snapshot) {
+        self.advance_for(id, bytes, snapshot, None);
+    }
+    pub fn advance_for(
+        &mut self,
+        id: &str,
+        bytes: &[u8],
+        snapshot: &mut Snapshot,
+        target: Option<u64>,
+    ) {
         let pane = self.0.entry(id.to_owned()).or_default();
         pane.clipboard.advance(bytes);
-        let notices = pane.notifications.advance(bytes);
+        let notices = pane.notifications.advance_for(bytes, target);
         pane.notice_count += notices;
         let before = pane.title.version;
         pane.parser.advance(&mut pane.title, bytes);

@@ -21,7 +21,7 @@ pub(crate) fn run_ui_check(output: PathBuf) -> bool {
                 let json = match report {
                     Ok(()) => {
                         result.store(true, Ordering::Release);
-                        serde_json::json!({"passed": true, "remote_files_checked": std::env::var_os("TSHELL_REMOTE_UI_ROOT").is_some(), "checked": [
+                        serde_json::json!({"passed": true, "clipboard_checked": std::env::var_os("TSHELL_UI_CHECK_SKIP_CLIPBOARD").is_none(), "remote_files_checked": std::env::var_os("TSHELL_REMOTE_UI_ROOT").is_some(), "checked": [
             "event-driven title wakes workspace without polling", "terminal Tab input retains focus", "Ctrl+B toggles sidebar with terminal focus", "sidebar viewport and persisted state", "Zen preserves sidebar preference", "single and grouped terminal sidebar rendering", "host and key settings pages", "standalone host validation",
                             "terminal viewport unchanged", "settings restores terminal focus",
             "command palette focus and dispatch", "GPUI frame overlay and status item defaults", "Git mode", "file tree", "syntax editor", "status bar and notifications", "unread terminal notice acknowledgement",
@@ -29,7 +29,8 @@ pub(crate) fn run_ui_check(output: PathBuf) -> bool {
             "shortcut recording and cancellation", "Escape removes overlay", "host rename dialog",
             "language selector", "session deletion persists and preserves other sessions", "host disconnect preserves configuration and other hosts",
             "new tab has no dialog", "session file state", "Markdown and HTML preview", "session directory and optional name", "session groups with compact tab separators", "named session creation and previous tab restoration",
-            "transfer panel dark and light layout", "transfer header drag and viewport constraints", "transfer launcher collapse and expansion", "individual transfer cancellation and clearing", "transfer hover retention and automatic collapse"
+            "transfer panel dark and light layout", "transfer header drag and viewport constraints", "transfer launcher collapse and expansion", "individual transfer cancellation and clearing", "transfer hover retention and automatic collapse",
+            "Git raw Unicode/tab selection in both layouts", "Git word and line selection", "Git off-screen selection anchor", "terminal search focus, navigation and live output", "terminal search dark and narrow light layouts", "Ctrl-click links and unchanged ordinary TUI mouse reports", "terminal file link line/column and draft preservation", "terminal directory link Explorer root", "notification pane targeting and closed identity"
                         ]})
                     }
                     Err(error) => {
@@ -370,6 +371,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             change,
             scroll: UniformListScrollHandle::new(),
             horizontal: std::array::from_fn(|_| ScrollHandle::new()),
+            selection: std::array::from_fn(|_| git_selection::DiffSelection::new(cx)),
             content: Ok(git_view::DiffContent::new(
                 (0..10_000)
                     .map(|index| git::DiffLine {
@@ -823,6 +825,14 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
                 .update(cx, |input, cx| input.set_value("-invalid", window, cx));
             app.add_host(window, cx);
             anyhow::ensure!(app.message.is_some(), "invalid host accepted");
+            anyhow::ensure!(
+                app.host_error_field == Some(HostField::Destination),
+                "host error was not attached to the destination field"
+            );
+            anyhow::ensure!(
+                app.destination.read(cx).focus_handle(cx).is_focused(window),
+                "invalid destination was not focused"
+            );
             Ok::<_, anyhow::Error>(())
         })
     })??;
@@ -839,6 +849,14 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             anyhow::ensure!(
                 window.has_active_dialog(cx),
                 "invalid username closed host dialog"
+            );
+            anyhow::ensure!(
+                app.host_error_field == Some(HostField::User),
+                "username error was not attached to the user field"
+            );
+            anyhow::ensure!(
+                app.user.read(cx).focus_handle(cx).is_focused(window),
+                "invalid username was not focused"
             );
             Ok::<_, anyhow::Error>(())
         })
@@ -2132,6 +2150,155 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         Ok(())
     })?;
     draw(cx)?;
-    transfer_queue::check_transfer_panel(handle, app, cx).await?;
+    transfer_queue::check_transfer_panel(handle, app.clone(), cx).await?;
+    #[cfg(feature = "ui-check-screenshots")]
+    check_workspace_styles(handle, app.clone(), cx).await?;
+    feature_check::check(handle, app, cx).await?;
+    Ok(())
+}
+
+#[cfg(feature = "ui-check-screenshots")]
+async fn check_workspace_styles(
+    handle: WindowHandle<Root>,
+    app: Entity<AppView>,
+    cx: &mut AsyncApp,
+) -> anyhow::Result<()> {
+    let Some(directory) = std::env::var_os("TSHELL_UI_SCREENSHOT_DIR") else {
+        return Ok(());
+    };
+    let directory = PathBuf::from(directory);
+    std::fs::create_dir_all(&directory)?;
+    let capture = |name: &str, cx: &mut AsyncApp| -> anyhow::Result<()> {
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.refresh();
+            let _ = window.draw(cx);
+            window
+                .render_to_image()?
+                .save(directory.join(format!("workspace-{name}.png")))?;
+            Ok::<_, anyhow::Error>(())
+        })??;
+        Ok(())
+    };
+    for (name, appearance, viewport) in [
+        ("dark", Appearance::Dark, size(px(1320.), px(840.))),
+        ("light-small", Appearance::Light, size(px(860.), px(520.))),
+    ] {
+        handle.update(cx, |root, window, _| {
+            root.style().size.width = Some(viewport.width.into());
+            root.style().size.height = Some(viewport.height.into());
+            window.resize(viewport);
+        })?;
+        cx.update_window(handle.into(), |_, window, cx| {
+            app.update(cx, |app, cx| {
+                app.close_modal(window, cx);
+                app.active = 0;
+                app.zen = false;
+                app.floating = false;
+                app.sidebar_collapsed = false;
+                app.sidebar_width = SIDEBAR_WIDTH;
+                app.show_status_bar = true;
+                app.workspace_mode = WorkspaceMode::Terminal;
+                app.hosts[0].collapsed_sessions.clear();
+                app.sync(cx);
+                app.select_theme(ThemeMode::Light, "vscode-light", window, cx);
+                app.set_appearance(appearance, window, cx);
+            });
+        })?;
+        cx.background_executor()
+            .timer(Duration::from_millis(30))
+            .await;
+        capture(&format!("{name}-sidebar"), cx)?;
+        for (page, suffix) in [(0, "settings"), (5, "hosts"), (2, "metrics")] {
+            cx.update_window(handle.into(), |_, window, cx| {
+                app.update(cx, |app, cx| {
+                    app.settings_ui.page = page;
+                    app.show_settings(window, cx);
+                });
+            })?;
+            capture(&format!("{name}-{suffix}"), cx)?;
+            cx.update_window(handle.into(), |_, window, cx| {
+                app.update(cx, |app, cx| app.close_modal(window, cx));
+            })?;
+        }
+        cx.update_window(handle.into(), |_, window, cx| {
+            app.update(cx, |app, cx| {
+                app.show_add(window, cx);
+                app.destination
+                    .update(cx, |input, cx| input.set_value("example.test", window, cx));
+                app.add_host(window, cx);
+            });
+        })?;
+        capture(&format!("{name}-host-error"), cx)?;
+        cx.update_window(handle.into(), |_, window, cx| {
+            app.update(cx, |app, cx| {
+                app.close_modal(window, cx);
+                app.workspace_mode = WorkspaceMode::Git;
+                let change = git::GitChange {
+                    status: " M".into(),
+                    path: app.cwd.join("src/workspace.rs"),
+                    original: None,
+                    root: app.cwd.clone(),
+                    stats: Some(git::Stats {
+                        added: 2,
+                        removed: 1,
+                    }),
+                };
+                app.git_changes = vec![change.clone()];
+                app.git_error = None;
+                app.git_diff_mode = git_view::DiffMode::SideBySide;
+                app.git_diff_compact = true;
+                app.git_diff = Some(git_view::DiffView {
+                    change,
+                    scroll: UniformListScrollHandle::new(),
+                    horizontal: std::array::from_fn(|_| ScrollHandle::new()),
+                    selection: std::array::from_fn(|_| git_selection::DiffSelection::new(cx)),
+                    content: Ok(git_view::DiffContent::new(vec![
+                        git::DiffLine {
+                            old: Some(1),
+                            new: Some(1),
+                            kind: git::LineKind::Context,
+                            text: " use gpui_kit::component::*;".into(),
+                        },
+                        git::DiffLine {
+                            old: Some(2),
+                            new: None,
+                            kind: git::LineKind::Removed,
+                            text: "-const ROW_HEIGHT: f32 = 26.;".into(),
+                        },
+                        git::DiffLine {
+                            old: None,
+                            new: Some(2),
+                            kind: git::LineKind::Added,
+                            text: "+const ROW_HEIGHT: f32 = 30.;".into(),
+                        },
+                        git::DiffLine {
+                            old: None,
+                            new: Some(3),
+                            kind: git::LineKind::Added,
+                            text: "+const CONTROL_HEIGHT: f32 = 28.;".into(),
+                        },
+                    ])),
+                });
+                cx.notify();
+            });
+        })?;
+        capture(&format!("{name}-git"), cx)?;
+        cx.update_window(handle.into(), |_, window, cx| {
+            app.update(cx, |app, cx| {
+                app.workspace_mode = WorkspaceMode::Files;
+                app.open_file = Some(app.cwd.join("src/workspace.rs"));
+                app.editor_language = "rust".into();
+                app.image_preview = None;
+                app.file_preview = None;
+                app.preview_mode = false;
+                app.file_editor.update(cx, |editor, cx| {
+                    editor.set_value("use gpui_kit::component::*;\n\nconst ROW_HEIGHT: f32 = 30.;\nconst CONTROL_HEIGHT: f32 = 28.;\n", window, cx);
+                    editor.open_search(true, cx);
+                });
+                cx.notify();
+            });
+        })?;
+        capture(&format!("{name}-editor"), cx)?;
+    }
     Ok(())
 }

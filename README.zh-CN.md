@@ -17,11 +17,15 @@ GPUI 的应用中。终端引擎使用 Rust 原生实现和 `alacritty_terminal`
 - 远程 tmux 控制会话，使用服务端原生管理窗口、分屏、布局、标题和工作目录。
 - host -> session -> tab -> split 工作区模型，支持可折叠导航、键盘命令、
   分屏调整、专注/浮动模式和界面偏好持久化。
+- 紧凑原生控件、清晰的侧栏层级、自适应设置、主机字段校验和 Git Diff
+  分段模式选择。详见 [工作区界面](docs/workspace-interface.md)。
 - 面向本地和远程工作目录的 Explorer 与只读 Git 视图。远程文件使用 SFTP，
   远程 Git 使用目标主机上的 Git，不需要远程 Python 或文件挂载。
+  并排和行内差异支持选择、复制文本及字符级变更高亮。
+  详见 [Git 工作区](docs/git-workspace.md)。
 - 内置 UTF-8 文本编辑器、后台语法高亮、搜索和带冲突检测的远程保存。
 - 全局 SFTP 传输队列，支持并发上传/下载、目录扫描、字节进度、拖动面板、
-  自动收起到右侧以及单个任务取消/清除。
+  自动收起到右侧、速度与剩余时间，以及单个任务取消、清除和重试。
   详见 [SFTP 传输](docs/sftp-transfers.md)。
 - Markdown 使用原生富文本预览；HTML 在 Windows 上使用只读 WebView2 预览，均可一键切回编辑。HTML 预览不会执行脚本或加载外部资源。
 - 工作区与终端共用色调，目前内置 VS Code Modern 的亮色/深色方案。
@@ -33,6 +37,9 @@ GPUI 的应用中。终端引擎使用 Rust 原生实现和 `alacritty_terminal`
   不为每个控件单独建组。
 - 参考 xterm 的键盘、粘贴、选区、ANSI/256 色/真彩色 SGR、自定义框线字形、
   光标样式、OSC 7 工作目录元数据、OSC 52 剪贴板写入和 OSC 9/777 原生通知。
+- 当前分屏的屏幕与保留历史输出搜索，提供匹配数、大小写/正则选项和上下一处。
+  Ctrl 点击可打开 OSC 8 链接、URL 与文件路径，SSH 路径按输出所属主机打开。
+  Windows 通知点击可在应用运行时定位原分屏。详见 [终端工具](docs/terminal-tools.md)。
 - 通过现有 SSH 连接采集 Linux 主机 CPU、内存和根文件系统使用率，不需要 sudo
   或 Python。
 - Windows x64 打包和基于发布元数据校验的后台更新路径。详见
@@ -98,6 +105,7 @@ tmux 会话则保留在服务器上。断开后，文件浏览器和 Git 不会�
 | `Alt+H/J/K/L` 或 `Alt` + 方向键 | 移动焦点 |
 | `Alt+Shift+H/J/K/L` 或 `Alt+Shift` + 方向键 | 移动 split |
 | `Ctrl+Shift+C` / `Ctrl+Shift+V` | 复制 / 粘贴 |
+| `Ctrl+Shift+F` | 搜索当前终端输出 |
 | `Ctrl+Shift+P` | 切换 GPUI 帧性能面板 |
 | `Ctrl+-` / `Ctrl+=` | 减小 / 增大终端字号 |
 
@@ -136,6 +144,8 @@ Windows 上的 HTML 使用内嵌 WebView2，可显示布局和内联 CSS。HTML 
 
 Git 视图显示当前工具目录的 `git status --porcelain`。它是只读浏览器，不提供暂存、
 提交、推送或历史编辑；这些操作请使用命令行。
+两种差异布局均可拖选文本，并通过 `Ctrl+C`、自定义复制快捷键或工具栏复制按钮复制。
+复制结果不包含行号与补丁标记，保留制表符和 Unicode。
 
 ## 终端兼容性
 

@@ -24,7 +24,12 @@ pub(crate) fn run_render_check(output: std::path::PathBuf) -> bool {
                 if std::fs::write(output, serde_json::to_vec_pretty(&json).unwrap()).is_err() {
                     result.store(false, Ordering::Release);
                 }
-                cx.update(|cx| cx.quit());
+                cx.update(|cx| {
+                    for handle in cx.windows() {
+                        let _ = handle.update(cx, |_, window, _| window.remove_window());
+                    }
+                    cx.quit();
+                });
             })
             .detach();
         });
@@ -698,17 +703,23 @@ async fn check_sparse_updates(
             "sparse update copied {} rows",
             snapshot.copied_rows
         );
-        handle.update(cx, |view, _, cx| {
-            view.snapshot = snapshot;
-            cx.notify();
-        })?;
-        let before = handle.update(cx, |view, _, _| view.row_paints.get())?;
-        let start = Instant::now();
-        cx.update_window(handle.into(), |_, window, cx| {
+        // Keep the update and measured draw in one turn so native frame callbacks
+        // cannot paint between the counter sample and this draw.
+        let (painted, elapsed) = cx.update_window(handle.into(), |root, window, cx| {
+            let view = root.clone().downcast::<TerminalView>().unwrap();
+            let before = view.read(cx).row_paints.get();
+            view.update(cx, |view, cx| {
+                view.snapshot = snapshot;
+                cx.notify();
+            });
+            let start = Instant::now();
             window.draw(cx).clear(cx);
+            (
+                view.read(cx).row_paints.get() - before,
+                start.elapsed().as_micros(),
+            )
         })?;
-        times.push(start.elapsed().as_micros());
-        let painted = handle.update(cx, |view, _, _| view.row_paints.get() - before)?;
+        times.push(elapsed);
         anyhow::ensure!(
             painted == if cached || !dense { 1 } else { 60 },
             "sparse update painted {painted} rows (cached={cached})"

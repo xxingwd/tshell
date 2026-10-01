@@ -21,14 +21,18 @@ xterm.js or OpenSSH feature parity.
 - A host -> session -> tab -> split workspace model with collapsible navigation,
   keyboard-driven commands, split resizing, floating/focus modes, and persisted
   interface preferences.
+- Compact native controls, explicit sidebar hierarchy, responsive settings,
+  field-level host validation, and segmented Git diff modes. See
+  [workspace interface](docs/workspace-interface.md).
 - Explorer and read-only Git views for local and remote working directories.
   Remote files use SFTP and remote Git commands; no remote Python or mount is
-  required.
+  required. Inline and side-by-side diffs support text selection/copy and
+  character-level change highlighting. See [Git workspace](docs/git-workspace.md).
 - A built-in editor for UTF-8 text files, background syntax highlighting,
   search, and conflict-aware remote saves.
 - A global SFTP transfer queue with concurrent uploads/downloads, directory
   scanning, byte progress, a draggable panel that auto-collapses to the right
-  edge, and per-task cancellation/clearing. See
+  edge, speed/remaining time, and per-task cancellation, clearing, and retry. See
   [SFTP transfers](docs/sftp-transfers.md).
 - Markdown opens in a native rich-text preview; HTML uses a read-only WebView2
   preview on Windows. Both have a one-click switch back to editing. The HTML
@@ -46,6 +50,11 @@ xterm.js or OpenSSH feature parity.
 - xterm-compatible keyboard, paste, selection, ANSI/256-color/true-color SGR,
   custom box glyphs, cursor styles, OSC 7 working-directory metadata, OSC 52
   clipboard writes, and native OSC 9/777 notifications.
+- Search the active terminal's screen and retained history with match counts,
+  case/regex options, and previous/next navigation. Ctrl-click OSC 8 links,
+  URLs, or file paths; SSH paths open through their originating host. Windows
+  notification clicks locate the originating split while TShell is running.
+  See [terminal tools](docs/terminal-tools.md).
 - Linux host metrics (CPU, memory, and root filesystem usage) over the existing
   SSH connection, with no sudo or Python requirement.
 - Windows x64 packaging and an opt-in-background update path backed by release
@@ -120,6 +129,7 @@ The command palette is available with `Ctrl+Shift+K`. Important defaults are:
 | `Alt+H/J/K/L` or `Alt` + arrows | Move focus |
 | `Alt+Shift+H/J/K/L` or `Alt+Shift` + arrows | Move the split |
 | `Ctrl+Shift+C` / `Ctrl+Shift+V` | Copy / paste |
+| `Ctrl+Shift+F` | Search the active terminal's output |
 | `Ctrl+Shift+P` | Cycle GPUI's frame diagnostics |
 | `Ctrl+-` / `Ctrl+=` | Decrease / increase terminal font size |
 
@@ -169,6 +179,9 @@ file header to switch views; saving always writes the original UTF-8 source.
 Git view reports `git status --porcelain` for the active tool directory. It is a
 read-only browser: staging, commits, pushes, and history editing are outside
 the application. Use the command line for those operations.
+Both diff layouts allow dragging to select and copying with `Ctrl+C`, the
+configured Copy shortcut, or the toolbar Copy button. Copied text excludes
+line numbers and patch markers, preserving tabs and Unicode.
 
 ## Terminal Compatibility
 

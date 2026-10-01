@@ -139,6 +139,23 @@ pub(super) fn read(host: &Session, path: &Path) -> Result<String> {
     })
 }
 
+pub(super) fn inspect_path(host: &Session, path: &Path) -> Result<(std::path::PathBuf, bool)> {
+    let path = path.to_string_lossy().into_owned();
+    run(host, move |client| {
+        Box::pin(async move {
+            let path = client.resolve(&path).await?;
+            let directory = client
+                .session
+                .stat(path.clone())
+                .await?
+                .attrs
+                .file_type()
+                .is_dir();
+            Ok((path.into(), directory))
+        })
+    })
+}
+
 pub(super) fn read_bytes(host: &Session, path: &Path) -> Result<Vec<u8>> {
     let path = path.to_string_lossy().into_owned();
     run(host, move |client| {

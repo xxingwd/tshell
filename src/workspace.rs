@@ -12,9 +12,9 @@ use crate::{
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Icon, Root, Sizable, Theme, ThemeMode, WindowExt,
+    ActiveTheme, Disableable, Icon, Root, Selectable, Sizable, Theme, ThemeMode, WindowExt,
     breadcrumb::{Breadcrumb, BreadcrumbItem},
-    button::{Button, ButtonVariants},
+    button::{Button, ButtonGroup, ButtonVariants},
     checkbox::Checkbox,
     command::{Command, CommandGroup, CommandItem, CommandState},
     form::{Field, Form},
@@ -44,6 +44,7 @@ mod explorer;
 mod file_access;
 mod file_ops;
 mod git;
+mod git_selection;
 mod git_view;
 mod host_metrics;
 mod launcher;
@@ -55,6 +56,8 @@ mod preview;
 mod remote_files;
 mod sessions;
 mod ssh_auth;
+mod style;
+mod terminal_actions;
 mod tools;
 mod transfer_queue;
 #[cfg(windows)]
@@ -67,6 +70,8 @@ const WINDOW_CONTROLS_WIDTH: f32 = WINDOW_CONTROL_WIDTH * 3.;
 const CHROME_BAR_HEIGHT: f32 = 28.;
 pub(crate) const DEFAULT_WINDOW_SIZE: [f32; 2] = [1320., 840.];
 
+#[cfg(debug_assertions)]
+mod feature_check;
 #[cfg(debug_assertions)]
 mod ui_check;
 #[cfg(debug_assertions)]
@@ -385,6 +390,15 @@ enum ModalKind {
     ThemeEditor,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HostField {
+    Name,
+    Destination,
+    User,
+    Port,
+    IdentityFile,
+}
+
 fn workspace_dialog(
     dialog: gpui_kit::component::dialog::Dialog,
     cx: &App,
@@ -415,6 +429,7 @@ fn command_icon(action: Shortcut) -> IconName {
         Shortcut::Zen | Shortcut::Focus => IconName::Focus,
         Shortcut::CycleTheme => IconName::SunMoon,
         Shortcut::Copy => IconName::Copy,
+        Shortcut::TerminalSearch => IconName::Search,
         Shortcut::Paste => IconName::ClipboardPaste,
         Shortcut::CommandPalette => IconName::Command,
         _ => IconName::ArrowRight,
@@ -469,6 +484,7 @@ pub struct AppView {
     float_position: Point<Pixels>,
     float_drag: Option<Point<Pixels>>,
     editing_host: Option<usize>,
+    host_error_field: Option<HostField>,
     creating_tab: bool,
     editing_session: Option<String>,
     home_task: Option<Task<()>>,
@@ -503,6 +519,7 @@ pub struct AppView {
     git_diff_compact: bool,
     active_file_session: Option<(usize, String)>,
     pending_file_state: Option<SessionFileState>,
+    file_link_position: Option<(PathBuf, (u32, u32))>,
     open_file: Option<PathBuf>,
     image_preview: Option<std::sync::Arc<Image>>,
     file_preview: Option<preview::Document>,
@@ -559,6 +576,8 @@ fn button(id: impl Into<ElementId>, icon: IconName, label: impl Into<SharedStrin
     Button::new(id)
         .ghost()
         .small()
+        .h(px(style::CONTROL_HEIGHT))
+        .rounded(px(4.))
         .text_size(px(12.))
         .line_height(relative(1.))
         .icon(icon)
@@ -568,6 +587,8 @@ fn icon_button(id: impl Into<ElementId>, icon: IconName, label: impl Into<Shared
     Button::new(id)
         .ghost()
         .small()
+        .size(px(style::CONTROL_HEIGHT))
+        .rounded(px(4.))
         .text_size(px(12.))
         .line_height(relative(1.))
         .icon(icon)
@@ -844,6 +865,7 @@ impl AppView {
             float_position: point(px(24.), px(24.)),
             float_drag: None,
             editing_host: None,
+            host_error_field: None,
             creating_tab: false,
             editing_session: None,
             home_task: None,
@@ -894,6 +916,7 @@ impl AppView {
             git_diff_compact: true,
             active_file_session: None,
             pending_file_state: None,
+            file_link_position: None,
             open_file: None,
             image_preview: None,
             file_preview: None,
@@ -1001,6 +1024,20 @@ impl AppView {
         .detach();
         this.sync(cx);
         this.sync_latency_monitor(window, cx);
+        let activations = crate::terminal_notifications::subscribe_activations();
+        cx.spawn_in(window, async move |view, cx| {
+            while let Ok(identity) = activations.recv().await {
+                if view
+                    .update_in(cx, |this, window, cx| {
+                        this.focus_terminal_notice(identity, window, cx)
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
         let auth_requests = crate::ssh_pool::interactive::subscribe();
         cx.spawn_in(window, async move |view, cx| {
             while let Ok(prompt) = auth_requests.recv().await {
@@ -1478,16 +1515,25 @@ impl AppView {
         cx.notify();
     }
     fn add_host(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.host_error_field = None;
         let name = self.label.read(cx).value().trim().to_owned();
         if name.chars().any(char::is_control) || name.chars().count() > 80 {
-            self.message = Some(crate::t!("ws.name_too_long").to_string());
-            cx.notify();
+            self.host_validation_error(
+                HostField::Name,
+                crate::t!("ws.name_too_long").into_owned(),
+                window,
+                cx,
+            );
             return;
         }
         if self.editing_host == Some(0) {
             if name.is_empty() {
-                self.message = Some(crate::t!("ws.name_required").to_string());
-                cx.notify();
+                self.host_validation_error(
+                    HostField::Name,
+                    crate::t!("ws.name_required").into_owned(),
+                    window,
+                    cx,
+                );
                 return;
             }
             self.hosts[0].name = name;
@@ -1497,14 +1543,17 @@ impl AppView {
         let destination = match validate_destination(&self.destination.read(cx).value()) {
             Ok(v) => v,
             Err(e) => {
-                self.message = Some(e.to_string());
-                cx.notify();
+                self.host_validation_error(HostField::Destination, e.to_string(), window, cx);
                 return;
             }
         };
         if destination.contains('@') {
-            self.message = Some(crate::t!("ws.host_without_user").to_string());
-            cx.notify();
+            self.host_validation_error(
+                HostField::Destination,
+                crate::t!("ws.host_without_user").into_owned(),
+                window,
+                cx,
+            );
             return;
         }
         let user = self.user.read(cx).value().trim().to_owned();
@@ -1512,8 +1561,12 @@ impl AppView {
             || user.chars().any(|c| c.is_whitespace() || c.is_control())
             || user.starts_with('-')
         {
-            self.message = Some(crate::t!("ws.user_invalid").to_string());
-            cx.notify();
+            self.host_validation_error(
+                HostField::User,
+                crate::t!("ws.user_invalid").into_owned(),
+                window,
+                cx,
+            );
             return;
         }
         let identity_file = self.identity_file.read(cx).value().trim().to_owned();
@@ -1522,8 +1575,12 @@ impl AppView {
         } else {
             let path = PathBuf::from(&identity_file);
             if !path.is_file() {
-                self.message = Some(crate::t!("ws.identity_file_invalid").to_string());
-                cx.notify();
+                self.host_validation_error(
+                    HostField::IdentityFile,
+                    crate::t!("ws.identity_file_invalid").into_owned(),
+                    window,
+                    cx,
+                );
                 return;
             }
             Some(path)
@@ -1535,8 +1592,12 @@ impl AppView {
             match text.trim().parse::<u16>() {
                 Ok(p) if p > 0 => Some(p),
                 _ => {
-                    self.message = Some(crate::t!("ws.port_invalid").to_string());
-                    cx.notify();
+                    self.host_validation_error(
+                        HostField::Port,
+                        crate::t!("ws.port_invalid").into_owned(),
+                        window,
+                        cx,
+                    );
                     return;
                 }
             }
@@ -1610,6 +1671,7 @@ impl AppView {
     fn host_editor_closed(&mut self, cx: &mut Context<Self>) {
         self.settings_ui.host_form = false;
         self.editing_host = None;
+        self.host_error_field = None;
         self.message = None;
         self.need_focus = !self.settings;
         cx.notify();
@@ -1623,6 +1685,7 @@ impl AppView {
         self.settings = false;
         self.command_palette = false;
         self.editing_host = None;
+        self.host_error_field = None;
         self.creating_tab = false;
         self.editing_session = None;
         self.home_task = None;
@@ -1651,6 +1714,7 @@ impl AppView {
     ) {
         let title = title.into();
         self.message = None;
+        self.host_error_field = None;
         self.need_focus = false;
         let owner = cx.entity();
         let kind = if self.settings_ui.host_form {
@@ -1673,22 +1737,24 @@ impl AppView {
             let height: f32 = match kind {
                 ModalKind::Settings => 720.,
                 ModalKind::Host if local_host => 220.,
-                ModalKind::Host => 390.,
+                ModalKind::Host => 460.,
                 ModalKind::Commands => 410.,
                 ModalKind::ThemeEditor => 460.,
                 ModalKind::NewTab => 360.,
             };
             let height = height.min((f32::from(window.viewport_size().height) - 180.).max(180.));
+            let width: f32 = match kind {
+                ModalKind::Settings => 1120.,
+                ModalKind::Host => 560.,
+                ModalKind::Commands => 620.,
+                ModalKind::ThemeEditor => 640.,
+                ModalKind::NewTab => 560.,
+            };
+            let width = width.min((f32::from(window.viewport_size().width) - 32.).max(0.));
             let owner = owner.clone();
             workspace_dialog(dialog, cx)
                 .title(title.clone())
-                .width(px(match kind {
-                    ModalKind::Settings => 1120.,
-                    ModalKind::Host => 560.,
-                    ModalKind::Commands => 620.,
-                    ModalKind::ThemeEditor => 640.,
-                    ModalKind::NewTab => 560.,
-                }))
+                .width(px(width))
                 .margin_top(
                     if matches!(
                         kind,
@@ -2174,6 +2240,23 @@ impl AppView {
         cx.notify();
     }
     fn keyboard(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspace_mode == WorkspaceMode::Git
+            && !self.settings
+            && !self.command_palette
+            && !self.creating_tab
+            && event.keystroke.key.eq_ignore_ascii_case("c")
+            && event.keystroke.modifiers.control
+            && !event.keystroke.modifiers.alt
+            && !event.keystroke.modifiers.platform
+        {
+            let text = gpui_kit::base::TextSelection::selected_text(window, cx);
+            if !text.is_empty() {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                cx.stop_propagation();
+                window.prevent_default();
+                return;
+            }
+        }
         if self.settings && self.settings_ui.recording.is_some() {
             self.record_shortcut(event, window, cx);
             return;
@@ -2234,7 +2317,24 @@ impl AppView {
             Shortcut::CommandPalette => {
                 self.show_command_palette(window, cx);
             }
+            Shortcut::TerminalSearch => {
+                self.show_terminal(cx);
+                if let Some(w) = self.hosts[self.active].snapshot.window()
+                    && let Some(view) = self.hosts[self.active].views.get(&w.active_pane)
+                {
+                    view.update(cx, |view, cx| view.open_search(window, cx));
+                }
+            }
             Shortcut::Copy | Shortcut::Paste => {
+                if self.workspace_mode == WorkspaceMode::Git {
+                    if shortcut == Shortcut::Copy {
+                        let text = gpui_kit::base::TextSelection::selected_text(window, cx);
+                        if !text.is_empty() {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        }
+                    }
+                    return;
+                }
                 if let Some(w) = self.hosts[self.active].snapshot.window() {
                     if let Some(view) = self.hosts[self.active].views.get(&w.active_pane) {
                         view.update(cx, |view, cx| {
@@ -2904,13 +3004,17 @@ impl AppView {
                 .on_click(cx.listener(|this, _, _, cx| this.show_terminal(cx))),
             )
             .child(
-                icon_button("mode-files", IconName::FolderOpen, "Explorer · Ctrl+2")
-                    .flex_1()
-                    .h(px(30.))
-                    .when(self.workspace_mode == WorkspaceMode::Files, |button| {
-                        button.bg(rgb(p.selected)).text_color(rgb(p.text))
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| this.show_files(cx))),
+                icon_button(
+                    "mode-files",
+                    IconName::FolderOpen,
+                    crate::t!("ws.mode_files_tip"),
+                )
+                .flex_1()
+                .h(px(30.))
+                .when(self.workspace_mode == WorkspaceMode::Files, |button| {
+                    button.bg(rgb(p.selected)).text_color(rgb(p.text))
+                })
+                .on_click(cx.listener(|this, _, _, cx| this.show_files(cx))),
             )
             .child(
                 icon_button(
@@ -3183,13 +3287,13 @@ impl AppView {
             let drop_owner = owner.clone();
             let drop_target = path.clone();
             ListItem::new(SharedString::from(format!("file-entry-{index}")))
-                .h(px(26.))
-                .min_h(px(26.))
+                .h(px(style::ROW_HEIGHT))
+                .min_h(px(style::ROW_HEIGHT))
                 .px_1()
                 .py_0()
                 .rounded_sm()
                 .overflow_hidden()
-                .text_size(px(12.))
+                .text_size(px(13.))
                 .line_height(relative(1.35))
                 .on_mouse_down(MouseButton::Right, move |_, _, _| {
                     *target.borrow_mut() = enabled.then(|| (target_path.clone(), is_folder));
@@ -3287,20 +3391,21 @@ impl AppView {
                 if self.workspace_mode == WorkspaceMode::Files {
                     let owner = cx.entity().downgrade();
                     actions.push(
-                        Button::new("explorer-menu")
-                            .ghost()
-                            .small()
-                            .h(px(22.))
-                            .w(px(22.))
-                            .label("⋯")
-                            .dropdown_menu(move |menu, _, cx| {
-                                let Some(app) = owner.upgrade() else {
-                                    return menu;
-                                };
-                                let app = app.read(cx);
-                                app.explorer_menu(menu, app.cwd.clone(), true, true, owner.clone())
-                            })
-                            .into_any_element(),
+                        icon_button(
+                            "explorer-menu",
+                            IconName::Ellipsis,
+                            crate::t!("file.actions"),
+                        )
+                        .h(px(22.))
+                        .w(px(22.))
+                        .dropdown_menu(move |menu, _, cx| {
+                            let Some(app) = owner.upgrade() else {
+                                return menu;
+                            };
+                            let app = app.read(cx);
+                            app.explorer_menu(menu, app.cwd.clone(), true, true, owner.clone())
+                        })
+                        .into_any_element(),
                     );
                 }
                 actions.push(
@@ -3319,7 +3424,7 @@ impl AppView {
             }
         }
         div()
-            .h(px(30.))
+            .h(px(style::TOOLBAR_HEIGHT))
             .flex_shrink_0()
             .px_2()
             .flex()
@@ -3327,7 +3432,14 @@ impl AppView {
             .gap_1()
             .text_size(px(13.))
             .text_color(rgb(self.palette.text))
-            .child(div().flex_1().min_w_0().truncate().child(title))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(title),
+            )
             .child(
                 div()
                     .flex()
@@ -3433,7 +3545,7 @@ impl AppView {
                 .flex_col()
                 .child(
                     div()
-                        .h(px(30.))
+                        .h(px(style::TOOLBAR_HEIGHT))
                         .flex_shrink_0()
                         .px_3()
                         .flex()
@@ -3441,7 +3553,7 @@ impl AppView {
                         .overflow_hidden()
                         .border_b_1()
                         .border_color(rgb(self.palette.border))
-                        .text_size(px(11.))
+                        .text_size(px(12.))
                         .line_height(relative(1.2))
                         .child(
                             div().min_w_0().flex_1().overflow_hidden().child(
@@ -3556,27 +3668,18 @@ impl AppView {
                 })
                 .into_any_element()
         } else {
-            div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap_2()
-                .text_size(px(12.))
-                .line_height(relative(1.2))
-                .text_color(rgb(self.palette.muted))
-                .child(
-                    Icon::new(IconName::FileCode)
-                        .size(px(24.))
-                        .text_color(rgb(self.palette.muted)),
-                )
-                .child(
-                    self.file_loading
-                        .clone()
-                        .unwrap_or_else(|| crate::t!("ws.pick_file").to_string()),
-                )
-                .into_any_element()
+            style::empty_state(
+                if self.file_loading.is_some() {
+                    IconName::Clock
+                } else {
+                    IconName::FileCode
+                },
+                self.file_loading
+                    .clone()
+                    .unwrap_or_else(|| crate::t!("ws.pick_file").to_string()),
+                self.palette,
+            )
+            .into_any_element()
         }
     }
     fn sync_metrics(&mut self, cx: &mut Context<Self>) {
@@ -3728,7 +3831,7 @@ impl AppView {
             .into_any_element()
     }
     fn status_bar(&self, snapshot: &Snapshot, window: &Window, cx: &Context<Self>) -> AnyElement {
-        let line_height = chrome_line_height(window, 11.);
+        let line_height = chrome_line_height(window, 12.);
         let height = px(CHROME_BAR_HEIGHT);
         match self.workspace_mode {
             WorkspaceMode::Git => StatusBar::new()
@@ -3739,7 +3842,7 @@ impl AppView {
                 .bg(rgb(self.palette.panel))
                 .border_color(rgb(self.palette.border))
                 .text_color(rgb(self.palette.muted))
-                .text_size(px(11.))
+                .text_size(px(12.))
                 .flex_shrink_0()
                 .line_height(line_height)
                 .left(self.cwd.display().to_string())
@@ -3760,7 +3863,7 @@ impl AppView {
                     .bg(rgb(self.palette.panel))
                     .border_color(rgb(self.palette.border))
                     .text_color(rgb(self.palette.muted))
-                    .text_size(px(11.))
+                    .text_size(px(12.))
                     .flex_shrink_0()
                     .line_height(line_height)
                     .left(div().min_w_0().flex_1().truncate().child(format!(
@@ -3793,7 +3896,7 @@ impl AppView {
                 .bg(rgba(0))
                 .border_color(rgba(0))
                 .flex_shrink_0()
-                .text_size(px(11.))
+                .text_size(px(12.))
                 .line_height(line_height)
                 .text_color(rgb(self.terminal_palette.muted))
                 .left(self.terminal_status_strip(snapshot, metrics_config::Side::Left))
@@ -3940,6 +4043,43 @@ impl AppView {
             )
             .into_any_element()
     }
+    fn host_validation_error(
+        &mut self,
+        field: HostField,
+        message: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.host_error_field = Some(field);
+        self.message = Some(message);
+        let input = match field {
+            HostField::Name => &self.label,
+            HostField::Destination => &self.destination,
+            HostField::User => &self.user,
+            HostField::Port => &self.port,
+            HostField::IdentityFile => &self.identity_file,
+        };
+        input.update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
+    fn host_field(&self, field: HostField, label: impl Into<SharedString>) -> Field {
+        let error = (self.host_error_field == Some(field))
+            .then(|| self.message.clone())
+            .flatten();
+        let color = self.palette.error;
+        Field::new()
+            .label(label.into())
+            .when_some(error, |field, error| {
+                field.description_fn(move |_, _| {
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(color))
+                        .child(error.clone())
+                })
+            })
+    }
+
     fn connection_editor(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = self.palette;
         let name_only = self.editing_host == Some(0);
@@ -3947,50 +4087,54 @@ impl AppView {
             .small()
             .columns(2)
             .child(
-                Field::new()
-                    .label(crate::t!("ws.field_name").to_string())
+                self.host_field(HostField::Name, crate::t!("ws.field_name").into_owned())
                     .col_span(2)
                     .child(Input::new(&self.label)),
             )
             .child(
-                Field::new()
-                    .label(crate::t!("ws.field_host").to_string())
-                    .visible(!name_only)
-                    .child(Input::new(&self.destination)),
+                self.host_field(
+                    HostField::Destination,
+                    crate::t!("ws.field_host").into_owned(),
+                )
+                .required(true)
+                .visible(!name_only)
+                .child(Input::new(&self.destination)),
             )
             .child(
-                Field::new()
-                    .label(crate::t!("ws.field_user").to_string())
+                self.host_field(HostField::User, crate::t!("ws.field_user").into_owned())
+                    .required(true)
                     .visible(!name_only)
                     .child(Input::new(&self.user)),
             )
             .child(
-                Field::new()
-                    .label(crate::t!("ws.field_port").to_string())
+                self.host_field(HostField::Port, crate::t!("ws.field_port").into_owned())
                     .visible(!name_only)
                     .child(Input::new(&self.port)),
-            )
-            .child(
-                Field::new()
-                    .label(crate::t!("ws.field_identity_file").to_string())
-                    .col_span(2)
-                    .visible(!name_only)
-                    .child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .child(Input::new(&self.identity_file).flex_1())
-                            .child(
-                                icon_button(
-                                    "browse-identity",
-                                    IconName::FolderOpen,
-                                    crate::t!("ws.browse_identity_file"),
-                                )
-                                .on_click(cx.listener(
-                                    |this, _, window, cx| this.browse_identity_file(window, cx),
-                                )),
-                            ),
-                    ),
+            );
+        let authentication =
+            Form::vertical().small().columns(2).child(
+                self.host_field(
+                    HostField::IdentityFile,
+                    crate::t!("ws.field_identity_file").into_owned(),
+                )
+                .col_span(2)
+                .visible(!name_only)
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(Input::new(&self.identity_file).flex_1())
+                        .child(
+                            icon_button(
+                                "browse-identity",
+                                IconName::FolderOpen,
+                                crate::t!("ws.browse_identity_file"),
+                            )
+                            .on_click(cx.listener(
+                                |this, _, window, cx| this.browse_identity_file(window, cx),
+                            )),
+                        ),
+                ),
             );
         div()
             .size_full()
@@ -4008,9 +4152,20 @@ impl AppView {
                     .flex()
                     .flex_col()
                     .gap_3()
+                    .when(!name_only, |v| {
+                        v.child(style::section_heading(
+                            crate::t!("ws.connection_info").into_owned(),
+                            p,
+                        ))
+                    })
                     .child(form)
                     .when(!name_only, |v| {
                         v.child(
+                            style::section_heading(crate::t!("ssh.authentication").into_owned(), p)
+                                .mt_2(),
+                        )
+                        .child(authentication)
+                        .child(
                             Checkbox::new("use-tmux")
                                 .label(crate::t!("ws.enable_tmux").into_owned())
                                 .checked(self.use_tmux)
@@ -4020,9 +4175,14 @@ impl AppView {
                                 })),
                         )
                     })
-                    .when_some(self.message.clone(), |v, message| {
-                        v.child(div().min_w_0().text_color(rgb(p.error)).child(message))
-                    }),
+                    .when_some(
+                        self.message
+                            .clone()
+                            .filter(|_| self.host_error_field.is_none()),
+                        |v, message| {
+                            v.child(style::notice(IconName::CircleAlert, message, p.error))
+                        },
+                    ),
             )
             .child(
                 div()
@@ -4031,8 +4191,13 @@ impl AppView {
                     .justify_end()
                     .flex_shrink_0()
                     .gap_3()
+                    .pt_3()
+                    .border_t_1()
+                    .border_color(rgb(p.border))
                     .child(
                         Button::new("cancel-editor")
+                            .small()
+                            .h(px(style::CONTROL_HEIGHT))
                             .label(crate::t!("ws.cancel"))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.cancel_host_editor(window, cx)
@@ -4057,6 +4222,7 @@ impl AppView {
 }
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.subscribe_terminal_links(window, cx);
         for (index, host) in self.hosts.iter().enumerate() {
             let active = (index == self.active && self.workspace_mode == WorkspaceMode::Terminal)
                 .then(|| host.snapshot.window())
@@ -4099,6 +4265,19 @@ impl Render for AppView {
             } else {
                 state.language
             };
+        }
+        if let Some((path, position)) = self.file_link_position.take()
+            && self.open_file.as_ref() == Some(&path)
+            && self.image_preview.is_none()
+        {
+            self.preview_mode = false;
+            self.file_editor.update(cx, |editor, cx| {
+                editor.set_cursor_position(
+                    gpui_kit::component::input::Position::new(position.0, position.1),
+                    window,
+                    cx,
+                )
+            });
         }
         #[cfg(windows)]
         if self.workspace_mode != WorkspaceMode::Files
@@ -4150,7 +4329,11 @@ impl Render for AppView {
         let p = self.palette;
         let snapshot = self.hosts[self.active].snapshot.clone();
         let current = snapshot.window();
-        let message = self.message.clone().or_else(|| snapshot.message.clone());
+        let message = self
+            .message
+            .clone()
+            .filter(|_| !self.settings_ui.host_form)
+            .or_else(|| snapshot.message.clone());
         let body = if self.workspace_mode == WorkspaceMode::Terminal {
             let surface = self.surface(cx);
             let owner = cx.entity().downgrade();
@@ -4260,7 +4443,11 @@ impl Render for AppView {
             .flex_col()
             .bg(content_background)
             .when_some(message, |view, message| {
-                view.child(div().px_4().py_2().text_color(rgb(p.error)).child(message))
+                view.child(
+                    style::notice(IconName::CircleAlert, message, p.error)
+                        .px_4()
+                        .py_2(),
+                )
             })
             .child(
                 div()

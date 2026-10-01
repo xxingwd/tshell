@@ -2,6 +2,7 @@ _version: 1
 app:
   "window_failed": "Could not create the TShell window"
 shortcut:
+  "terminal_search": "Search Terminal Output"
   "command_palette": "Open Command Palette"
   "show_terminal": "Open Terminal"
   "show_files": "Open Explorer"
@@ -89,6 +90,7 @@ ws:
   "mode_terminal_tip": "Terminal · Ctrl+1"
   "mode_terminal": "Terminal"
   "mode_files": "Files"
+  "mode_files_tip": "Explorer · Ctrl+2"
   "mode_git": "Git"
   "mode_git_tip": "Git Changes · Ctrl+3"
   "host_add_menu": "Add Host"
@@ -219,7 +221,17 @@ settings:
   "language_system": "Follow System"
   "language_zh_cn": "简体中文"
   "language_en": "English"
+terminal_search:
+  "placeholder": "Search output"
+  "count": "%{current} / %{count}"
+  "invalid": "Invalid regular expression"
+  "case": "Match case"
+  "regex": "Regular expression"
+  "previous": "Previous match"
+  "next": "Next match"
+  "close": "Close search"
 term:
+  "notice_closed": "This terminal has been closed."
   "shell": "Shell"
   "destination_required": "Enter an SSH host or user@host"
   "destination_whitespace": "Host names cannot contain whitespace or command options"
@@ -307,8 +319,12 @@ editor:
   "select_all": "Select All"
   "replace": "Replace"
   "replace_all": "Replace All"
+  "previous_match": "Previous match"
+  "next_match": "Next match"
+  "close_search": "Close search"
   "item_count": "%{count} items"
 file:
+  "actions": "File actions"
   "reading_directory": "Reading directory…"
   "read_directory_failed": "Could not read the directory: %{error}"
   "unsaved_title": "The current file has unsaved changes"
@@ -391,6 +407,11 @@ explorer:
   "source_name_missing": "The source has no file name"
   "operation_failed": "The operation failed: %{error}"
 transfer:
+  "hours_minutes": "%{hours}h %{minutes}m"
+  "minutes_seconds": "%{minutes}m %{seconds}s"
+  "seconds": "%{seconds}s"
+  "retry": "Retry transfer"
+  "rate_eta": "%{speed} · %{remaining} remaining"
   "title": "Transfers"
   "files": "%{count} files"
   "queue_full": "The transfer queue is full"
@@ -496,6 +517,7 @@ win:
   "runtime_directory": "Could not locate the terminal runtime directory"
   "runtime_load": "Could not load the terminal runtime"
 updates:
+  "retry": "Retry"
   title: "Updates"
   disabled: "Automatic updates are unavailable in this build."
   idle: "Updates are checked automatically in the background."

@@ -1,3 +1,4 @@
+mod search;
 mod selection_scroll;
 use crate::{
     appearance::Palette,
@@ -142,6 +143,11 @@ pub struct TerminalView {
     cursor_blinking: bool,
     cursor_blink_task: Option<Task<()>>,
     _output_task: Task<()>,
+    search: Option<search::SearchUi>,
+    search_task: Option<Task<()>>,
+    pub(crate) link_subscribed: bool,
+    link_pressed: bool,
+    hovered_link: Option<Vec<(usize, usize)>>,
 }
 
 impl TerminalView {
@@ -214,6 +220,11 @@ impl TerminalView {
             cursor_blinking: false,
             cursor_blink_task: None,
             _output_task: output_task,
+            search: None,
+            search_task: None,
+            link_subscribed: false,
+            link_pressed: false,
+            hovered_link: None,
         }
     }
 
@@ -228,6 +239,7 @@ impl TerminalView {
             if revision != self.revision {
                 self.revision = revision;
                 self.request_snapshot(cx);
+                self.refresh_search(cx);
                 return true;
             }
         }
@@ -236,6 +248,9 @@ impl TerminalView {
 
     fn apply_snapshot(&mut self, snapshot: Arc<RenderSnapshot>, cx: &mut Context<Self>) -> bool {
         let visual_changed = !self.snapshot.same_visual(&snapshot);
+        if visual_changed {
+            self.hovered_link = None;
+        }
         let cursor_changed = self.snapshot.cursor != snapshot.cursor;
         self.snapshot = snapshot;
         if cursor_changed {
@@ -386,6 +401,19 @@ impl TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let hover = if event.modifiers.control && self.bounds.contains(&event.position) {
+            let cell = self.viewport_cell(event.position);
+            crate::terminal::links::hovered_cells(&self.snapshot, cell.0, cell.1)
+        } else {
+            None
+        };
+        if hover != self.hovered_link {
+            self.hovered_link = hover;
+            cx.notify();
+        }
+        if event.modifiers.control && !self.selecting {
+            return;
+        }
         if !self.selecting {
             let mode = self.session_mode();
             if event.modifiers.shift || !mouse_reporting(mode) {
@@ -467,8 +495,33 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> bool {
         window.focus(&self.focus, cx);
+        if event.button == MouseButton::Left {
+            self.link_pressed = false;
+        }
         self.finish_selection(cx);
         let mode = self.session_mode();
+
+        if event.button == MouseButton::Left && event.modifiers.control {
+            self.link_pressed = true;
+            self.reported_button = None;
+            let point = self.grid_anchor(event.position).point;
+            let revision = self.snapshot.revision;
+            if let Some(session) = self.session.clone() {
+                cx.spawn(async move |view, cx| {
+                    let link = cx
+                        .background_executor()
+                        .spawn(async move { session.link_at(point, revision) })
+                        .await;
+                    if let Some(link) = link {
+                        let _ = view.update(cx, |_, cx| cx.emit(link));
+                    }
+                })
+                .detach();
+            }
+            window.prevent_default();
+            cx.stop_propagation();
+            return true;
+        }
 
         if event.button == MouseButton::Left && (event.modifiers.shift || !mouse_reporting(mode)) {
             let anchor = self.grid_anchor(event.position);
@@ -513,6 +566,10 @@ impl TerminalView {
     }
 
     fn mouse_up(&mut self, event: &MouseUpEvent, cx: &mut Context<Self>) -> bool {
+        if event.button == MouseButton::Left && self.link_pressed {
+            self.link_pressed = false;
+            return true;
+        }
         if self.selecting {
             self.finish_selection(cx);
             return false;
@@ -587,6 +644,7 @@ impl TerminalView {
         }
         if !focused {
             self.finish_selection(cx);
+            self.link_pressed = false;
         }
         self.cursor_focused = focused;
         self.restart_cursor_blink(cx);
@@ -888,12 +946,28 @@ impl TerminalView {
                 self.paint_span(bounds, row, span, window);
             }
         }
+        self.paint_search(bounds, window);
         for span in &frame.selection {
             self.paint_span(bounds, span.row, span, window);
         }
         let paints_before = self.row_paints.get();
         for element in &mut frame.text_elements {
             element.paint(window, cx);
+        }
+        if let Some(cells) = &self.hovered_link {
+            for &(row, col) in cells {
+                window.paint_quad(fill(
+                    Bounds::new(
+                        bounds.origin
+                            + point(
+                                px(col as f32 * self.cell_width),
+                                px((row + 1) as f32 * self.line_height - 1.),
+                            ),
+                        size(px(self.cell_width), px(1.)),
+                    ),
+                    rgb(self.palette.accent),
+                ));
+            }
         }
         tracing::trace!(target: "tshell::render", micros = started.elapsed().as_micros() as u64,
             painted_text_rows = self.row_paints.get() - paints_before,
@@ -963,6 +1037,8 @@ impl TerminalView {
     }
 }
 
+impl EventEmitter<crate::terminal::links::OpenLink> for TerminalView {}
+
 impl Focusable for TerminalView {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
@@ -982,6 +1058,7 @@ impl Render for TerminalView {
         let prepare_entity = cx.entity();
         let paint_entity = cx.entity();
         let notice = self.failure.clone();
+        let search_bar = self.search_bar(cx);
         div()
             .id("terminal-surface")
             .relative()
@@ -991,7 +1068,11 @@ impl Render for TerminalView {
             .overflow_hidden()
             .track_focus(&self.focus)
             .key_context(KEY_CONTEXT)
-            .cursor(CursorStyle::Arrow)
+            .cursor(if self.hovered_link.is_some() {
+                CursorStyle::PointingHand
+            } else {
+                CursorStyle::Arrow
+            })
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if !this.preedit.is_empty() {
                     return;
@@ -1105,6 +1186,7 @@ impl Render for TerminalView {
                 )
                 .size_full(),
             )
+            .children(search_bar)
             .when_some(notice, |view, notice| {
                 view.child(
                     Alert::error("terminal-error", notice)
@@ -1266,3 +1348,5 @@ mod tests {
 mod render_check;
 #[cfg(debug_assertions)]
 pub(crate) use render_check::run_render_check;
+#[cfg(debug_assertions)]
+pub(crate) use search::check_search_links;

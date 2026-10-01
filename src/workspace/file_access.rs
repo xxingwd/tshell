@@ -168,6 +168,16 @@ impl AppView {
     }
 
     pub(super) fn open_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_path_at(path, None, window, cx);
+    }
+
+    pub(super) fn open_path_at(
+        &mut self,
+        path: PathBuf,
+        position: Option<(u32, u32)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.hosts[self.active].config.is_some() && self.hosts[self.active].backend.is_none() {
             return;
         }
@@ -175,6 +185,7 @@ impl AppView {
             self.file_request += 1;
             self.file_loading = None;
             self.workspace_mode = WorkspaceMode::Files;
+            self.file_link_position = position.map(|position| (path, position));
             self.need_focus = true;
             cx.notify();
             return;
@@ -196,7 +207,7 @@ impl AppView {
                 if receiver.await == Ok(1) {
                     let _ = view.update_in(cx, |this, window, cx| {
                         if this.active_file_session == key {
-                            this.start_open_file(path, window, cx);
+                            this.start_open_file(path, position, window, cx);
                         }
                     });
                 }
@@ -204,10 +215,16 @@ impl AppView {
             .detach();
             return;
         }
-        self.start_open_file(path, window, cx);
+        self.start_open_file(path, position, window, cx);
     }
 
-    fn start_open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    fn start_open_file(
+        &mut self,
+        path: PathBuf,
+        position: Option<(u32, u32)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let original_text = self.file_editor.read(cx).value().to_string();
         self.file_request += 1;
         let request = self.file_request;
@@ -270,7 +287,7 @@ impl AppView {
                         let preview_mode = preview::can_preview(&language, &text);
                         let preview = preview_mode.then(|| preview::parse(&language, &text));
                         this.pending_file_state = Some(SessionFileState {
-                            path: Some(path),
+                            path: Some(path.clone()),
                             saved_text: text.clone(),
                             text,
                             image,
@@ -279,6 +296,7 @@ impl AppView {
                             language,
                             dirty: false,
                         });
+                        this.file_link_position = position.map(|position| (path, position));
                         this.workspace_mode = WorkspaceMode::Files;
                         this.need_focus = true;
                     }

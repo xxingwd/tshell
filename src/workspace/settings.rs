@@ -102,16 +102,19 @@ fn setting_row(
     div()
         .w_full()
         .flex()
+        .flex_wrap()
         .items_center()
         .justify_between()
         .gap_3()
-        .min_h(px(44.))
+        .min_h(px(52.))
+        .py_2()
         .child(
             div()
                 .flex()
                 .flex_col()
                 .flex_1()
-                .min_w_0()
+                .min_w(px(160.))
+                .gap_1()
                 .text_size(px(13.))
                 .child(label)
                 .when_some(hint, |view, hint| {
@@ -123,7 +126,14 @@ fn setting_row(
                     )
                 }),
         )
-        .child(div().w(px(290.)).flex_shrink_0().child(control))
+        .child(
+            div()
+                .w(px(280.))
+                .max_w_full()
+                .flex_shrink_0()
+                .ml_auto()
+                .child(control),
+        )
         .into_any_element()
 }
 
@@ -383,7 +393,6 @@ impl AppView {
         div()
             .flex()
             .flex_col()
-            .gap_3()
             .children(self.hosts.iter().enumerate().map(|(index, host)| {
                 let detail = host
                     .config
@@ -402,6 +411,19 @@ impl AppView {
                     .items_center()
                     .gap_3()
                     .min_h(px(48.))
+                    .py_2()
+                    .border_b_1()
+                    .border_color(rgb(p.border))
+                    .child(
+                        Icon::new(if host.config.is_some() {
+                            IconName::Server
+                        } else {
+                            IconName::Monitor
+                        })
+                        .size(px(16.))
+                        .flex_shrink_0()
+                        .text_color(rgb(p.muted)),
+                    )
                     .child(
                         div()
                             .flex_1()
@@ -433,12 +455,14 @@ impl AppView {
                         )),
                     )
                     .child(
-                        Button::new(("settings-edit-host", index))
-                            .small()
-                            .label(crate::t!("settings.edit"))
-                            .on_click(cx.listener(move |app, _, window, cx| {
-                                app.edit_host(index, window, cx)
-                            })),
+                        icon_button(
+                            ("settings-edit-host", index),
+                            IconName::Pencil,
+                            crate::t!("settings.edit"),
+                        )
+                        .on_click(
+                            cx.listener(move |app, _, window, cx| app.edit_host(index, window, cx)),
+                        ),
                     )
                     .when(index != 0, |row| {
                         row.child(
@@ -1467,11 +1491,14 @@ impl AppView {
             .child(
                 div()
                     .id(("metric-grip", metric as usize))
-                    .px_2()
-                    .py_1()
+                    .w(px(28.))
+                    .h(px(28.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
                     .cursor(CursorStyle::OpenHand)
                     .text_color(rgb(self.palette.muted))
-                    .child("⠿")
+                    .child(Icon::new(IconName::GripVertical).size(px(14.)))
                     .tooltip(|window, cx| {
                         gpui_kit::component::tooltip::Tooltip::new(
                             crate::t!("settings.metrics_drag").into_owned(),
@@ -1535,6 +1562,9 @@ impl AppView {
         Settings::new(SharedString::from(format!(
             "workspace-settings-{selected_page}"
         )))
+        .small()
+        .sidebar_width(px(190.))
+        .sidebar_size_range(px(168.)..px(248.))
         .default_selected_index(SelectIndex {
             page_ix: selected_page,
             group_ix: None,

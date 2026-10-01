@@ -53,6 +53,14 @@ impl AppView {
             self.updater.state,
             State::Checking | State::Downloading(_) | State::Disabled
         );
+        let icon = match self.updater.state {
+            State::Checking => IconName::Clock,
+            State::Downloading(_) => IconName::Download,
+            State::Current | State::Ready(_) => IconName::CircleCheck,
+            State::Failed(_) => IconName::CircleAlert,
+            State::Disabled | State::Idle => IconName::Info,
+        };
+        let failed = matches!(self.updater.state, State::Failed(_));
         div()
             .flex()
             .flex_col()
@@ -60,12 +68,22 @@ impl AppView {
             .child(
                 div()
                     .text_size(px(16.))
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child(format!("TShell {}", env!("CARGO_PKG_VERSION"))),
             )
-            .child(status)
+            .child(style::notice(
+                icon,
+                status,
+                if failed {
+                    self.palette.error
+                } else {
+                    self.palette.text
+                },
+            ))
             .child(
                 div()
                     .text_color(rgb(self.palette.muted))
+                    .text_size(px(12.))
                     .child(crate::t!("updates.hint")),
             )
             .child(
@@ -74,7 +92,14 @@ impl AppView {
                     .gap_2()
                     .child(
                         Button::new("check-update")
-                            .label(crate::t!("updates.check"))
+                            .small()
+                            .h(px(style::CONTROL_HEIGHT))
+                            .icon(IconName::RefreshCw)
+                            .label(if failed {
+                                crate::t!("updates.retry")
+                            } else {
+                                crate::t!("updates.check")
+                            })
                             .disabled(busy)
                             .on_click(cx.listener(|app, _, _, cx| {
                                 app.updater.check();
@@ -84,6 +109,8 @@ impl AppView {
                     .when(matches!(self.updater.state, State::Ready(_)), |view| {
                         view.child(
                             Button::new("restart-update")
+                                .small()
+                                .h(px(style::CONTROL_HEIGHT))
                                 .primary()
                                 .label(crate::t!("updates.restart"))
                                 .on_click(cx.listener(|app, _, window, cx| {

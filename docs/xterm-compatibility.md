@@ -131,13 +131,20 @@ of 32 requests feeds one native worker without blocking terminal reads; overflow
 is dropped. Titles over 1024 bytes and bodies over 8192 bytes are discarded.
 The VTE parser's 16-parameter OSC limit still applies to semicolon-heavy payloads.
 
-`notify-rust` 4.18.0 delivers Windows toast, macOS native, and Linux D-Bus
-notifications. Desktop permissions, notification settings and an available
-notification service remain required. Unpackaged Windows builds use the library's
-PowerShell application identity (the notification title still identifies TShell);
-a branded installer identity and click-to-focus behavior are not implemented.
+`tauri-winrt-notification` 0.7.3 delivers Windows toast with the branded
+`TShell.Desktop` identity. Activation callbacks locate the originating terminal
+using a process-local identity and focus its host/session/tab/split. Closed
+terminals produce a workspace notice; cold-start activation is not implemented.
+`notify-rust` 4.18.0 delivers macOS native and Linux D-Bus notifications, without
+pane activation on those platforms. Desktop permissions, notification settings
+and an available notification service remain required.
 OSC 99, actions, notification lifecycle replies, and tmux DCS passthrough are not
 implemented. Notifications are delivered whether the pane is focused or not.
+
+Terminal output search and Ctrl-click link opening are native workspace tools,
+described in [terminal tools](terminal-tools.md). They do not change terminal
+bytes, parser semantics, font metrics, or ordinary TUI mouse reporting. OSC 8
+metadata comes from the existing Alacritty grid; no new parity claim is made.
 
 Run `cargo test --locked terminal_notifications` for parser regression cases.
 Run `cargo test --locked notifications_native_smoke -- --ignored` in a desktop

@@ -6,6 +6,7 @@ use gpui_kit::Keystroke;
 pub enum Shortcut {
     CommandPalette,
     Copy,
+    TerminalSearch,
     Paste,
     ShowTerminal,
     ShowFiles,
@@ -52,6 +53,12 @@ impl Binding {
     }
 }
 pub const BINDINGS: &[Binding] = &[
+    Binding {
+        id: "terminal_search",
+        key: "shortcut.terminal_search",
+        action: Shortcut::TerminalSearch,
+        defaults: &["ctrl-shift-f"],
+    },
     Binding {
         id: "command_palette",
         key: "shortcut.command_palette",

@@ -1,11 +1,14 @@
 use super::git::{DiffLine, GitChange, LineKind};
+use super::git_selection::{DiffDocument, DiffSelection};
 use super::*;
+use std::{ops::Range, sync::Arc};
 
 pub(super) struct DiffView {
     pub(super) change: GitChange,
     pub(super) content: Result<DiffContent, String>,
     pub(super) scroll: UniformListScrollHandle,
     pub(super) horizontal: [ScrollHandle; 3],
+    pub(super) selection: [Entity<DiffSelection>; 3],
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -18,6 +21,8 @@ struct CodeLine {
     number: usize,
     text: String,
     changed: bool,
+    raw: String,
+    emphasis: Vec<Range<usize>>,
 }
 enum DiffRow {
     Code {
@@ -66,6 +71,8 @@ pub(super) struct DiffContent {
     columns: [usize; 2],
     compact: [Vec<VisibleRow>; 2],
     notice: String,
+    documents: [Arc<DiffDocument>; 3],
+    inline_emphasis: Vec<Vec<Range<usize>>>,
 }
 impl DiffContent {
     pub(super) fn new(lines: Vec<DiffLine>) -> Self {
@@ -80,7 +87,7 @@ impl DiffContent {
                 }
             } else {
                 let mut line = line.clone();
-                line.text = line.text.get(1..).unwrap_or_default().replace('\t', "    ");
+                line.text = line.text.get(1..).unwrap_or_default().to_owned();
                 inline.push(line);
             }
         }
@@ -133,11 +140,53 @@ impl DiffContent {
             })),
             compact_rows(inline.iter().map(|line| line.kind != LineKind::Context)),
         ];
+        let mut emphasis = BTreeMap::new();
+        for row in &rows {
+            if let DiffRow::Code { old, new } = row {
+                for (side, line) in [old, new].into_iter().enumerate() {
+                    if let Some(line) = line {
+                        emphasis.insert((side, line.number), line.emphasis.clone());
+                    }
+                }
+            }
+        }
+        let inline_emphasis = inline
+            .iter()
+            .map(|line| {
+                let key = match line.kind {
+                    LineKind::Removed => line.old.map(|n| (0, n)),
+                    LineKind::Added => line.new.map(|n| (1, n)),
+                    _ => None,
+                };
+                key.and_then(|key| emphasis.get(&key).cloned())
+                    .unwrap_or_default()
+            })
+            .collect();
+        let documents = std::array::from_fn(|pane| {
+            if pane == 2 {
+                DiffDocument::new(
+                    inline
+                        .iter()
+                        .map(|line| (line.kind != LineKind::Header).then(|| line.text.clone())),
+                )
+            } else {
+                DiffDocument::new(rows.iter().map(|row| {
+                    match row {
+                        DiffRow::Code { old, new } => (if pane == 0 { old } else { new })
+                            .as_ref()
+                            .map(|line| line.raw.clone()),
+                        DiffRow::Gap => None,
+                    }
+                }))
+            }
+        });
         Self {
             rows,
             inline,
             compact,
             columns,
+            documents,
+            inline_emphasis,
             notice: if binary {
                 crate::t!("git.binary_notice").to_string()
             } else {
@@ -150,9 +199,13 @@ impl DiffContent {
         let count = removed.len().max(added.len());
         let mut old = removed.drain(..);
         let mut new = added.drain(..);
-        rows.extend((0..count).map(|_| DiffRow::Code {
-            old: old.next(),
-            new: new.next(),
+        rows.extend((0..count).map(|_| {
+            let mut old = old.next();
+            let mut new = new.next();
+            if let (Some(old), Some(new)) = (&mut old, &mut new) {
+                (old.emphasis, new.emphasis) = character_changes(&old.raw, &new.raw);
+            }
+            DiffRow::Code { old, new }
         }));
     }
 }
@@ -258,13 +311,73 @@ mod tests {
         );
         assert_eq!(content.inline[5].kind, git::LineKind::Header);
     }
+
+    #[test]
+    fn character_highlights_preserve_unicode_byte_boundaries() {
+        let (old, new) = super::character_changes("\t你好 old value", "\t你好 new value");
+        assert_eq!(
+            old.iter()
+                .map(|range| &"\t你好 old value"[range.clone()])
+                .collect::<String>(),
+            "old"
+        );
+        assert_eq!(
+            new.iter()
+                .map(|range| &"\t你好 new value"[range.clone()])
+                .collect::<String>(),
+            "new"
+        );
+        let (old, new) = super::character_changes("中文", "中英");
+        assert_eq!(old, vec![3..6]);
+        assert_eq!(new, vec![3..6]);
+        assert_eq!(
+            super::character_changes("same", "same"),
+            (Vec::new(), Vec::new())
+        );
+        assert_eq!(
+            super::character_changes(&"a".repeat(20_000), "b"),
+            (Vec::new(), Vec::new())
+        );
+    }
 }
+fn character_changes(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+    if old.len().max(new.len()) > 16_384 {
+        return (Vec::new(), Vec::new());
+    }
+    let diff = similar::TextDiff::configure()
+        .timeout(Duration::from_millis(10))
+        .diff_chars(old, new);
+    let mut old_ranges = Vec::new();
+    let mut new_ranges = Vec::new();
+    let (mut old_index, mut new_index) = (0, 0);
+    for change in diff.iter_all_changes() {
+        let len = change.value().len();
+        match change.tag() {
+            similar::ChangeTag::Equal => {
+                old_index += len;
+                new_index += len;
+            }
+            similar::ChangeTag::Delete => {
+                old_ranges.push(old_index..old_index + len);
+                old_index += len;
+            }
+            similar::ChangeTag::Insert => {
+                new_ranges.push(new_index..new_index + len);
+                new_index += len;
+            }
+        }
+    }
+    (old_ranges, new_ranges)
+}
+
 impl CodeLine {
     fn new(number: Option<usize>, text: String, changed: bool) -> Self {
         Self {
             number: number.unwrap_or(0),
             text: text.get(1..).unwrap_or_default().replace('\t', "    "),
             changed,
+            raw: text.get(1..).unwrap_or_default().to_owned(),
+            emphasis: Vec::new(),
         }
     }
 }
@@ -278,6 +391,7 @@ impl AppView {
             change: change.clone(),
             scroll: UniformListScrollHandle::new(),
             horizontal: std::array::from_fn(|_| ScrollHandle::new()),
+            selection: std::array::from_fn(|_| DiffSelection::new(cx)),
             content: Err(crate::t!("git.reading_diff").to_string()),
         });
         cx.spawn_in(window, async move |view, cx| {
@@ -334,18 +448,18 @@ impl AppView {
             .w_full()
             .min_w_0()
             .overflow_hidden()
-            .h(px(26.))
-            .min_h(px(26.))
+            .h(px(style::ROW_HEIGHT))
+            .min_h(px(style::ROW_HEIGHT))
             .px_1()
             .py_0()
             .rounded_sm()
-            .text_size(px(12.))
+            .text_size(px(13.))
             .line_height(relative(1.35))
             .when(selected, |row| row.bg(rgb(p.selected)))
             .child(
                 div()
                     .w_full()
-                    .h(px(26.))
+                    .h(px(style::ROW_HEIGHT))
                     .min_w_0()
                     .flex()
                     .items_center()
@@ -471,6 +585,7 @@ impl AppView {
             content: Ok(content),
             scroll,
             horizontal,
+            selection,
             ..
         }) = &self.git_diff
         else {
@@ -478,6 +593,9 @@ impl AppView {
         };
         let p = self.terminal_palette;
         let pane = side.unwrap_or(2);
+        selection[pane].update(cx, |selection, _| {
+            selection.set_document(content.documents[pane].clone())
+        });
         let columns = side
             .map(|side| content.columns[side])
             .unwrap_or(content.columns[0].max(content.columns[1]));
@@ -497,6 +615,7 @@ impl AppView {
             cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
                 let Some(DiffView {
                     content: Ok(content),
+                    selection,
                     ..
                 }) = &this.git_diff
                 else {
@@ -637,7 +756,43 @@ impl AppView {
                                     .pl_2()
                                     .whitespace_nowrap()
                                     .text_color(rgb(p.text))
-                                    .child(text.to_owned()),
+                                    .w_full()
+                                    .min_w_0()
+                                    .child(DiffSelection::row(
+                                        selection[pane].clone(),
+                                        index,
+                                        if let Some(side) = side {
+                                            match &content.rows[index] {
+                                                DiffRow::Code { old, new } => {
+                                                    (if side == 0 { old } else { new })
+                                                        .as_ref()
+                                                        .map(|line| line.raw.clone())
+                                                        .unwrap_or_default()
+                                                }
+                                                DiffRow::Gap => String::new(),
+                                            }
+                                        } else {
+                                            text.to_owned()
+                                        },
+                                        if let Some(side) = side {
+                                            match &content.rows[index] {
+                                                DiffRow::Code { old, new } => {
+                                                    (if side == 0 { old } else { new })
+                                                        .as_ref()
+                                                        .map(|line| line.emphasis.clone())
+                                                        .unwrap_or_default()
+                                                }
+                                                DiffRow::Gap => Vec::new(),
+                                            }
+                                        } else {
+                                            content.inline_emphasis[index].clone()
+                                        },
+                                        this.font_family.clone().into(),
+                                        this.font_size.clamp(12., 17.),
+                                        p.text,
+                                        color.unwrap_or(p.text),
+                                        this.palette.selection,
+                                    )),
                             )
                             .into_any_element()
                     })
@@ -683,6 +838,7 @@ impl AppView {
                         self.git_diff_request
                     )))
                     .flex_1()
+                    .relative()
                     .min_h_0()
                     .w_full()
                     .overflow_x_scroll()
@@ -692,6 +848,7 @@ impl AppView {
                     .font_family(self.font_family.clone())
                     .text_size(px(self.font_size.clamp(12., 17.)))
                     .line_height(px(24.))
+                    .child(DiffSelection::surface(selection[pane].clone()))
                     .child(list),
             )
             .into_any_element()
@@ -700,15 +857,12 @@ impl AppView {
     pub(super) fn git_surface(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = self.palette;
         let Some(diff) = &self.git_diff else {
-            return div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(12.))
-                .text_color(rgb(p.muted))
-                .child(crate::t!("git.select_file"))
-                .into_any_element();
+            return style::empty_state(
+                IconName::GitBranch,
+                crate::t!("git.select_file").into_owned(),
+                p,
+            )
+            .into_any_element();
         };
         let path = diff.change.path.clone();
         let title = path
@@ -717,21 +871,12 @@ impl AppView {
             .to_string_lossy()
             .into_owned();
         let content = match &diff.content {
-            Err(message) => div()
+            Err(message) => style::notice(IconName::CircleAlert, message.clone(), p.error)
                 .p_3()
-                .text_size(px(12.))
-                .text_color(rgb(p.muted))
-                .child(message.clone())
                 .into_any_element(),
-            Ok(content) if content.rows.is_empty() => div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(12.))
-                .text_color(rgb(p.muted))
-                .child(content.notice.clone())
-                .into_any_element(),
+            Ok(content) if content.rows.is_empty() => {
+                style::empty_state(IconName::FileCode, content.notice.clone(), p).into_any_element()
+            }
             Ok(_) if self.git_diff_mode == DiffMode::Inline => self.diff_pane(None, cx),
             Ok(_) => div()
                 .size_full()
@@ -746,7 +891,7 @@ impl AppView {
             .flex_col()
             .child(
                 div()
-                    .h(px(32.))
+                    .h(px(style::TOOLBAR_HEIGHT))
                     .flex_shrink_0()
                     .px_3()
                     .flex()
@@ -762,38 +907,75 @@ impl AppView {
                     )
                     .child(div().flex_1().min_w_0().truncate().child(title))
                     .child(
-                        Button::new("diff-toggle-mode")
-                            .ghost()
-                            .small()
-                            .label(if self.git_diff_mode == DiffMode::Inline {
-                                crate::t!("git.side_by_side")
-                            } else {
-                                crate::t!("git.inline")
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                let next = if this.git_diff_mode == DiffMode::Inline {
-                                    DiffMode::SideBySide
-                                } else {
-                                    DiffMode::Inline
-                                };
-                                this.set_diff_mode(next, cx);
+                        icon_button("diff-copy", IconName::Copy, crate::t!("editor.copy"))
+                            .on_click(cx.listener(|_, _, window, cx| {
+                                let text = gpui_kit::base::TextSelection::selected_text(window, cx);
+                                if !text.is_empty() {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                                }
                             })),
                     )
                     .child(
-                        Button::new("diff-toggle-context")
-                            .ghost()
+                        ButtonGroup::new("diff-mode")
                             .small()
-                            .label(if self.git_diff_compact {
-                                crate::t!("git.full_file")
-                            } else {
-                                crate::t!("git.only_changes")
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.git_diff_compact = !this.git_diff_compact;
-                                if let Some(diff) = &mut this.git_diff {
-                                    diff.scroll = UniformListScrollHandle::new();
+                            .compact()
+                            .flex_shrink_0()
+                            .child(
+                                icon_button(
+                                    "diff-inline",
+                                    IconName::Rows2,
+                                    crate::t!("git.inline"),
+                                )
+                                .selected(self.git_diff_mode == DiffMode::Inline),
+                            )
+                            .child(
+                                icon_button(
+                                    "diff-side-by-side",
+                                    IconName::Columns2,
+                                    crate::t!("git.side_by_side"),
+                                )
+                                .selected(self.git_diff_mode == DiffMode::SideBySide),
+                            )
+                            .on_click(cx.listener(|this, indices: &Vec<usize>, _, cx| {
+                                if let Some(index) = indices.first() {
+                                    this.set_diff_mode(
+                                        if *index == 0 {
+                                            DiffMode::Inline
+                                        } else {
+                                            DiffMode::SideBySide
+                                        },
+                                        cx,
+                                    );
                                 }
-                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        ButtonGroup::new("diff-context")
+                            .small()
+                            .compact()
+                            .flex_shrink_0()
+                            .child(
+                                Button::new("diff-changes")
+                                    .h(px(style::CONTROL_HEIGHT))
+                                    .label(crate::t!("git.only_changes"))
+                                    .selected(self.git_diff_compact),
+                            )
+                            .child(
+                                Button::new("diff-full-file")
+                                    .h(px(style::CONTROL_HEIGHT))
+                                    .label(crate::t!("git.full_file"))
+                                    .selected(!self.git_diff_compact),
+                            )
+                            .on_click(cx.listener(|this, indices: &Vec<usize>, _, cx| {
+                                let Some(index) = indices.first() else { return };
+                                let compact = *index == 0;
+                                if this.git_diff_compact != compact {
+                                    this.git_diff_compact = compact;
+                                    if let Some(diff) = &mut this.git_diff {
+                                        diff.scroll = UniformListScrollHandle::new();
+                                    }
+                                    cx.notify();
+                                }
                             })),
                     )
                     .when(diff.change.label() != "D", |bar| {

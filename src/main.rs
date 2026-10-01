@@ -41,6 +41,11 @@ rust_i18n::i18n!("locales", fallback = "en");
 pub(crate) use rust_i18n::t;
 
 fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
+        )
+        .init();
     #[cfg(debug_assertions)]
     if let Some(output) = std::env::args()
         .skip_while(|arg| arg != "--workspace-ui-check")
@@ -57,11 +62,6 @@ fn main() {
         let passed = terminal_view::run_render_check(std::path::PathBuf::from(output));
         std::process::exit(if passed { 0 } else { 1 });
     }
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
-        )
-        .init();
     #[cfg(windows)]
     let _update_lease = update::startup();
     gpui_kit::application()

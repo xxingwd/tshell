@@ -18,6 +18,13 @@ The launcher shows pending or failed task counts and restores the expanded
 position when clicked. Each task has a separate cancel or clear button; long
 file names, paths, and errors are available in tooltips.
 
+Running tasks show sampled transfer speed and estimated remaining time when the
+total size and a nonzero rate are available. The estimate uses recent byte
+samples, excludes queue waiting time, and disappears when a transfer stalls.
+Failed and cancelled tasks offer an individual retry button. Retry keeps the
+same source/destination request but starts from zero with a fresh cancellation
+control; it does not resume partial contents.
+
 Queued and running tasks can be cancelled. Cancellation is cooperative between
 SFTP reads or writes; a running task is marked as cancelling until its current
 request returns. Partial local downloads and remote uploads are removed when a

@@ -13,7 +13,10 @@ Windows 通知使用独立 AUMID `TShell.Desktop`。首次发送时将内嵌 PNG
 
 此前仅设置 notify-rust 的 appname；该库的 Windows 实现在缺少 app_id 时使用
 `Toast::POWERSHELL_APP_ID`，因此通知会显示 PowerShell 的名称和图标。
-现在仍使用 Windows 原生通知布局，只更换来源名称和图标。尚未实现点击通知跳回对应终端。
+现在直接使用 tauri-winrt-notification 的 Windows 原生通知与点击回调。
+应用运行时，点击通知会激活窗口并定位原主机、会话、标签页和分屏；
+原终端已关闭时显示提示，不跳到复用相同分屏编号的新终端。
+点击回调使用进程内唯一终端标识；应用退出后的通知冷启动定位尚未实现。
 卸载时可移除以上专属注册表项和 branding 目录。已有通知不会改名，需使用新构建发送新通知。
 
 注册方式参考锁定依赖 tauri-winrt-notification 0.7.3 的 `examples/unpackaged_app.rs`。

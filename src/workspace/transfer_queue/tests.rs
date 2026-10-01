@@ -49,3 +49,49 @@ fn panel_stays_inside_smaller_viewport_after_dragging() {
         assert!(bounds.bottom() <= viewport.height - px(32.));
     }
 }
+
+#[test]
+fn retry_replaces_cancelled_control_and_clears_old_progress_and_error() {
+    use super::{TransferJob, TransferRequest, TransferState};
+    use crate::{tmux_client::HostConfig, workspace::remote_files};
+    let remote = remote_files::Session::new(HostConfig {
+        name: "retry".into(),
+        destination: "example.invalid".into(),
+        user: "test".into(),
+        port: None,
+        identity_file: None,
+        tmux: false,
+        socket: None,
+    });
+    let mut job = TransferJob {
+        id: 7,
+        host: "retry".into(),
+        session: None,
+        name: "file".into(),
+        request: TransferRequest::Download {
+            remote,
+            source: "/file".into(),
+            destination: "file".into(),
+        },
+        control: remote_files::TransferControl::new(),
+        progress: remote_files::TransferProgress {
+            transferred: 123,
+            ..Default::default()
+        },
+        state: TransferState::Cancelled,
+        error: Some("old error".into()),
+        started: None,
+        rate: Default::default(),
+    };
+    let old = job.control.clone();
+    old.cancel();
+    assert!(job.reset_for_retry());
+    assert!(old.is_cancelled());
+    assert!(!job.control.is_cancelled());
+    assert!(job.state == TransferState::Queued);
+    assert_eq!(job.progress.transferred, 0);
+    assert!(job.error.is_none());
+    assert_eq!(job.id, 7);
+    job.state = TransferState::Running;
+    assert!(!job.reset_for_retry());
+}

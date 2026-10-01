@@ -36,15 +36,15 @@ impl Notice {
         Some(Self { title, body })
     }
 
-    fn send(self) {
-        static SENDER: OnceLock<Option<SyncSender<Notice>>> = OnceLock::new();
+    fn send(self, target: Option<u64>) {
+        static SENDER: OnceLock<Option<SyncSender<(Notice, Option<u64>)>>> = OnceLock::new();
         let sender = SENDER.get_or_init(|| {
-            let (tx, rx) = mpsc::sync_channel::<Notice>(32);
+            let (tx, rx) = mpsc::sync_channel::<(Notice, Option<u64>)>(32);
             match std::thread::Builder::new()
                 .name("notifications".into())
                 .spawn(move || {
-                    for notice in rx {
-                        if let Err(error) = notice.show() {
+                    for (notice, target) in rx {
+                        if let Err(error) = notice.show(target) {
                             tracing::warn!(%error, "Could not show terminal notification");
                         }
                     }
@@ -58,30 +58,41 @@ impl Notice {
         });
         if let Some(sender) = sender {
             // Never block PTY/SSH reads on a slow desktop notification service.
-            if let Err(error) = sender.try_send(self) {
+            if let Err(error) = sender.try_send((self, target)) {
                 tracing::debug!(%error, "Terminal notification dropped");
             }
         }
     }
 
-    fn show(self) -> anyhow::Result<()> {
-        let mut notification = notify_rust::Notification::new();
-        notification.appname("TShell").summary(&self.title);
+    fn show(self, target: Option<u64>) -> anyhow::Result<()> {
         #[cfg(windows)]
         {
             crate::app_identity::register()?;
-            notification.app_id(crate::app_identity::APP_ID);
+            tauri_winrt_notification::Toast::new(crate::app_identity::APP_ID)
+                .title(&self.title)
+                .text1(&self.body)
+                .on_activated(move |_| {
+                    activate(target);
+                    Ok(())
+                })
+                .show()?;
         }
-        // Freedesktop bodies interpret markup; terminal text is literal.
-        #[cfg(all(unix, not(target_os = "macos")))]
-        let body = self
-            .body
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;");
-        #[cfg(any(windows, target_os = "macos"))]
-        let body = self.body;
-        notification.body(&body).show()?;
+        #[cfg(not(windows))]
+        {
+            let _ = target;
+            let mut notification = notify_rust::Notification::new();
+            notification.appname("TShell").summary(&self.title);
+            // Freedesktop bodies interpret markup; terminal text is literal.
+            #[cfg(all(unix, not(target_os = "macos")))]
+            let body = self
+                .body
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;");
+            #[cfg(any(windows, target_os = "macos"))]
+            let body = self.body;
+            notification.body(&body).show()?;
+        }
         Ok(())
     }
 }
@@ -90,8 +101,8 @@ impl Notice {
 pub(crate) struct Notifications(Parser);
 
 impl Notifications {
-    pub fn advance(&mut self, bytes: &[u8]) -> u64 {
-        self.parse(bytes, Notice::send)
+    pub fn advance_for(&mut self, bytes: &[u8], target: Option<u64>) -> u64 {
+        self.parse(bytes, |notice| notice.send(target))
     }
 
     fn parse(&mut self, bytes: &[u8], mut emit: impl FnMut(Notice)) -> u64 {
@@ -122,6 +133,25 @@ impl Notifications {
     }
 }
 
+fn activations() -> &'static (
+    async_channel::Sender<Option<u64>>,
+    async_channel::Receiver<Option<u64>>,
+) {
+    static CHANNEL: OnceLock<(
+        async_channel::Sender<Option<u64>>,
+        async_channel::Receiver<Option<u64>>,
+    )> = OnceLock::new();
+    CHANNEL.get_or_init(|| async_channel::bounded(32))
+}
+
+pub(crate) fn subscribe_activations() -> async_channel::Receiver<Option<u64>> {
+    activations().1.clone()
+}
+
+fn activate(target: Option<u64>) {
+    let _ = activations().0.try_send(target);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,7 +178,7 @@ mod tests {
             |n| notices.push(n),
         );
         assert_eq!(notices.len(), 1);
-        notices.pop().unwrap().show().unwrap();
+        notices.pop().unwrap().show(None).unwrap();
     }
 
     #[test]

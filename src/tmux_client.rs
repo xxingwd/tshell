@@ -576,8 +576,14 @@ fn run(
                 if pane_owners.get(&pane) != Some(&session) {
                     continue;
                 }
-                titles.advance(&pane, &bytes, &mut shared.lock().snapshot);
-                if let Some(screen) = shared.lock().screens.get(&pane).cloned() {
+                let screen = shared.lock().screens.get(&pane).cloned();
+                titles.advance_for(
+                    &pane,
+                    &bytes,
+                    &mut shared.lock().snapshot,
+                    screen.as_ref().map(|screen| screen.identity),
+                );
+                if let Some(screen) = screen {
                     if hydrating.contains(&pane) {
                         screen.remote_observe(&bytes);
                     } else {

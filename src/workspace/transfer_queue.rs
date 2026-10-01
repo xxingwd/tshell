@@ -1,4 +1,7 @@
 use super::*;
+mod rate;
+use rate::TransferRate;
+use std::time::Instant;
 
 const MAX_CONCURRENT_TRANSFERS: usize = 2;
 const MAX_TRANSFER_ROWS: usize = 32;
@@ -56,6 +59,23 @@ struct TransferJob {
     progress: remote_files::TransferProgress,
     state: TransferState,
     error: Option<String>,
+    started: Option<Instant>,
+    rate: TransferRate,
+}
+
+impl TransferJob {
+    fn reset_for_retry(&mut self) -> bool {
+        if !matches!(self.state, TransferState::Failed | TransferState::Cancelled) {
+            return false;
+        }
+        self.control = remote_files::TransferControl::new();
+        self.progress = Default::default();
+        self.state = TransferState::Queued;
+        self.error = None;
+        self.started = None;
+        self.rate = Default::default();
+        true
+    }
 }
 
 pub(super) struct TransferQueue {
@@ -244,6 +264,8 @@ impl AppView {
             progress: Default::default(),
             state: TransferState::Queued,
             error: None,
+            started: None,
+            rate: Default::default(),
         });
         self.set_transfer_panel_open(true, window, cx);
         self.pump_transfers(window, cx);
@@ -275,6 +297,8 @@ impl AppView {
                 break;
             };
             job.state = TransferState::Running;
+            job.started = Some(Instant::now());
+            job.rate.sample(Duration::ZERO, 0);
             let id = job.id;
             let request = job.request.clone();
             let control = job.control.clone();
@@ -324,6 +348,10 @@ impl AppView {
                                 TransferState::Running | TransferState::Cancelling
                             ) {
                                 let progress = job.control.snapshot();
+                                if let Some(started) = job.started {
+                                    changed |=
+                                        job.rate.sample(started.elapsed(), progress.transferred);
+                                }
                                 if job.progress != progress {
                                     job.progress = progress;
                                     changed = true;
@@ -404,6 +432,19 @@ impl AppView {
             .jobs
             .retain(|job| job.id != id || !job.state.finished());
         cx.notify();
+    }
+
+    fn retry_transfer(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .transfer_queue
+            .jobs
+            .iter_mut()
+            .find(|job| job.id == id)
+            .is_some_and(TransferJob::reset_for_retry)
+        {
+            self.set_transfer_panel_open(true, window, cx);
+            self.pump_transfers(window, cx);
+        }
     }
 
     fn set_transfer_panel_open(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -670,12 +711,33 @@ impl AppView {
                 p.muted
             };
             let id = job.id;
+            let rate_text = if job.state == TransferState::Running
+                && !job.progress.scanning
+                && job.rate.bytes_per_second > 0
+            {
+                let speed = format!("{}/s", transfer_bytes(job.rate.bytes_per_second));
+                if let Some(seconds) = job
+                    .rate
+                    .remaining(job.progress.transferred, job.progress.total)
+                {
+                    crate::t!(
+                        "transfer.rate_eta",
+                        speed = speed,
+                        remaining = transfer_time(seconds)
+                    )
+                    .to_string()
+                } else {
+                    speed
+                }
+            } else {
+                String::new()
+            };
             let mut row = div()
                 .id(("transfer-row", id))
                 .h(px(TRANSFER_ROW_HEIGHT))
                 .flex_shrink_0()
                 .px(px(12.))
-                .py(px(8.))
+                .py(px(6.))
                 .border_b_1()
                 .border_color(rgb(p.border))
                 .flex()
@@ -694,10 +756,12 @@ impl AppView {
                         .min_w_0()
                         .flex()
                         .flex_col()
-                        .gap(px(4.))
+                        .gap(px(2.))
+                        .line_height(px(14.))
                         .child(
                             div()
                                 .flex()
+                                .h(px(18.))
                                 .items_center()
                                 .gap_2()
                                 .child(
@@ -770,6 +834,13 @@ impl AppView {
                                         .text_color(rgb(p.muted))
                                         .child(bytes),
                                 ),
+                        )
+                        .child(
+                            div()
+                                .h(px(14.))
+                                .text_size(px(11.))
+                                .text_color(rgb(p.muted))
+                                .child(rate_text),
                         ),
                 );
             if matches!(job.state, TransferState::Queued | TransferState::Running) {
@@ -788,15 +859,39 @@ impl AppView {
                 );
             } else if job.state.finished() {
                 row = row.child(
-                    icon_button(
-                        format!("transfer-clear-{id}"),
-                        IconName::Trash,
-                        crate::t!("transfer.clear_item"),
-                    )
-                    .w(px(26.))
-                    .h(px(26.))
-                    .flex_shrink_0()
-                    .on_click(cx.listener(move |app, _, _, cx| app.clear_transfer(id, cx))),
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .when(
+                            matches!(job.state, TransferState::Failed | TransferState::Cancelled),
+                            |actions| {
+                                actions.child(
+                                    icon_button(
+                                        format!("transfer-retry-{id}"),
+                                        IconName::RefreshCw,
+                                        crate::t!("transfer.retry"),
+                                    )
+                                    .size(px(26.))
+                                    .on_click(cx.listener(
+                                        move |app, _, window, cx| {
+                                            app.retry_transfer(id, window, cx)
+                                        },
+                                    )),
+                                )
+                            },
+                        )
+                        .child(
+                            icon_button(
+                                format!("transfer-clear-{id}"),
+                                IconName::Trash,
+                                crate::t!("transfer.clear_item"),
+                            )
+                            .w(px(26.))
+                            .h(px(26.))
+                            .flex_shrink_0()
+                            .on_click(cx.listener(move |app, _, _, cx| app.clear_transfer(id, cx))),
+                        ),
                 );
             } else {
                 row = row.child(div().w(px(26.)).h(px(26.)).flex_shrink_0());
@@ -833,6 +928,26 @@ impl AppView {
                 ),
         );
         Some(panel.into_any_element())
+    }
+}
+
+fn transfer_time(seconds: u64) -> String {
+    if seconds >= 3600 {
+        crate::t!(
+            "transfer.hours_minutes",
+            hours = seconds / 3600,
+            minutes = seconds % 3600 / 60
+        )
+        .to_string()
+    } else if seconds >= 60 {
+        crate::t!(
+            "transfer.minutes_seconds",
+            minutes = seconds / 60,
+            seconds = seconds % 60
+        )
+        .to_string()
+    } else {
+        crate::t!("transfer.seconds", seconds = seconds).to_string()
     }
 }
 

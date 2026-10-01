@@ -27,16 +27,39 @@ impl Render for AuthDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let title = match &self.kind {
             PromptKind::Secret { label, .. } => label.clone(),
-            PromptKind::HostKey { fingerprint } => {
-                format!("{}\n{}", crate::t!("ssh.host_key_confirm"), fingerprint)
-            }
+            PromptKind::HostKey { .. } => crate::t!("ssh.host_key_confirm").into_owned(),
         };
         div()
             .flex()
             .flex_col()
-            .gap_4()
-            .child(div().child(self.host.clone()))
+            .gap_3()
+            .text_size(px(13.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(Icon::new(IconName::Server).size(px(16.)))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(self.host.clone()),
+                    ),
+            )
             .child(div().child(title))
+            .when(matches!(self.kind, PromptKind::HostKey { .. }), |view| {
+                let PromptKind::HostKey { fingerprint } = &self.kind else {
+                    return view;
+                };
+                view.child(
+                    div()
+                        .min_w_0()
+                        .font_family("Consolas")
+                        .text_size(px(12.))
+                        .child(fingerprint.clone()),
+                )
+            })
             .when_some(self.input.as_ref(), |view, input| {
                 view.child(Input::new(input))
             })
@@ -47,6 +70,8 @@ impl Render for AuthDialog {
                     .gap_2()
                     .child(
                         Button::new("auth-cancel")
+                            .small()
+                            .h(px(style::CONTROL_HEIGHT))
                             .label(crate::t!("ws.cancel"))
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.answer(false, window, cx)),
@@ -54,6 +79,8 @@ impl Render for AuthDialog {
                     )
                     .child(
                         Button::new("auth-accept")
+                            .small()
+                            .h(px(style::CONTROL_HEIGHT))
                             .primary()
                             .label(match &self.kind {
                                 PromptKind::Secret { .. } => crate::t!("ssh.authenticate"),

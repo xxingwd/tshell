@@ -1,4 +1,4 @@
-# Windows transparency patch
+# Windows Backend Patches
 
 Upstream: crates.io `gpui-pre-windows` **0.3.4**, Zed snapshot
 `69164008341295ad481bb11c0334a712ca8c23e3`. Original Apache-2.0 license is retained.
@@ -37,3 +37,16 @@ This does not make faint text independent of the desktop: xterm.js uses 50%
 ink alpha for DIM, so its final color still legitimately depends on what is
 behind it. It removes the additional darkening from incorrect composition.
 It also does not replace native font antialiasing with browser rasterization.
+
+## Clipboard Owner
+
+Clipboard writes pass the platform's persistent message-window HWND to
+`OpenClipboard`. Calling `EmptyClipboard` after opening with a null owner leaves
+no clipboard owner for `SetClipboardData`. Reads continue to open without an
+owner. The standalone clipboard test now creates a headless Windows platform
+and exercises the same owner-aware write path, including Unicode and metadata.
+
+The workspace's native Git selection check verifies exact raw text and attempts
+a system clipboard round trip. Some automation execution environments deny
+`OpenClipboard` for both the application and an independent Windows API probe;
+the diagnostic report records when that assertion was explicitly skipped.

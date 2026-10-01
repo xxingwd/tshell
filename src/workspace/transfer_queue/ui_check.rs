@@ -71,6 +71,13 @@ fn sample_jobs() -> Vec<TransferJob> {
         },
         state,
         error: error.map(str::to_owned),
+        started: None,
+        rate: {
+            let mut rate = TransferRate::default();
+            rate.sample(Duration::ZERO, 0);
+            rate.sample(Duration::from_secs(3), transferred);
+            rate
+        },
     })
     .collect()
 }

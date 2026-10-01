@@ -65,7 +65,10 @@ impl AppView {
                 .flex()
                 .flex_col()
                 .gap_1()
-                .p_1()
+                .px_3()
+                .py_2()
+                .border_b_1()
+                .border_color(rgb(self.palette.border))
                 .flex_shrink_0()
                 .child(
                     div()
@@ -75,53 +78,70 @@ impl AppView {
                         .child(
                             div()
                                 .flex_1()
+                                .min_w_0()
                                 .child(Input::new(&self.editor_search).small()),
                         )
-                        .child(crate::t!("editor.item_count", count = count))
                         .child(
-                            Button::new("editor-previous")
-                                .ghost()
-                                .small()
-                                .label("↑")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.file_editor.update(cx, |editor, cx| {
-                                        editor.previous_search_match(cx);
-                                    });
-                                })),
+                            div()
+                                .w(px(64.))
+                                .flex_shrink_0()
+                                .text_size(px(12.))
+                                .text_color(rgb(self.palette.muted))
+                                .child(crate::t!("editor.item_count", count = count)),
                         )
                         .child(
-                            Button::new("editor-next")
-                                .ghost()
-                                .small()
-                                .label("↓")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.file_editor.update(cx, |editor, cx| {
-                                        editor.next_search_match(cx);
-                                    });
-                                })),
+                            icon_button(
+                                "editor-previous",
+                                IconName::ChevronUp,
+                                crate::t!("editor.previous_match"),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.file_editor.update(cx, |editor, cx| {
+                                    editor.previous_search_match(cx);
+                                });
+                            })),
                         )
                         .child(
-                            Button::new("editor-replace-toggle")
-                                .ghost()
-                                .small()
-                                .label(crate::t!("editor.replace"))
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                            icon_button(
+                                "editor-next",
+                                IconName::ChevronDown,
+                                crate::t!("editor.next_match"),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.file_editor.update(cx, |editor, cx| {
+                                    editor.next_search_match(cx);
+                                });
+                            })),
+                        )
+                        .child(
+                            icon_button(
+                                "editor-replace-toggle",
+                                IconName::Replace,
+                                crate::t!("editor.replace"),
+                            )
+                            .selected(replace)
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
                                     this.file_editor.update(cx, |editor, cx| {
                                         editor.set_search_replace_mode(!replace, cx)
                                     });
-                                })),
+                                },
+                            )),
                         )
                         .child(
-                            Button::new("editor-search-close")
-                                .ghost()
-                                .small()
-                                .icon(IconName::X)
-                                .on_click(cx.listener(|this, _, window, cx| {
+                            icon_button(
+                                "editor-search-close",
+                                IconName::X,
+                                crate::t!("editor.close_search"),
+                            )
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
                                     this.file_editor.update(cx, |editor, cx| {
                                         editor.close_search(cx);
                                         editor.focus(window, cx);
                                     });
-                                })),
+                                },
+                            )),
                         ),
                 )
                 .when(replace, |bar| {

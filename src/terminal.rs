@@ -1,5 +1,7 @@
 //! Terminal state and PTY transport. No dependency on the UI framework.
 mod directory;
+pub(crate) mod links;
+pub(crate) mod search;
 mod ssh;
 use crate::terminal_protocol::{OutputParser, ProtocolState, Replies, TerminalTheme};
 use crate::terminal_snapshot::{RenderCommand, RenderSnapshot, apply_commands};
@@ -220,6 +222,7 @@ impl OutputWake {
 }
 
 pub struct Session {
+    pub(crate) identity: u64,
     directory: Arc<Mutex<directory::Directory>>,
     render_snapshot: Mutex<Arc<RenderSnapshot>>,
     mode: Arc<AtomicU32>,
@@ -228,6 +231,7 @@ pub struct Session {
     pub term: Arc<Mutex<Term<Listener>>>,
     pub title: Arc<Mutex<String>>,
     pub revision: Arc<AtomicU64>,
+    pub(crate) content_revision: Arc<AtomicU64>,
     pub exited: Arc<AtomicBool>,
     pub(crate) ready: AtomicBool,
     pub bytes_read: Arc<AtomicU64>,
@@ -239,6 +243,7 @@ pub struct Session {
     remote_input: Option<Arc<dyn Fn(Vec<u8>) -> Result<()> + Send + Sync>>,
     ssh_commands: Option<async_channel::Sender<Command>>,
     remote_parser: Mutex<OutputParser>,
+    remote_notifications: Mutex<crate::terminal_notifications::Notifications>,
     protocol: Arc<Mutex<ProtocolState>>,
     replies: Replies,
 }
@@ -249,6 +254,7 @@ impl Session {
     }
 
     pub fn spawn(command: CommandBuilder) -> Result<Self> {
+        let identity = next_identity();
         #[cfg(all(windows, target_arch = "x86_64"))]
         crate::windows_runtime::prepare()?;
         let pair = native_pty_system().openpty(PtySize {
@@ -270,6 +276,7 @@ impl Session {
         let title = Arc::new(Mutex::new(String::new()));
         let metadata = OutputWake::default();
         let revision = Arc::new(AtomicU64::new(1));
+        let content_revision = Arc::new(AtomicU64::new(1));
         let exited = Arc::new(AtomicBool::new(false));
         let bytes_read = Arc::new(AtomicU64::new(0));
         let notice_count = Arc::new(AtomicU64::new(0));
@@ -349,6 +356,7 @@ impl Session {
             error.clone(),
         );
         let read_resize = resize_barrier.clone();
+        let read_content_revision = content_revision.clone();
         thread::Builder::new()
             .name("pty-read".into())
             .spawn(move || {
@@ -364,7 +372,8 @@ impl Session {
                             if read_directory.lock().advance(&buffer[..count]) {
                                 read_metadata.notify();
                             }
-                            let notices = notifications.advance(&buffer[..count]);
+                            let notices =
+                                notifications.advance_for(&buffer[..count], Some(identity));
                             if notices > 0 {
                                 read_notices.fetch_add(notices, Ordering::Release);
                                 read_metadata.notify();
@@ -380,6 +389,7 @@ impl Session {
                             read_mode.store(term.mode().bits(), Ordering::Release);
                             read_bytes.fetch_add(count as u64, Ordering::Relaxed);
                             if output.visual {
+                                read_content_revision.fetch_add(1, Ordering::Release);
                                 read_rev.fetch_add(1, Ordering::Release);
                             }
                             drop(term);
@@ -420,6 +430,7 @@ impl Session {
                 wait_metadata.notify();
             })?;
         Ok(Self {
+            identity,
             directory,
             mode,
             render_snapshot: Mutex::new(Arc::new(RenderSnapshot::default())),
@@ -428,6 +439,7 @@ impl Session {
             term,
             title,
             revision,
+            content_revision,
             exited,
             ready: AtomicBool::new(true),
             bytes_read,
@@ -439,6 +451,7 @@ impl Session {
             remote_input: None,
             ssh_commands: None,
             remote_parser: Mutex::new(OutputParser::default()),
+            remote_notifications: Default::default(),
             protocol,
             replies,
         })
@@ -466,6 +479,7 @@ impl Session {
         )));
         let mode = Arc::new(AtomicU32::new(term.lock().mode().bits()));
         Arc::new(Self {
+            identity: next_identity(),
             directory: Arc::new(Mutex::new(directory::Directory::default())),
             mode,
             render_snapshot: Mutex::new(Arc::new(RenderSnapshot::default())),
@@ -474,6 +488,7 @@ impl Session {
             term,
             title,
             revision,
+            content_revision: Arc::new(AtomicU64::new(1)),
             exited: Arc::new(AtomicBool::new(false)),
             ready: AtomicBool::new(true),
             bytes_read: Arc::new(AtomicU64::new(0)),
@@ -485,6 +500,7 @@ impl Session {
             remote_input: Some(input),
             ssh_commands: None,
             remote_parser: Mutex::new(OutputParser::default()),
+            remote_notifications: Default::default(),
             protocol,
             replies,
         })
@@ -500,6 +516,16 @@ impl Session {
         }
     }
     pub fn remote_output(&self, bytes: &[u8]) {
+        if self.ssh_commands.is_some() {
+            let notices = self
+                .remote_notifications
+                .lock()
+                .advance_for(bytes, Some(self.identity));
+            if notices > 0 {
+                self.notice_count.fetch_add(notices, Ordering::Release);
+                self.metadata.notify();
+            }
+        }
         if self.directory.lock().advance(bytes) {
             self.metadata.notify();
         }
@@ -516,6 +542,7 @@ impl Session {
         self.bytes_read
             .fetch_add(bytes.len() as u64, Ordering::Relaxed);
         if output.visual {
+            self.content_revision.fetch_add(1, Ordering::Release);
             self.revision.fetch_add(1, Ordering::Release);
         }
         drop(term);
@@ -544,6 +571,7 @@ impl Session {
         parser.advance(&mut *term, bytes);
         self.replies.lock().clear();
         self.mode.store(term.mode().bits(), Ordering::Release);
+        self.content_revision.fetch_add(1, Ordering::Release);
         self.revision.fetch_add(1, Ordering::Release);
         drop(term);
         self.updates.notify();
@@ -568,6 +596,7 @@ impl Session {
             }
             parser.advance(&mut *term, line);
         }
+        self.content_revision.fetch_add(1, Ordering::Release);
         self.replies.lock().clear();
         self.mode.store(term.mode().bits(), Ordering::Release);
         self.revision.fetch_add(1, Ordering::Release);
@@ -617,6 +646,7 @@ impl Session {
             rows: rows.max(2),
             cols: cols.max(2),
         });
+        self.content_revision.fetch_add(1, Ordering::Release);
         self.revision.fetch_add(1, Ordering::Release);
         drop(term);
         self.updates.notify();
@@ -701,11 +731,17 @@ impl Session {
                 })
             {
                 term.resize(Size { rows, cols });
+                self.content_revision.fetch_add(1, Ordering::Release);
                 self.revision.fetch_add(1, Ordering::Release);
                 self.updates.notify();
             }
         }
     }
+}
+
+fn next_identity() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 impl Drop for Session {
