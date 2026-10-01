@@ -455,7 +455,7 @@ pub(super) async fn check(
             draw(cx)?;
             cx.update_window(handle.into(), |_, window, cx| {
                 let copied = TextSelection::selected_text(window, cx);
-                anyhow::ensure!(copied == "中文", "scrolled diff word selection lost Unicode: pane={pane}, position={position:?}, copied={copied:?}; {}", app.read(cx).git_diff.as_ref().unwrap().selection[pane].read(cx).check_debug(window, cx));
+                anyhow::ensure!(copied == "中", "scrolled diff word selection lost Unicode: pane={pane}, position={position:?}, copied={copied:?}; {}", app.read(cx).git_diff.as_ref().unwrap().selection[pane].read(cx).check_debug(window, cx));
                 anyhow::ensure!(
                     app.read(cx).git_diff.as_ref().unwrap().selection[pane]
                         .read(cx)
@@ -488,6 +488,23 @@ pub(super) async fn check(
                         )?;
                     }
                 }
+                Ok::<_, anyhow::Error>(())
+            })??;
+            let end = app.read_with(cx, |app, cx| {
+                app.git_diff.as_ref().unwrap().selection[pane]
+                    .read(cx)
+                    .check_text_point(107, 14)
+                    .unwrap()
+            });
+            button(position, true, cx)?;
+            pointer(end, Some(MouseButton::Left), cx)?;
+            button(end, false, cx)?;
+            draw(cx)?;
+            cx.update_window(handle.into(), |_, window, cx| {
+                anyhow::ensure!(
+                    TextSelection::selected_text(window, cx) == "中文",
+                    "scrolled diff drag selection split a Unicode character"
+                );
                 Ok::<_, anyhow::Error>(())
             })??;
             button(position, true, cx)?;
