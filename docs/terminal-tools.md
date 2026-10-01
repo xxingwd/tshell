@@ -12,6 +12,10 @@ Literal search is the default. Case and regular-expression options are explicit.
 The input accepts Enter/Shift+Enter for next/previous; arrow buttons provide the
 same navigation and wrap around. Escape closes the overlay and restores terminal
 focus. Invalid expressions produce an error state instead of changing output.
+Opening search immediately focuses its input, including when invoked from
+Explorer or Git. Workspace focus restoration targets the search input while the
+overlay is open. Ordinary input events reach the native input handler; the
+terminal only encodes key events when its own surface has focus.
 
 Search runs in a coalesced background job. Query generations reject stale
 results. New output and terminal reflow refresh matches and invalidate a stale
@@ -52,6 +56,9 @@ handling, navigation and new output, terminal resize, OSC 8/plain link parsing,
 and local/SSH path routing. The isolated `--workspace-ui-check` dispatches native
 search input keys and Ctrl/ordinary TUI mouse clicks, verifies focus and scrolling,
 and captures dark/narrow-light search layouts with match-background pixel checks.
+It also opens search through the real workspace shortcut from Terminal, Explorer
+and Git, types characters through the native input route, and checks that search
+typing sends no bytes to the terminal.
 It also checks file link line/column placement, same-file draft preservation,
 directory links, notification target selection and closed-terminal handling.
 Real OS toast activation and remote

@@ -20,3 +20,18 @@ Additional regression checks reconstruct both complete file versions from a midd
 Native UI checks also drag-select both layouts, verify system clipboard text,
 exercise word/line selection, and copy across off-screen rows. Unicode character
 highlighting and raw source preservation have focused unit coverage.
+
+Selection geometry and painting share the same GPUI `StyledText` layout, including
+font fallback and horizontal scroll offsets. Row hit testing uses half-open
+vertical intervals so a word or line endpoint at a row's top belongs to that row.
+Clicking text focuses its comparison pane; gutters and unmatched empty cells do
+not start text selection. Native checks cover adjacent added/removed rows,
+single-click clearing, scrolled Unicode words at 17px, and selection-background
+pixels. System clipboard checks can be skipped explicitly in environments where
+Windows clipboard access is unavailable; source-text selection is still checked.
+
+Implementation references (reviewed 2026-10-01):
+[VS Code's original/modified editor ownership](https://github.com/microsoft/vscode/blob/dc546cc3c9979a19adafccd439889d7b64298def/src/vs/editor/browser/widget/diffEditor/components/diffEditorEditors.ts),
+[Zed's layout-based position mapping](https://github.com/zed-industries/zed/blob/f8c2cc844057540ca1eac7de4f19f50d7597dead/crates/editor/src/element.rs#L10734),
+and [Zed's character/word/line selection and focus](https://github.com/zed-industries/zed/blob/f8c2cc844057540ca1eac7de4f19f50d7597dead/crates/editor/src/selection.rs#L1220).
+These inform interaction behavior; TShell remains a read-only diff viewer.

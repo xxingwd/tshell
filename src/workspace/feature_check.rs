@@ -220,18 +220,23 @@ pub(super) async fn check(
                 content: Ok(git_view::DiffContent::new(
                     (0..300)
                         .flat_map(|index| {
+                            let tail = if index == 150 {
+                                " long-line".repeat(180)
+                            } else {
+                                String::new()
+                            };
                             [
                                 git::DiffLine {
                                     old: Some(index + 1),
                                     new: None,
                                     kind: git::LineKind::Removed,
-                                    text: format!("-\told 中文 {index}"),
+                                    text: format!("-\told 中文 {index}{tail}"),
                                 },
                                 git::DiffLine {
                                     old: None,
                                     new: Some(index + 1),
                                     kind: git::LineKind::Added,
-                                    text: format!("+\tnew 中文 {index}"),
+                                    text: format!("+\tnew 中文 {index}{tail}"),
                                 },
                             ]
                         })
@@ -302,50 +307,57 @@ pub(super) async fn check(
                 Ok::<_, anyhow::Error>(())
             })??;
 
-            let position = app
-                .read_with(cx, |app, cx| {
-                    app.git_diff.as_ref().unwrap().selection[pane]
-                        .read(cx)
-                        .check_word_point(0)
-                })
-                .unwrap();
-            pointer(position, None, cx)?;
-            for count in [2, 3] {
-                cx.update_window(handle.into(), |_, window, cx| {
-                    window.dispatch_event(
-                        PlatformInput::MouseDown(MouseDownEvent {
-                            position,
-                            button: MouseButton::Left,
-                            click_count: count,
-                            ..Default::default()
-                        }),
-                        cx,
+            for source in [0, 1, 7] {
+                let position = app
+                    .read_with(cx, |app, cx| {
+                        app.git_diff.as_ref().unwrap().selection[pane]
+                            .read(cx)
+                            .check_text_point(source, 5)
+                    })
+                    .unwrap();
+                pointer(position, None, cx)?;
+                for count in [2, 3] {
+                    cx.update_window(handle.into(), |_, window, cx| {
+                        window.dispatch_event(
+                            PlatformInput::MouseDown(MouseDownEvent {
+                                position,
+                                button: MouseButton::Left,
+                                click_count: count,
+                                ..Default::default()
+                            }),
+                            cx,
+                        );
+                        window.dispatch_event(
+                            PlatformInput::MouseUp(MouseUpEvent {
+                                position,
+                                button: MouseButton::Left,
+                                click_count: count,
+                                ..Default::default()
+                            }),
+                            cx,
+                        );
+                    })?;
+                    draw(cx)?;
+                    let copied = cx.update_window(handle.into(), |_, window, cx| {
+                        TextSelection::selected_text(window, cx)
+                    })?;
+                    let added = pane == 1 || (pane == 2 && source % 2 == 1);
+                    let expected = if count == 3 {
+                        format!(
+                            "\t{} 中文 {}",
+                            if added { "new" } else { "old" },
+                            if pane == 2 { source / 2 } else { source }
+                        )
+                    } else if added {
+                        "new".to_owned()
+                    } else {
+                        "old".to_owned()
+                    };
+                    anyhow::ensure!(
+                        copied == expected,
+                        "diff multi-click selection failed: pane={pane}, source={source}, count={count}, copied={copied:?}, expected={expected:?}"
                     );
-                    window.dispatch_event(
-                        PlatformInput::MouseUp(MouseUpEvent {
-                            position,
-                            button: MouseButton::Left,
-                            click_count: count,
-                            ..Default::default()
-                        }),
-                        cx,
-                    );
-                })?;
-                draw(cx)?;
-                let copied = cx.update_window(handle.into(), |_, window, cx| {
-                    TextSelection::selected_text(window, cx)
-                })?;
-                let expected = if count == 3 {
-                    expected
-                } else if pane == 1 {
-                    "new"
-                } else {
-                    "old"
-                };
-                anyhow::ensure!(
-                    copied == expected,
-                    "diff multi-click selection failed: count={count}, copied={copied:?}"
-                );
+                }
             }
 
             // Keep the original anchor after its row has left the virtual list.
@@ -400,6 +412,101 @@ pub(super) async fn check(
             cx.update_window(handle.into(), |_, window, cx| {
                 TextSelection::clear(window, cx)
             })?;
+
+            let font_size = app.read_with(cx, |app, _| app.font_size);
+            app.update(cx, |app, cx| {
+                app.font_size = 17.;
+                let diff = app.git_diff.as_ref().unwrap();
+                diff.horizontal[pane].set_offset(point(px(-24.), px(0.)));
+                diff.scroll.scroll_to_item_strict(100, ScrollStrategy::Top);
+                cx.notify();
+            });
+            draw(cx)?;
+            let position = app.read_with(cx, |app, cx| {
+                let diff = app.git_diff.as_ref().unwrap();
+                anyhow::ensure!(
+                    diff.horizontal[pane].offset().x < px(0.),
+                    "selection check did not scroll horizontally"
+                );
+                diff.selection[pane]
+                    .read(cx)
+                    .check_text_point(107, 8)
+                    .ok_or_else(|| anyhow::anyhow!("scrolled Unicode row did not paint"))
+            })?;
+            pointer(position, None, cx)?;
+            cx.update_window(handle.into(), |_, window, cx| {
+                for event in [
+                    PlatformInput::MouseDown(MouseDownEvent {
+                        position,
+                        button: MouseButton::Left,
+                        click_count: 2,
+                        ..Default::default()
+                    }),
+                    PlatformInput::MouseUp(MouseUpEvent {
+                        position,
+                        button: MouseButton::Left,
+                        click_count: 2,
+                        ..Default::default()
+                    }),
+                ] {
+                    window.dispatch_event(event, cx);
+                }
+            })?;
+            draw(cx)?;
+            cx.update_window(handle.into(), |_, window, cx| {
+                anyhow::ensure!(
+                    TextSelection::selected_text(window, cx) == "中文",
+                    "scrolled diff word selection lost Unicode"
+                );
+                anyhow::ensure!(
+                    app.read(cx).git_diff.as_ref().unwrap().selection[pane]
+                        .read(cx)
+                        .focus
+                        .is_focused(window),
+                    "diff selection did not focus its pane"
+                );
+                #[cfg(feature = "ui-check-screenshots")]
+                {
+                    let image = window.render_to_image()?;
+                    let (start, _) = app.read(cx).git_diff.as_ref().unwrap().selection[pane]
+                        .read(cx)
+                        .check_points(107)
+                        .unwrap();
+                    let scale = window.scale_factor();
+                    let y = f32::from((start.y - px(11.)) * scale).floor() as u32;
+                    let base = image
+                        .get_pixel(f32::from((start.x + px(2.)) * scale).floor() as u32, y)
+                        .0;
+                    let selected = image
+                        .get_pixel(f32::from(position.x * scale).floor() as u32, y)
+                        .0;
+                    anyhow::ensure!(
+                        selected != base,
+                        "diff copied the word but painted no selection highlight"
+                    );
+                    if let Some(directory) = std::env::var_os("TSHELL_UI_SCREENSHOT_DIR") {
+                        image.save(
+                            PathBuf::from(directory).join(format!("git-selection-pane-{pane}.png")),
+                        )?;
+                    }
+                }
+                Ok::<_, anyhow::Error>(())
+            })??;
+            button(position, true, cx)?;
+            button(position, false, cx)?;
+            draw(cx)?;
+            cx.update_window(handle.into(), |_, window, cx| {
+                anyhow::ensure!(
+                    TextSelection::selected_text(window, cx).is_empty(),
+                    "single click did not clear the diff word selection"
+                );
+                Ok::<_, anyhow::Error>(())
+            })??;
+            app.update(cx, |app, cx| {
+                app.font_size = font_size;
+                app.git_diff.as_ref().unwrap().horizontal[pane].set_offset(point(px(0.), px(0.)));
+                cx.notify();
+            });
         }
         #[cfg(feature = "ui-check-screenshots")]
         if let Some(directory) = std::env::var_os("TSHELL_UI_SCREENSHOT_DIR") {
@@ -425,6 +532,54 @@ pub(super) async fn check(
                 Ok::<_, anyhow::Error>(())
             })??;
         }
+    }
+    for mode in [
+        WorkspaceMode::Terminal,
+        WorkspaceMode::Files,
+        WorkspaceMode::Git,
+    ] {
+        app.update(cx, |app, cx| {
+            app.workspace_mode = mode;
+            cx.notify();
+        });
+        draw(cx)?;
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.dispatch_keystroke(Keystroke::parse("ctrl-shift-f").unwrap(), cx);
+        })?;
+        draw(cx)?;
+        cx.update_window(handle.into(), |_, window, cx| {
+            let app = app.read(cx);
+            let host = &app.hosts[app.active];
+            let view = host
+                .views
+                .get(&host.snapshot.window().unwrap().active_pane)
+                .unwrap();
+            let (value, focused) = view.read(cx).check_search_input(window, cx).unwrap();
+            anyhow::ensure!(
+                focused && value.is_empty(),
+                "workspace stole search focus: focused={focused}, value={value:?}"
+            );
+            for key in ["h", "i", "t"] {
+                window.dispatch_keystroke(Keystroke::parse(key).unwrap(), cx);
+            }
+            Ok::<_, anyhow::Error>(())
+        })??;
+        draw(cx)?;
+        cx.update_window(handle.into(), |_, window, cx| {
+            let app = app.read(cx);
+            let host = &app.hosts[app.active];
+            let view = host
+                .views
+                .get(&host.snapshot.window().unwrap().active_pane)
+                .unwrap();
+            anyhow::ensure!(
+                view.read(cx).check_search_input(window, cx) == Some(("hit".into(), true)),
+                "search input rejected typed characters"
+            );
+            window.dispatch_keystroke(Keystroke::parse("escape").unwrap(), cx);
+            Ok::<_, anyhow::Error>(())
+        })??;
+        draw(cx)?;
     }
     crate::terminal_view::check_search_links(cx).await?;
     Ok(())

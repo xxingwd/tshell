@@ -41,11 +41,12 @@ impl DiffDocument {
 struct PaintedLine {
     source: usize,
     bounds: Bounds<Pixels>,
-    shaped: ShapedLine,
+    layout: TextLayout,
 }
 
 pub(super) struct DiffSelection {
     handle: TextSelectionHandle,
+    pub(super) focus: FocusHandle,
     document: Arc<DiffDocument>,
     bounds: Bounds<Pixels>,
     painted: Vec<PaintedLine>,
@@ -58,6 +59,9 @@ impl DiffSelection {
     pub(super) fn new(cx: &mut App) -> Entity<Self> {
         cx.new(|cx: &mut Context<Self>| {
             let handle = TextSelectionHandle::new("", cx);
+            let focus = cx.focus_handle();
+            let selection_focus = focus.clone();
+            handle.focus_with(move |window, cx| window.focus(&selection_focus, cx), cx);
             let view = cx.weak_entity();
             let copy = view.clone();
             handle.copy_with(
@@ -78,6 +82,7 @@ impl DiffSelection {
             );
             Self {
                 handle,
+                focus,
                 document: Arc::default(),
                 bounds: Bounds::default(),
                 painted: Vec::new(),
@@ -121,32 +126,46 @@ impl DiffSelection {
 
     fn index_at(&self, point: Point<Pixels>) -> Option<usize> {
         let point = self.bounds.origin + point;
-        let line = self.painted.iter().min_by(|a, b| {
-            let distance =
-                |line: &PaintedLine| (f32::from(point.y - line.bounds.origin.y) - 12.).abs();
-            distance(a).total_cmp(&distance(b))
-        })?;
+        // Multi-click endpoints use the row's top edge. Half-open intervals keep
+        // that edge in this row rather than tying it with the previous row.
+        let line = self
+            .painted
+            .iter()
+            .find(|line| point.y >= line.bounds.top() && point.y < line.bounds.bottom())
+            .or_else(|| {
+                self.painted.iter().min_by(|a, b| {
+                    let distance = |line: &PaintedLine| {
+                        f32::from(point.y - point.y.clamp(line.bounds.top(), line.bounds.bottom()))
+                            .abs()
+                    };
+                    distance(a).total_cmp(&distance(b))
+                })
+            })?;
         let source = self.document.lines.get(line.source)?.as_ref()?;
         let raw = &self.document.text[source.clone()];
         let index = line
-            .shaped
-            .closest_index_for_x(point.x - line.bounds.origin.x);
+            .layout
+            .line_layout_for_index(0)?
+            .unwrapped_layout
+            .closest_index_for_x(point.x - line.layout.bounds().origin.x);
         Some(source.start + raw_index(raw, index))
     }
 
     #[cfg(debug_assertions)]
     pub(super) fn check_points(&self, source: usize) -> Option<(Point<Pixels>, Point<Pixels>)> {
         let line = self.painted.iter().find(|line| line.source == source)?;
+        let end = line.layout.position_for_index(line.layout.len())?;
         Some((
             line.bounds.origin + point(px(0.1), px(12.)),
-            line.bounds.origin + point(line.shaped.width + px(1.), px(12.)),
+            point(end.x + px(1.), line.bounds.top() + px(12.)),
         ))
     }
 
     #[cfg(debug_assertions)]
-    pub(super) fn check_word_point(&self, source: usize) -> Option<Point<Pixels>> {
+    pub(super) fn check_text_point(&self, source: usize, index: usize) -> Option<Point<Pixels>> {
         let line = self.painted.iter().find(|line| line.source == source)?;
-        Some(line.bounds.origin + point(line.shaped.x_for_index(5) + px(1.), px(12.)))
+        let position = line.layout.position_for_index(index)?;
+        Some(point(position.x + px(1.), line.bounds.top() + px(12.)))
     }
 
     #[cfg(debug_assertions)]
@@ -166,7 +185,7 @@ impl DiffSelection {
         let prepare = view.clone();
         canvas(
             move |bounds, window, cx| {
-                prepare.update(cx, |this, cx| {
+                prepare.update(cx, |this, _| {
                     this.bounds = bounds;
                     this.painted.clear();
                     this.runs.clear();
@@ -175,16 +194,18 @@ impl DiffSelection {
                     {
                         this.hitbox = Some(hitbox.clone());
                     }
+                    hitbox
+                })
+            },
+            move |bounds, hitbox, window, cx| {
+                view.update(cx, |this, cx| {
                     this.handle.register(
-                        TextSelectionRegistration::new(hitbox, bounds)
-                            .with_text_bounds(vec![bounds]),
+                        TextSelectionRegistration::new(hitbox, bounds).with_text_bounds(
+                            this.painted.iter().map(|line| line.bounds).collect(),
+                        ),
                         window,
                         cx,
                     );
-                });
-            },
-            move |_, _, _, cx| {
-                view.update(cx, |this, cx| {
                     this.handle.update_runs(&this.runs, cx);
                 });
             },
@@ -201,7 +222,6 @@ impl DiffSelection {
         text: String,
         highlights: Vec<Range<usize>>,
         font: SharedString,
-        font_size: f32,
         color: u32,
         emphasis: u32,
         selection: u32,
@@ -215,19 +235,38 @@ impl DiffSelection {
         ranges.retain(|range| !range.is_empty());
         canvas(
             move |bounds, window, cx| {
+                let selected = prepare.read(cx).range(cx).and_then(|range| {
+                    let document = &prepare.read(cx).document;
+                    let line = document.lines.get(source)?.as_ref()?;
+                    let start = range.start.max(line.start);
+                    let end = range.end.min(line.end);
+                    (start < end).then(|| {
+                        let raw = &document.text[line.clone()];
+                        display_index(raw, start - line.start)..display_index(raw, end - line.start)
+                    })
+                });
+                let mut boundaries = vec![0, display.len()];
+                for range in ranges.iter().chain(selected.iter()) {
+                    boundaries.extend([range.start, range.end]);
+                }
+                boundaries.sort_unstable();
+                boundaries.dedup();
                 let mut runs = Vec::new();
-                let mut previous = 0;
-                for range in &ranges {
-                    if range.start > previous {
-                        runs.push(text_run(range.start - previous, &font, color, None));
-                    }
-                    runs.push(text_run(range.len(), &font, color, Some(emphasis)));
-                    previous = range.end;
+                for boundary in boundaries.windows(2) {
+                    let start = boundary[0];
+                    let background = if selected
+                        .as_ref()
+                        .is_some_and(|range| range.contains(&start))
+                    {
+                        Some(rgba((selection << 8) | 160))
+                    } else if ranges.iter().any(|range| range.contains(&start)) {
+                        Some(rgba((emphasis << 8) | 70))
+                    } else {
+                        None
+                    };
+                    runs.push(text_run(boundary[1] - start, &font, color, background));
                 }
-                if previous < display.len() {
-                    runs.push(text_run(display.len() - previous, &font, color, None));
-                }
-                let text = StyledText::new(display.clone()).with_runs(runs.clone());
+                let text = StyledText::new(display.clone()).with_runs(runs);
                 let layout = text.layout().clone();
                 let mut element = text.into_any_element();
                 element.layout_as_root(
@@ -239,50 +278,24 @@ impl DiffSelection {
                     cx,
                 );
                 element.prepaint_at(bounds.origin, window, cx);
-                let shaped = window.text_system().shape_line(
-                    display.clone().into(),
-                    px(font_size),
-                    &runs,
-                    None,
-                );
                 prepare.update(cx, |this, _| {
+                    if this.document.lines.get(source).is_none_or(Option::is_none) {
+                        return;
+                    }
                     this.runs.push(
-                        TextSelectionRun::new(display.clone(), layout, bounds)
+                        TextSelectionRun::new(display.clone(), layout.clone(), bounds)
                             .with_document_order(source as u64),
                     );
                     this.painted.push(PaintedLine {
                         source,
                         bounds,
-                        shaped: shaped.clone(),
+                        layout,
                     });
                 });
-                shaped
+                element
             },
-            move |bounds, shaped, window, cx| {
-                let _ = shaped.paint_background(
-                    bounds.origin,
-                    px(24.),
-                    TextAlign::Left,
-                    None,
-                    window,
-                    cx,
-                );
-                if let Some(range) = view.read(cx).range(cx)
-                    && let Some(Some(line)) = view.read(cx).document.lines.get(source)
-                {
-                    let start = range.start.max(line.start);
-                    let end = range.end.min(line.end);
-                    if start < end {
-                        let raw = &view.read(cx).document.text[line.clone()];
-                        let x1 = shaped.x_for_index(display_index(raw, start - line.start));
-                        let x2 = shaped.x_for_index(display_index(raw, end - line.start));
-                        window.paint_quad(fill(
-                            Bounds::new(bounds.origin + point(x1, px(0.)), size(x2 - x1, px(24.))),
-                            rgba((selection << 8) | 160),
-                        ));
-                    }
-                }
-                let _ = shaped.paint(bounds.origin, px(24.), TextAlign::Left, None, window, cx);
+            move |_, mut element, window, cx| {
+                element.paint(window, cx);
             },
         )
         .w_full()
@@ -290,12 +303,12 @@ impl DiffSelection {
     }
 }
 
-fn text_run(len: usize, family: &SharedString, color: u32, background: Option<u32>) -> TextRun {
+fn text_run(len: usize, family: &SharedString, color: u32, background: Option<Rgba>) -> TextRun {
     TextRun {
         len,
         font: font(family.clone()),
         color: rgb(color).into(),
-        background_color: background.map(|color| rgba((color << 8) | 70).into()),
+        background_color: background.map(Into::into),
         underline: None,
         strikethrough: None,
     }

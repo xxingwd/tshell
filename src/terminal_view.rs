@@ -1040,8 +1040,8 @@ impl TerminalView {
 impl EventEmitter<crate::terminal::links::OpenLink> for TerminalView {}
 
 impl Focusable for TerminalView {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus.clone()
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.active_input_focus(cx)
     }
 }
 
@@ -1074,6 +1074,9 @@ impl Render for TerminalView {
                 CursorStyle::Arrow
             })
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if !this.focus.is_focused(window) {
+                    return;
+                }
                 if !this.preedit.is_empty() {
                     return;
                 }

@@ -788,7 +788,6 @@ impl AppView {
                                             content.inline_emphasis[index].clone()
                                         },
                                         this.font_family.clone().into(),
-                                        this.font_size.clamp(12., 17.),
                                         p.text,
                                         color.unwrap_or(p.text),
                                         this.palette.selection,
@@ -807,6 +806,7 @@ impl AppView {
             .flex_1()
             .min_w_0()
             .h_full()
+            .track_focus(&selection[pane].read(cx).focus)
             .flex()
             .flex_col()
             .overflow_hidden()

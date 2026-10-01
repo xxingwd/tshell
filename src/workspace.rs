@@ -4319,7 +4319,7 @@ impl Render for AppView {
                 WorkspaceMode::Terminal => {
                     if let Some(w) = self.hosts[self.active].snapshot.window() {
                         if let Some(v) = self.hosts[self.active].views.get(&w.active_pane) {
-                            window.focus(&v.read(cx).focus.clone(), cx);
+                            window.focus(&v.read(cx).focus_handle(cx), cx);
                             self.need_focus = false;
                         }
                     }

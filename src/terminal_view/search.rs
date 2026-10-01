@@ -80,12 +80,6 @@ pub(crate) async fn check_search_links(cx: &mut AsyncApp) -> anyhow::Result<()> 
         view.update(cx, |view, cx| {
             let dimensions = session.term.lock().screen_lines();
             view.open_search(window, cx);
-            let search = view.search.as_mut().unwrap();
-            search
-                .input
-                .update(cx, |input, cx| input.set_value("hIT", window, cx));
-            search.query.text = "hIT".into();
-            view.refresh_search(cx);
             anyhow::ensure!(
                 session.term.lock().screen_lines() == dimensions,
                 "search resized the terminal"
@@ -93,7 +87,17 @@ pub(crate) async fn check_search_links(cx: &mut AsyncApp) -> anyhow::Result<()> 
             Ok::<_, anyhow::Error>(())
         })
     })??;
+    draw(cx)?;
+    cx.update_window(handle.into(), |_, window, cx| {
+        for key in ["h", "i", "t"] {
+            window.dispatch_keystroke(Keystroke::parse(key).unwrap(), cx);
+        }
+    })?;
     wait_search(&view, 40, cx).await?;
+    anyhow::ensure!(
+        writes.lock().is_empty(),
+        "search typing leaked into the terminal"
+    );
     draw(cx)?;
     cx.update_window(handle.into(), |_, window, cx| {
         let search = view.read(cx).search.as_ref().unwrap();
@@ -334,6 +338,22 @@ fn tool(id: &'static str, icon: IconName, tooltip: impl Into<SharedString>) -> B
 }
 
 impl TerminalView {
+    pub(super) fn active_input_focus(&self, cx: &App) -> FocusHandle {
+        self.search.as_ref().map_or_else(
+            || self.focus.clone(),
+            |search| search.input.read(cx).focus_handle(cx),
+        )
+    }
+
+    #[cfg(debug_assertions)]
+    pub(crate) fn check_search_input(&self, window: &Window, cx: &App) -> Option<(String, bool)> {
+        let input = self.search.as_ref()?.input.read(cx);
+        Some((
+            input.value().to_string(),
+            input.focus_handle(cx).is_focused(window),
+        ))
+    }
+
     pub(crate) fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.search.is_none() {
             let input = cx.new(|cx| {
@@ -560,8 +580,8 @@ impl TerminalView {
                     if event.keystroke.key == "escape" {
                         this.close_search(window, cx);
                         window.prevent_default();
+                        cx.stop_propagation();
                     }
-                    cx.stop_propagation();
                 }))
                 .child(
                     div()
