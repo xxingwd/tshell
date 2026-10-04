@@ -555,6 +555,7 @@ pub(super) async fn check(
     ] {
         app.update(cx, |app, cx| {
             app.workspace_mode = mode;
+            app.need_focus = true;
             cx.notify();
         });
         draw(cx)?;
@@ -569,7 +570,12 @@ pub(super) async fn check(
                 .views
                 .get(&host.snapshot.window().unwrap().active_pane)
                 .unwrap();
-            let (value, focused) = view.read(cx).check_search_input(window, cx).unwrap();
+            let (value, focused) =
+                view.read(cx)
+                    .check_search_input(window, cx)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("workspace search shortcut did not open its input")
+                    })?;
             anyhow::ensure!(
                 focused && value.is_empty(),
                 "workspace stole search focus: focused={focused}, value={value:?}"

@@ -26,9 +26,12 @@ font fallback and horizontal scroll offsets. Row hit testing uses half-open
 vertical intervals so a word or line endpoint at a row's top belongs to that row.
 Clicking text focuses its comparison pane; gutters and unmatched empty cells do
 not start text selection. Native checks cover adjacent added/removed rows,
-single-click clearing, scrolled Unicode words at 17px, and selection-background
+single-click clearing, scrolled Unicode selection at 17px, and selection-background
 pixels. System clipboard checks can be skipped explicitly in environments where
 Windows clipboard access is unavailable; source-text selection is still checked.
+Word selection follows GPUI's editor boundaries: Latin word runs, whitespace
+runs, and individual CJK characters or punctuation. Dragging can select any
+continuous source range, preserving complete Unicode characters and tabs.
 
 Implementation references (reviewed 2026-10-01):
 [VS Code's original/modified editor ownership](https://github.com/microsoft/vscode/blob/dc546cc3c9979a19adafccd439889d7b64298def/src/vs/editor/browser/widget/diffEditor/components/diffEditorEditors.ts),

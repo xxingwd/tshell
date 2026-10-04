@@ -19,7 +19,7 @@ xterm.js or OpenSSH feature parity.
 - Remote tmux control sessions with native server-side windows, panes, layouts,
   titles, and working directories.
 - A host -> session -> tab -> split workspace model with collapsible navigation,
-  keyboard-driven commands, split resizing, floating/focus modes, and persisted
+  keyboard-driven commands, equal column/row splits, floating/focus modes, and persisted
   interface preferences.
 - Compact native controls, explicit sidebar hierarchy, responsive settings,
   field-level host validation, and segmented Git diff modes. See
@@ -123,7 +123,6 @@ The command palette is available with `Ctrl+Shift+K`. Important defaults are:
 | `Ctrl+Shift+T` / `Ctrl+Shift+W` | New / close terminal tab |
 | `Alt+Enter` | Focus the current split or restore the layout |
 | `Alt+F` | Float the current tab or restore tiling |
-| `Alt+T` | Switch the split layout |
 | `Alt+N` | Add a column and equalize columns |
 | `Alt+Shift+N` | Add a row and equalize the current column |
 | `Alt+H/J/K/L` or `Alt` + arrows | Move focus |
@@ -132,6 +131,12 @@ The command palette is available with `Ctrl+Shift+K`. Important defaults are:
 | `Ctrl+Shift+F` | Search the active terminal's output |
 | `Ctrl+Shift+P` | Cycle GPUI's frame diagnostics |
 | `Ctrl+-` / `Ctrl+=` | Decrease / increase terminal font size |
+
+Splits use equal-width columns and equal-height rows within each column. Closing
+a pane or exiting its shell redistributes the remaining group automatically.
+There are no draggable dividers, pane-size shortcuts, or alternate tiling modes.
+Local, ordinary SSH, and tmux use this same split model. See
+[split layout behavior](docs/workspace-interface.md#equal-splits).
 
 All actions are listed in Settings and may be rebound. The workspace shortcuts
 are an application contract and are not replaced by xterm compatibility work.
@@ -249,6 +254,8 @@ normal Rust tests. The hidden-window UI check is available from a development
 build with `tshell.exe --workspace-ui-check <report.json>`.
 
 ## Packaging and Updates
+
+See [release notes](docs/release-notes.md) for changes in TShell 0.1.2.
 
 Pushing a `v*` tag runs the Windows GitHub Actions workflow, which tests,
 builds, packages, and publishes a same-repository release. The package contains

@@ -420,6 +420,8 @@ fn run(
     let initial = discover(&config, true)?;
     let mut initial = Some(initial);
     let mut queue = VecDeque::new();
+    let mut pending_actions = VecDeque::new();
+    let mut layout_snapshot = Snapshot::default();
     let mut refreshing = false;
     let mut urgent_refresh = false;
     let mut dirty = true;
@@ -695,10 +697,17 @@ fn run(
                                     })
                                     .collect(),
                             );
-                            let previous = shared.lock().snapshot.clone();
-                            let rebalances = rebalance_removed_panes(&previous, &next);
+                            let rebalances = rebalance_changed_panes(&layout_snapshot, &next);
+                            layout_snapshot = next.clone();
                             if !rebalances.is_empty() {
-                                normalize_removed_panes(&previous, &mut next);
+                                // Keep the last confirmed layout visible until tmux acknowledges
+                                // the group resize and a fresh query reports authoritative geometry.
+                                for request in rebalances.into_iter().rev() {
+                                    queue.push_front(request);
+                                }
+                                dirty = true;
+                                urgent_refresh = true;
+                                continue;
                             }
                             let active = next
                                 .window()
@@ -801,9 +810,6 @@ fn run(
                                 || state.snapshot.connection != next.connection
                                 || state.snapshot.message != next.message
                             {
-                                for request in rebalances.into_iter().rev() {
-                                    queue.push_front(request);
-                                }
                                 let revision = state.snapshot.revision + 1;
                                 state.snapshot = Snapshot { revision, ..next };
                             }
@@ -880,36 +886,13 @@ fn run(
                 }
             }
             Ok(Message::Action(action)) => {
-                if let Action::SelectSession(id) | Action::NewWindowInSession(id) = &action {
+                if pending_actions.len() < 256 {
+                    pending_actions.push_back(action);
+                } else {
                     let mut state = shared.lock();
-                    if state.snapshot.sessions.iter().any(|s| &s.id == id) {
-                        state.snapshot.active_session = id.clone();
-                        state.snapshot.revision += 1;
-                    }
+                    state.snapshot.message = Some(crate::t!("tmux.queue_full").to_string());
+                    state.snapshot.revision += 1;
                 }
-                let state = shared.lock().snapshot.clone();
-                let action_target = match &action {
-                    Action::RemoveSession(id) | Action::RenameSession { id, .. } => id.clone(),
-                    _ => state.active_session.clone(),
-                };
-                match action_requests(action, &state) {
-                    Ok(requests) => {
-                        for mut request in requests {
-                            if matches!(request.response, Response::CreatedSession) {
-                                auxiliary_request(config.clone(), request, tx.clone());
-                            } else {
-                                request.target = Some(action_target.clone());
-                                queue.push_back(request);
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        let mut state = shared.lock();
-                        state.snapshot.message = Some(error.to_string());
-                        state.snapshot.revision += 1;
-                    }
-                }
-                dirty = true;
             }
             Ok(Message::Probe(sender)) => {
                 let selected = shared.lock().snapshot.active_session.clone();
@@ -1021,6 +1004,45 @@ fn run(
                     }
                 }
                 last_resize = Instant::now();
+            }
+            // Resolve the next action from the server snapshot after the prior
+            // action settles; rapid splits must not target stale panes or sizes.
+            if !refreshing
+                && !discovering
+                && !dirty
+                && let Some(action) = pending_actions.pop_front()
+            {
+                if let Action::SelectSession(id) | Action::NewWindowInSession(id) = &action {
+                    let mut state = shared.lock();
+                    if state.snapshot.sessions.iter().any(|s| &s.id == id) {
+                        state.snapshot.active_session = id.clone();
+                        state.snapshot.revision += 1;
+                    }
+                }
+                let state = shared.lock().snapshot.clone();
+                let action_target = match &action {
+                    Action::RemoveSession(id) | Action::RenameSession { id, .. } => id.clone(),
+                    _ => state.active_session.clone(),
+                };
+                match action_requests(action, &state) {
+                    Ok(requests) => {
+                        for mut request in requests {
+                            if matches!(request.response, Response::CreatedSession) {
+                                auxiliary_request(config.clone(), request, tx.clone());
+                            } else {
+                                request.target = Some(action_target.clone());
+                                queue.push_back(request);
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        let mut state = shared.lock();
+                        state.snapshot.message = Some(error.to_string());
+                        state.snapshot.revision += 1;
+                    }
+                }
+                dirty = true;
+                urgent_refresh = true;
             }
             if !refreshing
                 && !discovering
@@ -1211,18 +1233,6 @@ fn parse_snapshot(draft: &Draft, active_session: &str) -> Result<Snapshot> {
     })
 }
 
-fn equal_sizes(extent: usize, count: usize) -> Vec<usize> {
-    if count == 0 {
-        return Vec::new();
-    }
-    let available = extent.saturating_sub(count.saturating_sub(1));
-    let base = available / count;
-    let remainder = available % count;
-    (0..count)
-        .map(|index| (base + usize::from(index < remainder)).max(1))
-        .collect()
-}
-
 fn pane_columns(window: &WindowInfo) -> BTreeMap<usize, Vec<&crate::backend::PaneInfo>> {
     let mut columns: BTreeMap<_, Vec<_>> = BTreeMap::new();
     for pane in &window.panes {
@@ -1247,15 +1257,9 @@ fn sizes_are_equal(values: impl Iterator<Item = usize>) -> bool {
     max - min <= 1
 }
 
-fn is_equal_column_layout(window: &WindowInfo) -> bool {
+fn is_column_layout(window: &WindowInfo) -> bool {
     let columns = pane_columns(window);
-    if columns.is_empty()
-        || !sizes_are_equal(
-            columns
-                .values()
-                .filter_map(|rows| rows.first().map(|pane| pane.cols)),
-        )
-    {
+    if columns.is_empty() {
         return false;
     }
     let mut expected_x = 0;
@@ -1269,7 +1273,6 @@ fn is_equal_column_layout(window: &WindowInfo) -> bool {
                 .last()
                 .is_none_or(|last| last.y + last.rows != window.rows)
             || rows.iter().any(|pane| pane.cols != first.cols)
-            || !sizes_are_equal(rows.iter().map(|pane| pane.rows))
         {
             return false;
         }
@@ -1283,6 +1286,47 @@ fn is_equal_column_layout(window: &WindowInfo) -> bool {
         expected_x = x + first.cols + 1;
     }
     expected_x.saturating_sub(1) == window.cols
+}
+
+fn is_equal_column_layout(window: &WindowInfo) -> bool {
+    let columns = pane_columns(window);
+    is_column_layout(window)
+        && sizes_are_equal(columns.values().map(|rows| rows[0].cols))
+        && columns
+            .values()
+            .all(|rows| sizes_are_equal(rows.iter().map(|pane| pane.rows)))
+}
+
+// tmux spreads siblings as a group, preserving pane identities and avoiding
+// the size changes that sequential resize-pane -x/-y commands undo in each other.
+fn equalize_commands(window: &WindowInfo) -> Vec<String> {
+    if window.panes.len() < 2 || window.zoomed {
+        return Vec::new();
+    }
+    if is_pure_horizontal_layout(window) {
+        return vec![format!(
+            "select-layout -t {} even-horizontal",
+            q(&window.id)
+        )];
+    }
+    if is_pure_vertical_layout(window) {
+        return vec![format!("select-layout -t {} even-vertical", q(&window.id))];
+    }
+    spread_column_commands(window)
+}
+
+fn spread_column_commands(window: &WindowInfo) -> Vec<String> {
+    let columns = pane_columns(window);
+    let mut commands: Vec<_> = columns
+        .values()
+        .map(|rows| format!("select-layout -E -t {}", q(&rows[0].id)))
+        .collect();
+    // After all row groups are equal, spreading the first group climbs to
+    // their common column parent. The entire sequence shares one submission.
+    if let Some(first) = columns.values().next().and_then(|rows| rows.first()) {
+        commands.push(format!("select-layout -E -t {}", q(&first.id)));
+    }
+    commands
 }
 
 fn is_pure_horizontal_layout(window: &WindowInfo) -> bool {
@@ -1299,129 +1343,39 @@ fn is_pure_vertical_layout(window: &WindowInfo) -> bool {
         .all(|pane| pane.x == 0 && pane.cols == window.cols)
 }
 
-fn rebalance_removed_panes(previous: &Snapshot, next: &Snapshot) -> Vec<Request> {
+fn rebalance_changed_panes(previous: &Snapshot, next: &Snapshot) -> Vec<Request> {
     let mut requests = Vec::new();
     for next_session in &next.sessions {
-        let Some(previous_session) = previous
-            .sessions
-            .iter()
-            .find(|session| session.id == next_session.id)
-        else {
-            continue;
-        };
         for next_window in &next_session.windows {
-            let Some(previous_window) = previous_session
-                .windows
-                .iter()
+            let Some(previous_window) = previous
+                .windows()
                 .find(|window| window.id == next_window.id)
             else {
                 continue;
             };
-            if previous_window.zoomed
+            let previous_ids: BTreeSet<_> =
+                previous_window.panes.iter().map(|pane| &pane.id).collect();
+            let next_ids: BTreeSet<_> = next_window.panes.iter().map(|pane| &pane.id).collect();
+            let changed = previous_ids != next_ids
+                || (previous_window.cols, previous_window.rows)
+                    != (next_window.cols, next_window.rows)
+                || previous_window.zoomed;
+            if !changed
                 || next_window.zoomed
-                || previous_window.panes.len() <= next_window.panes.len()
-                || !is_equal_column_layout(previous_window)
+                || !is_column_layout(next_window)
+                || is_equal_column_layout(next_window)
             {
                 continue;
             }
-            if is_pure_horizontal_layout(previous_window) {
-                requests.push(request(
-                    format!("select-layout -t {} even-horizontal", q(&next_window.id)),
-                    Response::Relayout,
-                ));
-                continue;
-            }
-            if is_pure_vertical_layout(previous_window) {
-                requests.push(request(
-                    format!("select-layout -t {} even-vertical", q(&next_window.id)),
-                    Response::Relayout,
-                ));
-                continue;
-            }
-            let request_start = requests.len();
-            let columns = pane_columns(next_window);
-            if columns.len() > 1 {
-                let widths = equal_sizes(next_window.cols, columns.len());
-                requests.extend(
-                    columns
-                        .values()
-                        .filter_map(|rows| rows.first())
-                        .zip(widths)
-                        .map(|(pane, width)| {
-                            request(
-                                format!("resize-pane -x {width} -t {}", q(&pane.id)),
-                                Response::Ignore,
-                            )
-                        }),
+            let commands = equalize_commands(next_window);
+            if !commands.is_empty() {
+                requests.push(
+                    request_sequence(commands, Response::Relayout).session(Some(&next_session.id)),
                 );
-            }
-            for rows in columns.values().filter(|rows| rows.len() > 1) {
-                let heights = equal_sizes(next_window.rows, rows.len());
-                requests.extend(rows.iter().zip(heights).map(|(pane, height)| {
-                    request(
-                        format!("resize-pane -y {height} -t {}", q(&pane.id)),
-                        Response::Ignore,
-                    )
-                }));
-            }
-            if requests.len() > request_start {
-                requests.last_mut().unwrap().response = Response::Relayout;
             }
         }
     }
     requests
-}
-
-fn normalize_removed_panes(previous: &Snapshot, next: &mut Snapshot) {
-    for next_session in &mut next.sessions {
-        let Some(previous_session) = previous
-            .sessions
-            .iter()
-            .find(|session| session.id == next_session.id)
-        else {
-            continue;
-        };
-        for next_window in &mut next_session.windows {
-            let Some(previous_window) = previous_session
-                .windows
-                .iter()
-                .find(|window| window.id == next_window.id)
-            else {
-                continue;
-            };
-            if previous_window.zoomed
-                || next_window.zoomed
-                || previous_window.panes.len() <= next_window.panes.len()
-                || !is_equal_column_layout(previous_window)
-            {
-                continue;
-            }
-
-            let mut columns: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-            for (index, pane) in next_window.panes.iter().enumerate() {
-                columns.entry(pane.x).or_default().push(index);
-            }
-            for rows in columns.values_mut() {
-                rows.sort_by_key(|index| next_window.panes[*index].y);
-            }
-
-            let widths = equal_sizes(next_window.cols, columns.len());
-            let mut x = 0;
-            for (rows, width) in columns.into_values().zip(widths) {
-                let heights = equal_sizes(next_window.rows, rows.len());
-                let mut y = 0;
-                for (index, height) in rows.into_iter().zip(heights) {
-                    let pane = &mut next_window.panes[index];
-                    pane.x = x;
-                    pane.y = y;
-                    pane.cols = width;
-                    pane.rows = height;
-                    y += height + 1;
-                }
-                x += width + 1;
-            }
-        }
-    }
 }
 
 fn action_requests(action: Action, state: &Snapshot) -> Result<Vec<Request>> {
@@ -1456,10 +1410,6 @@ fn action_requests(action: Action, state: &Snapshot) -> Result<Vec<Request>> {
             };
             format!("swap-pane -s {pane} -t {}", q(&target))
         }
-        Action::CycleLayout => format!(
-            "next-layout -t {}",
-            q(&window.context(crate::t!("tmux.no_window"))?.id)
-        ),
         Action::SelectSession(_) => return Ok(vec![]),
         Action::SelectWindow(id) => format!("select-window -t {}", q(&id)),
         Action::SelectPane(id) => format!("select-pane -t {}", q(&id)),
@@ -1528,173 +1478,66 @@ fn action_requests(action: Action, state: &Snapshot) -> Result<Vec<Request>> {
             )
         }
         Action::NewWindow => format!("new-window -t {}", q(&format!("{}:", state.active_session))),
-        Action::Split(SplitAxis::Horizontal) => {
+        Action::Split(axis) => {
             let window = window.context(crate::t!("tmux.no_window"))?;
-            if is_pure_horizontal_layout(window) {
-                return Ok(vec![request_sequence(
-                    vec![
-                        format!("split-window -h -f -t {pane} -c '#{{pane_current_path}}'"),
-                        format!("select-layout -t {} even-horizontal", q(&window.id)),
-                    ],
-                    Response::Relayout,
-                )]);
-            }
-            let mut columns = BTreeMap::new();
-            for pane in &window.panes {
-                columns.entry(pane.x).or_insert(pane);
-            }
-            let column_count = columns.len().max(1);
-            let widths = equal_sizes(window.cols, column_count + 1);
-            let new_width = widths[column_count];
-            let mut requests = vec![request(
-                format!("split-window -h -f -l {new_width} -t {pane} -c '#{{pane_current_path}}'"),
-                Response::Ignore,
-            )];
-            requests.extend(columns.into_values().zip(widths).map(|(column, width)| {
-                request(
-                    format!("resize-pane -x {width} -t {}", q(&column.id)),
-                    Response::Ignore,
-                )
-            }));
-            return Ok(requests);
-        }
-        Action::Split(SplitAxis::Vertical) => {
-            let window = window.context(crate::t!("tmux.no_window"))?;
-            if is_pure_vertical_layout(window) {
-                return Ok(vec![request_sequence(
-                    vec![
-                        format!("split-window -v -t {pane} -c '#{{pane_current_path}}'"),
-                        format!("select-layout -t {} even-vertical", q(&window.id)),
-                    ],
-                    Response::Relayout,
-                )]);
-            }
             let active = window
                 .panes
                 .iter()
                 .find(|candidate| candidate.id == window.active_pane)
                 .context(crate::t!("tmux.no_pane"))?;
-            let mut rows: Vec<_> = window
-                .panes
-                .iter()
-                .filter(|candidate| candidate.x == active.x && candidate.cols == active.cols)
-                .collect();
-            rows.sort_by_key(|candidate| candidate.y);
-            let top = rows.iter().map(|row| row.y).min().unwrap_or(active.y);
-            let bottom = rows
-                .iter()
-                .map(|row| row.y + row.rows)
-                .max()
-                .unwrap_or(active.y + active.rows);
-            let row_count = rows.len() + 1;
-            let heights = equal_sizes(bottom.saturating_sub(top), row_count);
-            let active_index = rows
-                .iter()
-                .position(|row| row.id == active.id)
-                .context(crate::t!("tmux.pane_not_in_layout"))?;
-            let new_index = active_index + 1;
-            let mut requests = vec![request(
-                format!(
-                    "split-window -v -l {} -t {pane} -c '#{{pane_current_path}}'",
-                    heights[new_index]
-                ),
-                Response::Ignore,
+            let directory = if active.cwd.is_empty() {
+                "'#{pane_current_path}'".to_owned()
+            } else {
+                q(&active.cwd)
+            };
+            let mut unzoomed = window.clone();
+            unzoomed.zoomed = false;
+            let target = match axis {
+                SplitAxis::Horizontal => window
+                    .panes
+                    .iter()
+                    .max_by_key(|pane| (pane.x, pane.y))
+                    .map(|pane| q(&pane.id))
+                    .unwrap_or_else(|| pane.clone()),
+                SplitAxis::Vertical => pane.clone(),
+            };
+            let mut commands = vec![format!(
+                "split-window {} -t {target} -c {directory}",
+                match axis {
+                    SplitAxis::Horizontal => "-h -f",
+                    SplitAxis::Vertical => "-v",
+                },
             )];
-            requests.extend(rows.into_iter().enumerate().map(|(index, row)| {
-                let target_index = if index <= active_index {
-                    index
-                } else {
-                    index + 1
-                };
-                let height = heights[target_index];
-                request(
-                    format!("resize-pane -y {height} -t {}", q(&row.id)),
-                    Response::Ignore,
-                )
-            }));
-            return Ok(requests);
+            // The active pane survives the split and identifies the new row group.
+            commands.push(format!("select-layout -E -t {pane}"));
+            if !window.zoomed
+                && match axis {
+                    SplitAxis::Horizontal => is_pure_horizontal_layout(window),
+                    SplitAxis::Vertical => is_pure_vertical_layout(window),
+                }
+            {
+                commands.push(format!(
+                    "select-layout -t {} {}",
+                    q(&window.id),
+                    match axis {
+                        SplitAxis::Horizontal => "even-horizontal",
+                        SplitAxis::Vertical => "even-vertical",
+                    }
+                ));
+            } else {
+                commands.extend(spread_column_commands(&unzoomed));
+            }
+            return Ok(vec![request_sequence(commands, Response::Relayout)]);
         }
         Action::ClosePane => {
             let window = window.context(crate::t!("tmux.no_window"))?;
-            let Some(active) = window
+            let mut remaining = window.clone();
+            remaining.zoomed = false;
+            remaining
                 .panes
-                .iter()
-                .find(|candidate| candidate.id == window.active_pane)
-            else {
-                return Ok(vec![]);
-            };
-            if window.panes.len() > 1 && is_pure_horizontal_layout(window) {
-                return Ok(vec![request_sequence(
-                    vec![
-                        format!("kill-pane -t {pane}"),
-                        format!("select-layout -t {} even-horizontal", q(&window.id)),
-                    ],
-                    Response::Relayout,
-                )]);
-            }
-            if window.panes.len() > 1 && is_pure_vertical_layout(window) {
-                return Ok(vec![request_sequence(
-                    vec![
-                        format!("kill-pane -t {pane}"),
-                        format!("select-layout -t {} even-vertical", q(&window.id)),
-                    ],
-                    Response::Relayout,
-                )]);
-            }
-            let mut requests = vec![request(format!("kill-pane -t {pane}"), Response::Ignore)];
-            let mut rows: Vec<_> = window
-                .panes
-                .iter()
-                .filter(|candidate| {
-                    candidate.id != active.id
-                        && candidate.x == active.x
-                        && candidate.cols == active.cols
-                })
-                .collect();
-            if !rows.is_empty() {
-                rows.sort_by_key(|candidate| candidate.y);
-                let top = window
-                    .panes
-                    .iter()
-                    .filter(|candidate| candidate.x == active.x && candidate.cols == active.cols)
-                    .map(|row| row.y)
-                    .min()
-                    .unwrap_or(active.y);
-                let bottom = window
-                    .panes
-                    .iter()
-                    .filter(|candidate| candidate.x == active.x && candidate.cols == active.cols)
-                    .map(|row| row.y + row.rows)
-                    .max()
-                    .unwrap_or(active.y + active.rows);
-                let heights = equal_sizes(bottom.saturating_sub(top), rows.len());
-                requests.extend(rows.into_iter().zip(heights).map(|(row, height)| {
-                    request(
-                        format!("resize-pane -y {height} -t {}", q(&row.id)),
-                        Response::Ignore,
-                    )
-                }));
-            } else {
-                let mut columns = BTreeMap::new();
-                for candidate in &window.panes {
-                    if candidate.x != active.x {
-                        columns.entry(candidate.x).or_insert(candidate);
-                    }
-                }
-                if !columns.is_empty() {
-                    let widths = equal_sizes(window.cols, columns.len());
-                    requests.extend(columns.into_values().zip(widths).map(|(column, width)| {
-                        request(
-                            format!("resize-pane -x {width} -t {}", q(&column.id)),
-                            Response::Ignore,
-                        )
-                    }));
-                }
-            }
-            let commands = requests
-                .into_iter()
-                .map(|request| request.command)
-                .collect::<Vec<_>>();
+                .retain(|candidate| candidate.id != window.active_pane);
+            let mut commands = vec![format!("kill-pane -t {pane}")];
+            commands.extend(equalize_commands(&remaining));
             return Ok(vec![request_sequence(commands, Response::Relayout)]);
         }
         Action::CloseWindow => format!(
@@ -1702,17 +1545,6 @@ fn action_requests(action: Action, state: &Snapshot) -> Result<Vec<Request>> {
             q(&window.context(crate::t!("tmux.no_tmux_window"))?.id)
         ),
         Action::Zoom => format!("resize-pane -Z -t {pane}"),
-        Action::ResizePane { id, axis, amount } => format!(
-            "resize-pane -t {} {} {}",
-            q(&id),
-            match (axis, amount >= 0) {
-                (SplitAxis::Horizontal, true) => "-R",
-                (SplitAxis::Horizontal, false) => "-L",
-                (SplitAxis::Vertical, true) => "-D",
-                (SplitAxis::Vertical, false) => "-U",
-            },
-            amount.unsigned_abs().min(100)
-        ),
     };
     Ok(vec![request(command, Response::Ignore)])
 }
@@ -1945,7 +1777,6 @@ mod tests {
         assert!(is_pane_exit_notification("%pane-exited %1"));
         assert!(is_pane_exit_notification("%pane-died %1"));
         assert!(!is_pane_exit_notification("%layout-change @1 layout"));
-        assert_eq!(equal_sizes(80, 6), [13, 13, 13, 12, 12, 12]);
     }
 
     #[test]
@@ -2096,10 +1927,7 @@ mod tests {
         let window = &mut zoomed.sessions[0].windows[0];
         window.zoomed = true;
         window.panes.truncate(1);
-        assert!(rebalance_removed_panes(&previous, &zoomed).is_empty());
-        let expected = zoomed.clone();
-        normalize_removed_panes(&previous, &mut zoomed);
-        assert_eq!(zoomed, expected);
+        assert!(rebalance_changed_panes(&previous, &zoomed).is_empty());
     }
 
     fn split_test_snapshot(active_pane: &str) -> Snapshot {
@@ -2178,116 +2006,110 @@ mod tests {
     }
 
     #[test]
-    fn horizontal_split_adds_an_equal_full_height_column() {
-        let requests = action_requests(
-            Action::Split(SplitAxis::Horizontal),
-            &split_test_snapshot("%3"),
-        )
-        .unwrap();
-        let commands: Vec<_> = requests
-            .into_iter()
-            .map(|request| request.command)
-            .collect();
-        assert_eq!(
-            commands,
-            [
-                "split-window -h -f -l 29 -t '%3' -c '#{pane_current_path}'",
-                "resize-pane -x 30 -t '%0'",
-                "resize-pane -x 29 -t '%1'",
-                "resize-pane -x 29 -t '%2'",
-            ]
-        );
-    }
-
-    #[test]
-    fn vertical_split_equalizes_only_the_active_column() {
-        let requests = action_requests(
-            Action::Split(SplitAxis::Vertical),
-            &split_test_snapshot("%1"),
-        )
-        .unwrap();
-        let commands: Vec<_> = requests
-            .into_iter()
-            .map(|request| request.command)
-            .collect();
-        assert_eq!(
-            commands,
-            [
-                "split-window -v -l 9 -t '%1' -c '#{pane_current_path}'",
-                "resize-pane -y 10 -t '%1'",
-                "resize-pane -y 9 -t '%3'",
-            ]
-        );
-    }
-
-    #[test]
-    fn closing_a_pane_rebalances_its_rows_or_columns() {
-        let row_requests = action_requests(Action::ClosePane, &split_test_snapshot("%1")).unwrap();
-        let row_commands: Vec<_> = row_requests
-            .into_iter()
-            .map(|request| request.command)
-            .collect();
-        assert_eq!(
-            row_commands,
-            ["kill-pane -t '%1' ; resize-pane -y 30 -t '%3'"]
-        );
-
-        let column_requests =
-            action_requests(Action::ClosePane, &split_test_snapshot("%2")).unwrap();
-        let column_commands: Vec<_> = column_requests
-            .into_iter()
-            .map(|request| request.command)
-            .collect();
-        assert_eq!(
-            column_commands,
-            ["kill-pane -t '%2' ; resize-pane -x 60 -t '%0' ; resize-pane -x 59 -t '%1'"]
-        );
-
-        let mut horizontal = split_test_snapshot("%1");
-        let horizontal_window = &mut horizontal.sessions[0].windows[0];
-        horizontal_window.panes.retain(|pane| pane.id != "%3");
-        horizontal_window.panes[1].rows = 30;
-        let horizontal_commands: Vec<_> = action_requests(Action::ClosePane, &horizontal)
+    fn grouped_splits_submit_one_sequence_and_inherit_the_active_directory() {
+        let mut state = split_test_snapshot("%1");
+        state.sessions[0].windows[0]
+            .panes
+            .iter_mut()
+            .find(|pane| pane.id == "%1")
             .unwrap()
-            .into_iter()
-            .map(|request| request.command)
-            .collect();
-        assert_eq!(
-            horizontal_commands,
-            ["kill-pane -t '%1' ; select-layout -t '@4' even-horizontal"]
-        );
+            .cwd = "/work/active project".into();
+        for axis in [SplitAxis::Horizontal, SplitAxis::Vertical] {
+            let requests = action_requests(Action::Split(axis), &state).unwrap();
+            assert_eq!(requests.len(), 1);
+            let request = &requests[0];
+            assert!(matches!(request.response, Response::Relayout));
+            assert!(request.command.contains("-c '/work/active project'"));
+            assert!(!request.command.contains("resize-pane -x"));
+            assert!(!request.command.contains("resize-pane -y"));
+            assert!(request.command.contains("select-layout -E -t '%1'"));
+            assert!(request.command.starts_with(match axis {
+                SplitAxis::Horizontal => "split-window -h -f -t '%2'",
+                SplitAxis::Vertical => "split-window -v -t '%1'",
+            }));
+        }
     }
 
     #[test]
-    fn observed_pane_exit_rebalances_an_equal_layout() {
+    fn splitting_the_other_axis_keeps_existing_groups() {
+        let mut horizontal = split_test_snapshot("%1");
+        let window = &mut horizontal.sessions[0].windows[0];
+        window.panes.retain(|pane| pane.id != "%3");
+        window.panes[1].rows = window.rows;
+        let requests = action_requests(Action::Split(SplitAxis::Vertical), &horizontal).unwrap();
+        assert!(!requests[0].command.contains("even-horizontal"));
+
+        let mut vertical = split_test_snapshot("%1");
+        let window = &mut vertical.sessions[0].windows[0];
+        window.panes.retain(|pane| pane.x == 41);
+        for pane in &mut window.panes {
+            pane.x = 0;
+            pane.cols = window.cols;
+        }
+        let requests = action_requests(Action::Split(SplitAxis::Horizontal), &vertical).unwrap();
+        assert!(!requests[0].command.contains("even-vertical"));
+    }
+
+    #[test]
+    fn close_rebalances_surviving_groups_without_targeting_the_removed_pane() {
+        for closing in ["%1", "%2"] {
+            let requests =
+                action_requests(Action::ClosePane, &split_test_snapshot(closing)).unwrap();
+            assert_eq!(requests.len(), 1);
+            assert!(matches!(requests[0].response, Response::Relayout));
+            let commands: Vec<_> = requests[0].command.split(" ; ").collect();
+            assert_eq!(commands[0], format!("kill-pane -t '{}'", closing));
+            assert!(
+                commands[1..]
+                    .iter()
+                    .all(|command| command.starts_with("select-layout")
+                        && !command.contains(&q(closing)))
+            );
+        }
+    }
+
+    #[test]
+    fn pane_exit_recovers_even_when_previous_columns_were_unequal() {
         let mut previous = split_test_snapshot("%1");
-        let previous_window = &mut previous.sessions[0].windows[0];
-        previous_window.panes.retain(|pane| pane.id != "%3");
-        previous_window.panes[1].rows = 30;
-        assert!(is_equal_column_layout(previous_window));
-
+        let window = &mut previous.sessions[0].windows[0];
+        window.panes.retain(|pane| pane.id != "%3");
+        window.panes[0].cols = 50;
+        window.panes[1].x = 51;
+        window.panes[1].cols = 29;
+        window.panes[1].rows = 30;
+        assert!(!is_equal_column_layout(window));
+        assert!(is_column_layout(window));
         let mut next = previous.clone();
-        let next_window = &mut next.sessions[0].windows[0];
-        next_window.panes.retain(|pane| pane.id != "%1");
-        next_window.panes[0].cols = 80;
-        next_window.panes[1].x = 81;
-        next_window.panes[1].cols = 39;
+        let window = &mut next.sessions[0].windows[0];
+        window.panes.retain(|pane| pane.id != "%1");
+        window.panes[0].cols = 80;
+        window.panes[1].x = 81;
+        window.panes[1].cols = 39;
+        let authoritative = next.clone();
+        let requests = rebalance_changed_panes(&previous, &next);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].command, "select-layout -t '@4' even-horizontal");
+        assert_eq!(requests[0].target.as_deref(), Some("$1"));
+        assert_eq!(next, authoritative);
+    }
 
-        let commands: Vec<_> = rebalance_removed_panes(&previous, &next)
-            .into_iter()
-            .map(|request| request.command)
-            .collect();
-        assert_eq!(commands, ["select-layout -t '@4' even-horizontal"]);
-
-        normalize_removed_panes(&previous, &mut next);
-        let panes = &next.window().unwrap().panes;
-        assert_eq!((panes[0].x, panes[0].cols), (0, 60));
-        assert_eq!((panes[1].x, panes[1].cols), (61, 59));
+    #[test]
+    fn window_resize_rebalances_groups_and_settled_snapshots_do_not_repeat() {
+        let previous = split_test_snapshot("%1");
+        let mut next = previous.clone();
+        let window = &mut next.sessions[0].windows[0];
+        window.cols = 150;
+        window.panes.last_mut().unwrap().cols += 30;
+        let requests = rebalance_changed_panes(&previous, &next);
+        assert_eq!(requests.len(), 1);
+        assert!(matches!(requests[0].response, Response::Relayout));
+        assert!(requests[0].command.contains("select-layout -E"));
+        assert!(rebalance_changed_panes(&next, &next).is_empty());
     }
 
     #[test]
     #[ignore = "requires TSHELL_SSH_TEST_HOST; uses an isolated tmux socket"]
-    fn real_tmux_equal_close_and_exit_stay_horizontal() {
+    fn real_tmux_grouped_splits_close_exit_resize_and_zoom_stay_equal() {
         struct Cleanup(HostConfig);
         impl Drop for Cleanup {
             fn drop(&mut self) {
@@ -2366,6 +2188,62 @@ mod tests {
                 .unwrap();
             wait(pane_count);
         }
+        // Submit a burst without waiting: every action must use the snapshot
+        // produced by its predecessor, including the newly focused pane.
+        for axis in [
+            SplitAxis::Vertical,
+            SplitAxis::Vertical,
+            SplitAxis::Horizontal,
+            SplitAxis::Vertical,
+        ] {
+            client.apply(Action::Split(axis)).unwrap();
+        }
+        let wait_grouped = |count: usize, dimensions: Option<(usize, usize)>| {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                let state = client.snapshot();
+                if let Some(window) = state.window()
+                    && !window.zoomed
+                    && window.panes.len() == count
+                    && is_equal_column_layout(window)
+                    && dimensions.is_none_or(|size| size == (window.cols, window.rows))
+                {
+                    return state;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "mixed layout did not settle: {state:?}"
+                );
+                thread::sleep(Duration::from_millis(20));
+            }
+        };
+        let grouped = wait_grouped(6, None);
+        let groups = pane_columns(grouped.window().unwrap());
+        assert_eq!(groups.values().map(Vec::len).collect::<Vec<_>>(), [1, 3, 2]);
+        let id = grouped.window().unwrap().id.clone();
+        client.resize(&id, 143, 53);
+        wait_grouped(6, Some((143, 53)));
+        client.apply(Action::Zoom).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !client
+            .snapshot()
+            .window()
+            .is_some_and(|window| window.zoomed)
+        {
+            assert!(Instant::now() < deadline, "tmux did not zoom");
+            thread::sleep(Duration::from_millis(20));
+        }
+        client.apply(Action::Zoom).unwrap();
+        wait_grouped(6, Some((143, 53)));
+        client.apply(Action::ClosePane).unwrap();
+        let remaining = wait_grouped(5, None);
+        let exiting = remaining.window().unwrap().active_pane.clone();
+        client
+            .screen(&exiting)
+            .unwrap()
+            .input(b"exit\r".to_vec())
+            .unwrap();
+        wait_grouped(4, None);
     }
 
     #[test]
@@ -2510,7 +2388,6 @@ mod tests {
                 w.panes.len() == 2 && max - min <= 1
             })
         });
-        client.apply(Action::CycleLayout).unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
         let screen = loop {
             if let Some(screen) = client.screen(&active) {

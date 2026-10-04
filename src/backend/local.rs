@@ -384,14 +384,6 @@ impl LocalBackend {
                     }
                 }
             }
-            Action::CycleLayout => {
-                if let Some(w) = self.state.window().cloned() {
-                    if let Some(layout) = self.layouts.get_mut(&w.id) {
-                        layout.cycle();
-                    }
-                    self.resize(&w.id, w.cols, w.rows);
-                }
-            }
             Action::NewWindow => self.new_window(None)?,
             Action::NewWindowAt { path, name } => {
                 anyhow::ensure!(
@@ -483,14 +475,6 @@ impl LocalBackend {
             Action::CloseWindow => {
                 if let Some(window) = self.state.window().cloned() {
                     self.close_window(&window.id);
-                }
-            }
-            Action::ResizePane { id, axis, amount } => {
-                if let Some(w) = self.state.window().cloned() {
-                    if let Some(layout) = self.layouts.get_mut(&w.id) {
-                        layout.adjust(&id, axis, amount, w.cols, w.rows);
-                    }
-                    self.resize(&w.id, w.cols, w.rows);
                 }
             }
         }
@@ -819,8 +803,6 @@ mod tests {
         assert_eq!(b.snapshot().window().unwrap().active_pane, right);
         b.apply(Action::MovePane(Direction::Left)).unwrap();
         assert_eq!(b.snapshot().window().unwrap().panes[0].id, right);
-        b.apply(Action::CycleLayout).unwrap();
-        assert!(b.snapshot().window().unwrap().panes.iter().any(|p| p.y > 0));
         b.apply(Action::Split(SplitAxis::Vertical)).unwrap();
         let w = b.snapshot().window().unwrap().clone();
         assert_eq!(w.panes.len(), 3);
@@ -848,7 +830,6 @@ mod tests {
         for index in 1..MAX_LOCAL_PANES {
             layout = Layout::Split {
                 axis: SplitAxis::Horizontal,
-                ratio: 0.5,
                 first: Box::new(layout),
                 second: Box::new(Layout::Leaf(format!("pane-{index}"))),
             };

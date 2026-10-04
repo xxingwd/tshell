@@ -30,9 +30,7 @@ pub enum Shortcut {
     RenderStats,
     Focus,
     Floating,
-    Layout,
     Font(i32),
-    Size(i32),
     NewColumn,
     NewRow,
     Move(Direction),
@@ -198,12 +196,6 @@ pub const BINDINGS: &[Binding] = &[
         defaults: &["alt-f"],
     },
     Binding {
-        id: "layout",
-        key: "shortcut.layout",
-        action: Shortcut::Layout,
-        defaults: &["alt-t"],
-    },
-    Binding {
         id: "font_down",
         key: "shortcut.font_down",
         action: Shortcut::Font(-1),
@@ -214,18 +206,6 @@ pub const BINDINGS: &[Binding] = &[
         key: "shortcut.font_up",
         action: Shortcut::Font(1),
         defaults: &["ctrl-="],
-    },
-    Binding {
-        id: "size_down",
-        key: "shortcut.size_down",
-        action: Shortcut::Size(-1),
-        defaults: &["alt--"],
-    },
-    Binding {
-        id: "size_up",
-        key: "shortcut.size_up",
-        action: Shortcut::Size(1),
-        defaults: &["alt-="],
     },
     Binding {
         id: "column",
@@ -502,7 +482,9 @@ mod tests {
                 "{key}"
             );
         }
-        for key in ["ctrl-c", "ctrl-d", "ctrl-z", "alt-b", "a"] {
+        for key in [
+            "ctrl-c", "ctrl-d", "ctrl-z", "alt-b", "alt-t", "alt--", "alt-=", "a",
+        ] {
             assert_eq!(resolve(&Keystroke::parse(key).unwrap()), None, "{key}");
         }
     }

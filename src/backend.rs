@@ -192,42 +192,24 @@ impl Snapshot {
 
 #[derive(Clone, Debug)]
 pub enum Action {
-    RenameSession {
-        id: String,
-        name: String,
-    },
-    RenameWindow {
-        id: String,
-        name: String,
-    },
+    RenameSession { id: String, name: String },
+    RenameWindow { id: String, name: String },
     RemoveSession(String),
     NewWindowInSession(String),
     MoveFocus(Direction),
     MovePane(Direction),
-    CycleLayout,
     SelectSession(String),
     SelectWindow(String),
     SelectPane(String),
     NewSession,
     NewSessionAt(String),
-    NewNamedSession {
-        path: String,
-        name: String,
-    },
+    NewNamedSession { path: String, name: String },
     NewWindow,
-    NewWindowAt {
-        path: String,
-        name: String,
-    },
+    NewWindowAt { path: String, name: String },
     Split(SplitAxis),
     ClosePane,
     CloseWindow,
     Zoom,
-    ResizePane {
-        id: String,
-        axis: SplitAxis,
-        amount: i32,
-    },
 }
 
 pub enum Backend {

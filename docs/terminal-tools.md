@@ -16,6 +16,8 @@ Opening search immediately focuses its input, including when invoked from
 Explorer or Git. Workspace focus restoration targets the search input while the
 overlay is open. Ordinary input events reach the native input handler; the
 terminal only encodes key events when its own surface has focus.
+Switching to Explorer or Git also restores focus to a visible workspace target
+so the search shortcut remains reachable after a view change.
 
 Search runs in a coalesced background job. Query generations reject stale
 results. New output and terminal reflow refresh matches and invalidate a stale

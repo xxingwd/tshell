@@ -6,7 +6,6 @@ pub(super) enum Layout {
     Leaf(String),
     Split {
         axis: SplitAxis,
-        ratio: f32,
         first: Box<Layout>,
         second: Box<Layout>,
     },
@@ -39,7 +38,6 @@ impl Layout {
             }),
             Self::Split {
                 axis,
-                ratio,
                 first,
                 second,
             } => {
@@ -47,7 +45,10 @@ impl Layout {
                     SplitAxis::Horizontal => bounds.width,
                     SplitAxis::Vertical => bounds.height,
                 };
-                let first_gaps = first.axis_count(*axis) - 1;
+                let first_count = first.axis_count(*axis);
+                let second_count = second.axis_count(*axis);
+                let ratio = first_count as f32 / (first_count + second_count) as f32;
+                let first_gaps = first_count - 1;
                 let second_gaps = second.axis_count(*axis) - 1;
                 let available = (extent - (first_gaps + second_gaps + 1) as f32 * PANE_GAP).max(0.);
                 let size = (available * ratio + first_gaps as f32 * PANE_GAP)
@@ -122,11 +123,9 @@ impl Layout {
         if layouts.len() == 1 {
             return layouts.pop().unwrap();
         }
-        let count = layouts.len();
         let first = layouts.remove(0);
         Self::Split {
             axis,
-            ratio: 1. / count as f32,
             first: Box::new(first),
             second: Box::new(Self::equal_group(layouts, axis)),
         }
@@ -180,30 +179,16 @@ impl Layout {
             }
         }
     }
-    pub(super) fn cycle(&mut self) {
-        let axis = match self {
-            Self::Split {
-                axis: SplitAxis::Horizontal,
-                ..
-            } => SplitAxis::Vertical,
-            _ => SplitAxis::Horizontal,
-        };
-        let mut ids = Vec::new();
-        self.pane_ids(&mut ids);
-        *self = Self::equal_group(ids.into_iter().map(Self::Leaf).collect(), axis);
-    }
     pub(super) fn without(self, target: &str) -> Option<Self> {
         match self {
             Self::Leaf(id) => (id != target).then_some(Self::Leaf(id)),
             Self::Split {
                 axis,
-                ratio,
                 first,
                 second,
             } => match (first.without(target), second.without(target)) {
                 (Some(first), Some(second)) => Some(Self::Split {
                     axis,
-                    ratio,
                     first: Box::new(first),
                     second: Box::new(second),
                 }),
@@ -232,7 +217,6 @@ impl Layout {
             }),
             Self::Split {
                 axis,
-                ratio,
                 first,
                 second,
             } => {
@@ -241,7 +225,13 @@ impl Layout {
                 } else {
                     rows
                 };
-                let first_size = ((extent.saturating_sub(1)) as f32 * ratio).round() as usize;
+                let first_count = first.axis_count(*axis);
+                let count = first_count + second.axis_count(*axis);
+                let available = extent.saturating_sub(count - 1);
+                let first_size = (available as f32 * first_count as f32 / count as f32).round()
+                    as usize
+                    + first_count
+                    - 1;
                 let first_size = first_size.max(1).min(extent.saturating_sub(2).max(1));
                 let second_size = extent.saturating_sub(first_size + 1).max(1);
                 if *axis == SplitAxis::Horizontal {
@@ -251,53 +241,6 @@ impl Layout {
                     first.panes(x, y, cols, first_size, out);
                     second.panes(x, y + first_size + 1, cols, second_size, out);
                 }
-            }
-        }
-    }
-    pub(super) fn adjust(
-        &mut self,
-        target: &str,
-        axis: SplitAxis,
-        amount: i32,
-        cols: usize,
-        rows: usize,
-    ) -> bool {
-        match self {
-            Self::Leaf(_) => false,
-            Self::Split {
-                axis: own,
-                ratio,
-                first,
-                second,
-            } => {
-                let extent = if *own == SplitAxis::Horizontal {
-                    cols
-                } else {
-                    rows
-                };
-                let a = ((extent.saturating_sub(1)) as f32 * *ratio) as usize;
-                let (fc, fr, sc, sr) = if *own == SplitAxis::Horizontal {
-                    (a, rows, cols.saturating_sub(a + 1), rows)
-                } else {
-                    (cols, a, cols, rows.saturating_sub(a + 1))
-                };
-                if first.adjust(target, axis, amount, fc, fr)
-                    || second.adjust(target, axis, amount, sc, sr)
-                {
-                    return true;
-                }
-                if *own != axis {
-                    return false;
-                }
-                let sign = if first.contains(target) {
-                    1.
-                } else if second.contains(target) {
-                    -1.
-                } else {
-                    return false;
-                };
-                *ratio = (*ratio + sign * amount as f32 / extent.max(1) as f32).clamp(0.1, 0.9);
-                true
             }
         }
     }
@@ -390,23 +333,50 @@ mod tests {
     }
 
     #[test]
-    fn resizing_targets_the_nearest_matching_split() {
+    fn mixed_groups_stay_equal_after_closing_rows_columns_and_resizing() {
         let mut layout = Layout::Leaf("a".into());
-        layout.add_column("b");
-        layout.add_row("b", "c");
-        assert!(layout.adjust("c", SplitAxis::Vertical, 3, 101, 31));
-        assert!(layout.adjust("b", SplitAxis::Horizontal, 10, 101, 31));
-        assert_eq!(
-            geometry(&layout),
-            [
-                ("a".into(), 0, 0, 40, 31),
-                ("b".into(), 41, 0, 60, 12),
-                ("c".into(), 41, 13, 60, 18),
-            ]
-        );
-        let before = geometry(&layout);
-        assert!(!layout.adjust("missing", SplitAxis::Horizontal, 10, 101, 31));
-        assert_eq!(geometry(&layout), before);
+        for id in ["b", "c", "d"] {
+            layout.add_column(id);
+        }
+        for id in ["e", "f", "g"] {
+            assert!(layout.add_row("b", id));
+        }
+        for closing in ["e", "a", "f", "b", "g"] {
+            layout = layout.without(closing).unwrap().normalized();
+            for (width, height) in [(1001., 602.), (719., 413.), (1373., 827.)] {
+                let mut panes = Vec::new();
+                layout.pixel_panes(
+                    PaneBounds {
+                        id: String::new(),
+                        x: 0.,
+                        y: 0.,
+                        width,
+                        height,
+                    },
+                    &mut panes,
+                );
+                let min_width = panes
+                    .iter()
+                    .map(|pane| pane.width)
+                    .fold(f32::INFINITY, f32::min);
+                let max_width = panes.iter().map(|pane| pane.width).fold(0., f32::max);
+                assert!(max_width - min_width <= 1., "{closing}: {panes:?}");
+                for pane in &panes {
+                    let rows: Vec<_> = panes.iter().filter(|row| row.x == pane.x).collect();
+                    let min_height = rows
+                        .iter()
+                        .map(|row| row.height)
+                        .fold(f32::INFINITY, f32::min);
+                    let max_height = rows.iter().map(|row| row.height).fold(0., f32::max);
+                    assert!(max_height - min_height <= 1., "{closing}: {rows:?}");
+                    assert_eq!(rows.last().unwrap().y + rows.last().unwrap().height, height);
+                    for pair in rows.windows(2) {
+                        assert_eq!(pair[1].y - pair[0].y - pair[0].height, PANE_GAP);
+                    }
+                }
+                assert_eq!(panes.last().unwrap().x + panes.last().unwrap().width, width);
+            }
+        }
     }
 
     #[test]

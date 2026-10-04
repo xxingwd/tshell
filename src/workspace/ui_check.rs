@@ -4,6 +4,32 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+fn check_equal_split_bounds(app: &AppView) -> anyhow::Result<()> {
+    let host = &app.hosts[0];
+    let window = host.snapshot.window().unwrap();
+    let Some(Backend::Local(backend)) = &host.backend else {
+        anyhow::bail!("split check requires local backend");
+    };
+    let viewport = host.viewport.as_ref().unwrap().1;
+    let panes = backend.pixel_panes(window, viewport);
+    let min_width = panes
+        .iter()
+        .map(|pane| pane.width)
+        .fold(f32::INFINITY, f32::min);
+    let max_width = panes.iter().map(|pane| pane.width).fold(0., f32::max);
+    anyhow::ensure!(max_width - min_width <= 1., "unequal columns: {panes:?}");
+    for pane in &panes {
+        let rows: Vec<_> = panes.iter().filter(|row| row.x == pane.x).collect();
+        let min_height = rows
+            .iter()
+            .map(|row| row.height)
+            .fold(f32::INFINITY, f32::min);
+        let max_height = rows.iter().map(|row| row.height).fold(0., f32::max);
+        anyhow::ensure!(max_height - min_height <= 1., "unequal rows: {rows:?}");
+    }
+    Ok(())
+}
+
 /// Exercise the real overlay draw/focus lifecycle in an isolated workspace.
 pub(crate) fn run_ui_check(output: PathBuf) -> bool {
     if std::env::var_os("TSHELL_DATA_DIR").is_none() {
@@ -22,7 +48,7 @@ pub(crate) fn run_ui_check(output: PathBuf) -> bool {
                     Ok(()) => {
                         result.store(true, Ordering::Release);
                         serde_json::json!({"passed": true, "clipboard_checked": std::env::var_os("TSHELL_UI_CHECK_SKIP_CLIPBOARD").is_none(), "remote_files_checked": std::env::var_os("TSHELL_REMOTE_UI_ROOT").is_some(), "checked": [
-            "event-driven title wakes workspace without polling", "terminal Tab input retains focus", "Ctrl+B toggles sidebar with terminal focus", "sidebar viewport and persisted state", "Zen preserves sidebar preference", "single and grouped terminal sidebar rendering", "host and key settings pages", "standalone host validation",
+            "event-driven title wakes workspace without polling", "terminal Tab input retains focus", "Ctrl+B toggles sidebar with terminal focus", "sidebar viewport and persisted state", "Zen preserves sidebar preference", "single and grouped terminal sidebar rendering", "equal split shortcuts and close redistribution", "host and key settings pages", "standalone host validation",
                             "terminal viewport unchanged", "settings restores terminal focus",
             "command palette focus and dispatch", "GPUI frame overlay and status item defaults", "Git mode", "file tree", "syntax editor", "status bar and notifications", "unread terminal notice acknowledgement",
                             "settings dialog and pages", "component settings pages render after scrolling", "resource order, visibility, persistence and stop", "font preference", "ligature preference", "2 file-backed terminal themes", "theme selection", "theme persistence", "theme.json create, edit, delete and invalid-file fallback", "unified interface appearance", "opacity preference",
@@ -335,10 +361,27 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         );
         Ok::<_, anyhow::Error>(())
     })?;
-    cx.update_window(handle.into(), |_, _, cx| {
-        app.update(cx, |app, cx| app.act(Action::ClosePane, cx));
+    for key in ["alt-shift-n", "alt-shift-n", "alt-n"] {
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.dispatch_keystroke(Keystroke::parse(key).unwrap(), cx);
+        })?;
+        draw(cx)?;
+        app.read_with(cx, |app, _| check_equal_split_bounds(app))?;
+    }
+    app.read_with(cx, |app, _| {
+        let window = app.hosts[0].snapshot.window().unwrap();
+        anyhow::ensure!(window.panes.len() == 5, "split shortcuts lost a pane");
+        let columns: BTreeSet<_> = window.panes.iter().map(|pane| pane.x).collect();
+        anyhow::ensure!(columns.len() == 3, "new column changed row groups");
+        Ok::<_, anyhow::Error>(())
     })?;
-    draw(cx)?;
+    for _ in 0..4 {
+        cx.update_window(handle.into(), |_, _, cx| {
+            app.update(cx, |app, cx| app.act(Action::ClosePane, cx));
+        })?;
+        draw(cx)?;
+        app.read_with(cx, |app, _| check_equal_split_bounds(app))?;
+    }
     app.read_with(cx, |app, _| {
         anyhow::ensure!(
             app.hosts[0].snapshot.window().unwrap().panes.len() == 1,
@@ -2208,6 +2251,45 @@ async fn check_workspace_styles(
             .timer(Duration::from_millis(30))
             .await;
         capture(&format!("{name}-sidebar"), cx)?;
+        cx.update_window(handle.into(), |_, _, cx| {
+            app.update(cx, |app, cx| {
+                app.act(Action::NewWindow, cx);
+                for axis in [
+                    SplitAxis::Horizontal,
+                    SplitAxis::Vertical,
+                    SplitAxis::Vertical,
+                    SplitAxis::Horizontal,
+                ] {
+                    app.act(Action::Split(axis), cx);
+                }
+            });
+        })?;
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.refresh();
+            let _ = window.draw(cx);
+        })?;
+        cx.background_executor()
+            .timer(Duration::from_millis(500))
+            .await;
+        app.read_with(cx, |app, _| {
+            let host = &app.hosts[0];
+            let window = host.snapshot.window().unwrap();
+            for (pane, label) in window.panes.iter().zip(["Build", "Logs", "Tests", "Git", "Shell"]) {
+                if let Some(screen) = host.backend.as_ref().and_then(|backend| backend.screen(&pane.id)) {
+                    screen.remote_output(format!(
+                        "\x1b[2J\x1b[H\x1b[1m{label}\x1b[0m\r\n/tshell\r\n\r\n\x1b[32mReady\x1b[0m\r\n$ "
+                    ).as_bytes());
+                }
+            }
+        });
+        cx.background_executor()
+            .timer(Duration::from_millis(100))
+            .await;
+        capture(&format!("{name}-splits"), cx)?;
+        app.read_with(cx, |app, _| check_equal_split_bounds(app))?;
+        cx.update_window(handle.into(), |_, _, cx| {
+            app.update(cx, |app, cx| app.act(Action::CloseWindow, cx));
+        })?;
         for (page, suffix) in [(0, "settings"), (5, "hosts"), (2, "metrics")] {
             cx.update_window(handle.into(), |_, window, cx| {
                 app.update(cx, |app, cx| {

@@ -18,7 +18,7 @@ impl AppView {
             return;
         };
         self.workspace_mode = mode;
-        self.need_focus = false;
+        self.need_focus = true;
         if self.tool_roots.contains_key(&key) {
             self.refresh_tools(cx);
             return;

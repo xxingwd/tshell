@@ -4,7 +4,7 @@ Workspace split dividers use an opaque one-pixel stroke and extend
 through crossing gaps, including tmux's cell-sized gaps. Only existing internal
 dividers adjacent to the active pane receive the accent color, with the same
 stroke width and coordinates. No frame is drawn on workspace outer edges.
-Normal and active colors blend 60% muted and 80% accent, respectively, over the
+Normal and active colors blend 25% muted and 70% accent, respectively, over the
 UI border color; the final strokes stay opaque to avoid darkened intersections.
 Local, ordinary SSH and tmux reserve an eight-pixel minimum on both sides of
 each padded axis. Any additional remainder stays on the trailing side: normal
@@ -15,7 +15,9 @@ separator gaps inside the outer inset.
 The terminal workspace wrapper adds no additional padding;
 Explorer and Git diff use their own unchanged layout branches.
 The highlight is paint-only and does not consume
-pointer events. Divider hover and resize feedback remain available.
+pointer events. Dividers are paint-only, with no hover resize cursor or drag
+handler. Focus changes recolor the same strokes without changing pane bounds.
+See [equal splits](workspace-interface.md#equal-splits) for the layout contract.
 
 The renderer consumes immutable row snapshots. A view has at most one background
 snapshot job in flight. PTY output notifications are bounded and drain already

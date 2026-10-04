@@ -349,13 +349,6 @@ mod host_tests {
         assert_eq!(host.connection(), Connection::Closed);
     }
 }
-struct ResizeDrag {
-    id: String,
-    axis: SplitAxis,
-    origin: Point<Pixels>,
-    amount: i32,
-}
-
 #[derive(Default)]
 struct SessionFileState {
     path: Option<PathBuf>,
@@ -548,7 +541,6 @@ pub struct AppView {
     cell_width: f32,
     line_height: f32,
     need_focus: bool,
-    drag: Option<ResizeDrag>,
     default_cwd: PathBuf,
     cwd: PathBuf,
 }
@@ -949,7 +941,6 @@ impl AppView {
             cell_width: 8.4,
             line_height: 21.,
             need_focus: true,
-            drag: None,
             default_cwd: cwd.clone(),
             cwd,
         };
@@ -1446,7 +1437,6 @@ impl AppView {
 
         self.message = None;
         self.need_focus = true;
-        self.drag = None;
         let host = &mut self.hosts[index];
         if host.backend.is_none() {
             if let Some(config) = host.config.clone() {
@@ -1507,7 +1497,6 @@ impl AppView {
         }
         if index == self.active {
             self.message = None;
-            self.drag = None;
             self.latency_task = None;
             self.connection_latency = ConnectionLatency::default();
         }
@@ -1901,9 +1890,25 @@ impl AppView {
         let path = if self.editing_session.is_some() {
             path
         } else if self.session_directory(cx).is_none() {
-            self.message = Some(crate::t!("ws.directory_missing").to_string());
-            cx.notify();
-            return;
+            // Directory completion runs asynchronously. When the user presses
+            // Enter immediately after choosing or typing a local path, resolve
+            // it synchronously so a valid path is not rejected just because the
+            // completion task has not published its result yet.
+            if self.hosts[self.active].config.is_none() {
+                let resolved = directories::resolve(&path, &self.cwd);
+                match resolved.canonicalize() {
+                    Ok(resolved) if resolved.is_dir() => resolved.to_string_lossy().into_owned(),
+                    _ => {
+                        self.message = Some(crate::t!("ws.directory_missing").to_string());
+                        cx.notify();
+                        return;
+                    }
+                }
+            } else {
+                self.message = Some(crate::t!("ws.directory_missing").to_string());
+                cx.notify();
+                return;
+            }
         } else if self.hosts[self.active].config.is_none() {
             let path = directories::resolve(&path, &self.cwd);
             match path.canonicalize() {
@@ -2133,8 +2138,6 @@ impl AppView {
                                 | Shortcut::ClosePane
                                 | Shortcut::Focus
                                 | Shortcut::Floating
-                                | Shortcut::Layout
-                                | Shortcut::Size(_)
                                 | Shortcut::NewColumn
                                 | Shortcut::NewRow
                                 | Shortcut::Move(_)
@@ -2377,24 +2380,7 @@ impl AppView {
             Shortcut::Floating => {
                 self.floating = !self.floating;
             }
-            Shortcut::Layout => self.act(Action::CycleLayout, cx),
             Shortcut::Font(n) => self.font(n as f32, cx),
-            Shortcut::Size(n) => {
-                if let Some(w) = self.hosts[self.active].snapshot.window() {
-                    self.act(
-                        Action::ResizePane {
-                            id: w.active_pane.clone(),
-                            axis: if w.panes.iter().any(|p| p.x > 0) {
-                                SplitAxis::Horizontal
-                            } else {
-                                SplitAxis::Vertical
-                            },
-                            amount: n * 5,
-                        },
-                        cx,
-                    );
-                }
-            }
             Shortcut::NewColumn => self.act(Action::Split(SplitAxis::Horizontal), cx),
             Shortcut::NewRow => self.act(Action::Split(SplitAxis::Vertical), cx),
             Shortcut::Move(d) => self.act(Action::MoveFocus(d), cx),
@@ -2661,20 +2647,6 @@ impl AppView {
             }
         }
     }
-    fn end_resize(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(d) = self.drag.take() {
-            if d.amount != 0 {
-                self.act(
-                    Action::ResizePane {
-                        id: d.id,
-                        axis: d.axis,
-                        amount: d.amount,
-                    },
-                    cx,
-                );
-            }
-        }
-    }
     fn surface(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let h = &self.hosts[self.active];
         let Some(w) = h.snapshot.window().cloned() else {
@@ -2756,8 +2728,8 @@ impl AppView {
         let mut panes = Vec::new();
         let mut dividers = Vec::new();
         // Keep strokes opaque so overlapping junctions do not become darker.
-        let divider_color = rgb(self.palette.border).blend(rgba((self.palette.muted << 8) | 0x99));
-        let active_color = rgb(self.palette.border).blend(rgba((self.palette.accent << 8) | 0xcc));
+        let divider_color = rgb(self.palette.border).blend(rgba((self.palette.muted << 8) | 0x40));
+        let active_color = rgb(self.palette.border).blend(rgba((self.palette.accent << 8) | 0xb3));
         let highlights = geometry
             .iter()
             .find(|pane| pane.id == w.active_pane)
@@ -2828,67 +2800,25 @@ impl AppView {
                 } {
                     continue;
                 }
-                let (x, y, wd, ht) = match axis {
-                    SplitAxis::Horizontal => (left + width - 2., top, gap_x + 4., height),
-                    SplitAxis::Vertical => (left, top + height - 2., width, gap_y + 4.),
-                };
                 let (line_offset, line_length) = match axis {
                     SplitAxis::Horizontal => divider_span(top, height, surface_height, gap_y),
                     SplitAxis::Vertical => divider_span(left, width, surface_width, gap_x),
                 };
-                let resize_id = id.clone();
-                dividers.push(
-                    div()
-                        .id(SharedString::from(format!("divider-{id}-{axis:?}")))
-                        .group("pane-divider")
-                        .absolute()
-                        .left(px(x))
-                        .top(px(y))
-                        .w(px(wd))
-                        .h(px(ht))
-                        .cursor(if axis == SplitAxis::Horizontal {
-                            CursorStyle::ResizeLeftRight
-                        } else {
-                            CursorStyle::ResizeUpDown
-                        })
-                        .child(
-                            div()
-                                .absolute()
-                                .when(axis == SplitAxis::Horizontal, |v| {
-                                    v.left(px((wd - PANE_STROKE) / 2.))
-                                        .top(px(line_offset))
-                                        .w(px(PANE_STROKE))
-                                        .h(px(line_length))
-                                })
-                                .when(axis == SplitAxis::Vertical, |v| {
-                                    v.top(px((ht - PANE_STROKE) / 2.))
-                                        .left(px(line_offset))
-                                        .h(px(PANE_STROKE))
-                                        .w(px(line_length))
-                                })
-                                .bg(divider_color)
-                                .group_hover("pane-divider", |s| s.bg(rgb(self.palette.accent)))
-                                .when(
-                                    self.drag
-                                        .as_ref()
-                                        .is_some_and(|d| d.id == id && d.axis == axis),
-                                    |v| v.bg(rgb(self.palette.accent)),
-                                ),
-                        )
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, e: &MouseDownEvent, _, cx| {
-                                this.drag = Some(ResizeDrag {
-                                    id: resize_id.clone(),
-                                    axis,
-                                    origin: e.position,
-                                    amount: 0,
-                                });
-                                cx.stop_propagation();
-                                cx.notify();
-                            }),
-                        ),
-                );
+                let (x, y, wd, ht) = match axis {
+                    SplitAxis::Horizontal => (
+                        left + width + (gap_x - PANE_STROKE) / 2.,
+                        top + line_offset,
+                        PANE_STROKE,
+                        line_length,
+                    ),
+                    SplitAxis::Vertical => (
+                        left + line_offset,
+                        top + height + (gap_y - PANE_STROKE) / 2.,
+                        line_length,
+                        PANE_STROKE,
+                    ),
+                };
+                dividers.push(Bounds::new(point(px(x), px(y)), size(px(wd), px(ht))));
             }
         }
         let (offset_x, offset_y) = if matches!(h.backend, Some(Backend::Tmux(_))) {
@@ -2921,22 +2851,6 @@ impl AppView {
             .relative()
             .size_full()
             .overflow_hidden()
-            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
-                if let Some(d) = &mut this.drag {
-                    d.amount = match d.axis {
-                        SplitAxis::Horizontal => {
-                            f32::from(e.position.x - d.origin.x) / this.cell_width
-                        }
-                        SplitAxis::Vertical => {
-                            f32::from(e.position.y - d.origin.y) / this.line_height
-                        }
-                    }
-                    .round() as i32;
-                    cx.notify();
-                }
-            }))
-            .on_mouse_up(MouseButton::Left, cx.listener(Self::end_resize))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::end_resize))
             .child(
                 canvas(
                     move |bounds, window, cx| {
@@ -2955,13 +2869,18 @@ impl AppView {
                     .w(px(surface_width))
                     .h(px(surface_height))
                     .children(panes)
-                    .children(dividers)
                     .when(geometry.len() > 1, |surface| {
                         let accent = active_color;
                         surface.child(
                             canvas(
                                 |_, _, _| (),
                                 move |bounds, (), window, _| {
+                                    for line in &dividers {
+                                        window.paint_quad(fill(
+                                            Bounds::new(bounds.origin + line.origin, line.size),
+                                            divider_color,
+                                        ));
+                                    }
                                     for line in &highlights {
                                         window.paint_quad(fill(
                                             Bounds::new(bounds.origin + line.origin, line.size),
@@ -4315,7 +4234,10 @@ impl Render for AppView {
                 WorkspaceMode::Files if self.preview_mode => {
                     self.need_focus = false;
                 }
-                WorkspaceMode::Files | WorkspaceMode::Git => {}
+                WorkspaceMode::Files | WorkspaceMode::Git => {
+                    window.focus(&self.root_focus, cx);
+                    self.need_focus = false;
+                }
                 WorkspaceMode::Terminal => {
                     if let Some(w) = self.hosts[self.active].snapshot.window() {
                         if let Some(v) = self.hosts[self.active].views.get(&w.active_pane) {
@@ -4334,6 +4256,9 @@ impl Render for AppView {
             .clone()
             .filter(|_| !self.settings_ui.host_form)
             .or_else(|| snapshot.message.clone());
+        let can_reconnect = snapshot.message.is_some()
+            && self.hosts[self.active].config.is_some()
+            && !self.settings_ui.host_form;
         let body = if self.workspace_mode == WorkspaceMode::Terminal {
             let surface = self.surface(cx);
             let owner = cx.entity().downgrade();
@@ -4444,9 +4369,21 @@ impl Render for AppView {
             .bg(content_background)
             .when_some(message, |view, message| {
                 view.child(
-                    style::notice(IconName::CircleAlert, message, p.error)
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
                         .px_4()
-                        .py_2(),
+                        .py_2()
+                        .child(style::notice(IconName::CircleAlert, message, p.error).flex_1())
+                        .when(can_reconnect, |view| {
+                            view.child(
+                                Button::new("reconnect-host")
+                                    .small()
+                                    .label(crate::t!("shortcut.reconnect"))
+                                    .on_click(cx.listener(|this, _, _, cx| this.reconnect(cx))),
+                            )
+                        }),
                 )
             })
             .child(

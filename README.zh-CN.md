@@ -16,7 +16,7 @@ GPUI 的应用中。终端引擎使用 Rust 原生实现和 `alacritty_terminal`
 - 本地 PTY 终端和复用连接的普通 SSH 终端。
 - 远程 tmux 控制会话，使用服务端原生管理窗口、分屏、布局、标题和工作目录。
 - host -> session -> tab -> split 工作区模型，支持可折叠导航、键盘命令、
-  分屏调整、专注/浮动模式和界面偏好持久化。
+  列内行自动均分、专注/浮动模式和界面偏好持久化。
 - 紧凑原生控件、清晰的侧栏层级、自适应设置、主机字段校验和 Git Diff
   分段模式选择。详见 [工作区界面](docs/workspace-interface.md)。
 - 面向本地和远程工作目录的 Explorer 与只读 Git 视图。远程文件使用 SFTP，
@@ -99,7 +99,6 @@ tmux 会话则保留在服务器上。断开后，文件浏览器和 Git 不会�
 | `Ctrl+Shift+T` / `Ctrl+Shift+W` | 新建 / 关闭终端 tab |
 | `Alt+Enter` | 专注当前 split 或恢复布局 |
 | `Alt+F` | 浮动当前 tab 或恢复平铺 |
-| `Alt+T` | 切换分屏布局 |
 | `Alt+N` | 新建列并等分所有列 |
 | `Alt+Shift+N` | 在当前列新建行并等分该列 |
 | `Alt+H/J/K/L` 或 `Alt` + 方向键 | 移动焦点 |
@@ -108,6 +107,11 @@ tmux 会话则保留在服务器上。断开后，文件浏览器和 Git 不会�
 | `Ctrl+Shift+F` | 搜索当前终端输出 |
 | `Ctrl+Shift+P` | 切换 GPUI 帧性能面板 |
 | `Ctrl+-` / `Ctrl+=` | 减小 / 增大终端字号 |
+
+分屏采用等宽列、列内等高行。关闭分屏或 shell 自行退出后，剩余组会自动重新均分。
+不再提供拖拽分隔线、分屏大小快捷键或其他平铺布局。
+本地、普通 SSH 和 tmux 使用同一套模型，详见
+[均分布局](docs/workspace-interface.md#equal-splits)。
 
 所有操作都列在设置中并可以重新绑定。工作区快捷键是应用契约，不会因为 xterm
 兼容性工作而被替换。
@@ -207,6 +211,8 @@ cargo test --locked -- --include-ignored
 `tshell.exe --workspace-ui-check <report.json>` 运行隐藏窗口 UI 检查。
 
 ## 打包和更新
+
+TShell 0.1.2 的变更见 [发布说明](docs/release-notes.md)。
 
 推送 `v*` tag 会运行 Windows GitHub Actions，执行测试、构建、打包并发布同仓库
 Release。产物包含程序、许可声明、校验和与更新元数据。工作流和恢复方式见
