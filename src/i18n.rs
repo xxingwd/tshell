@@ -186,7 +186,7 @@ mod tests {
         assert_eq!(t!("settings.title"), "Settings");
         assert_eq!(Language::En.label(), "English");
         set_language(Language::ZhCn);
-        assert_eq!(t!("settings.title"), "系统设置");
+        assert_eq!(t!("settings.title"), "设置");
         assert_eq!(Language::ZhCn.label(), "简体中文");
         set_language(Language::System);
     }

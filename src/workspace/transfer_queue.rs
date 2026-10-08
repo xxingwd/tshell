@@ -116,7 +116,7 @@ impl TransferQueue {
 
     fn panel_size(&self, viewport: Size<Pixels>) -> Size<Pixels> {
         if !self.panel_open {
-            return size(px(148.), px(36.));
+            return size(px(36.), px(36.));
         }
         let rows = (self.jobs.len() as f32 * TRANSFER_ROW_HEIGHT)
             .min(TRANSFER_ROW_HEIGHT * 4.)
@@ -509,28 +509,10 @@ impl AppView {
             return None;
         }
         let p = self.palette;
-        let pending = queue
+        let has_failed = queue
             .jobs
             .iter()
-            .filter(|job| !job.state.finished())
-            .count();
-        let failed = queue
-            .jobs
-            .iter()
-            .filter(|job| job.state == TransferState::Failed)
-            .count();
-        let compact_summary = if pending > 0 {
-            crate::t!("transfer.active_count", count = pending).to_string()
-        } else if failed > 0 {
-            crate::t!("transfer.failed_count", count = failed).to_string()
-        } else {
-            crate::t!("transfer.complete").to_string()
-        };
-        let summary = if pending > 0 && failed > 0 {
-            crate::t!("transfer.summary_count", pending = pending, failed = failed).to_string()
-        } else {
-            compact_summary.clone()
-        };
+            .any(|job| job.state == TransferState::Failed);
         let expanded = queue.panel_open;
         let bounds = queue.panel_bounds(window.viewport_size());
         let mut panel = div()
@@ -556,23 +538,22 @@ impl AppView {
             return Some(
                 panel
                     .child(
-                        Button::new("transfer-expand")
-                            .ghost()
-                            .w_full()
-                            .h_full()
-                            .px_2()
-                            .icon(if failed > 0 {
+                        icon_button(
+                            "transfer-expand",
+                            if has_failed {
                                 IconName::CircleAlert
                             } else {
                                 IconName::ArrowDownUp
-                            })
-                            .label(compact_summary)
-                            .text_size(px(12.))
-                            .text_color(rgb(if failed > 0 { p.error } else { p.text }))
-                            .tooltip(format!("{}: {}", crate::t!("transfer.expand"), summary))
-                            .on_click(cx.listener(|app, _, window, cx| {
-                                app.set_transfer_panel_open(true, window, cx);
-                            })),
+                            },
+                            crate::t!("transfer.expand"),
+                        )
+                        .w_full()
+                        .h_full()
+                        .px_2()
+                        .text_color(rgb(if has_failed { p.error } else { p.text }))
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            app.set_transfer_panel_open(true, window, cx);
+                        })),
                     )
                     .into_any_element(),
             );
@@ -610,12 +591,6 @@ impl AppView {
                             .text_size(px(13.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(crate::t!("transfer.title")),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(rgb(p.muted))
-                            .child(queue.jobs.len().to_string()),
                     )
                     .on_mouse_down(
                         MouseButton::Left,
@@ -907,13 +882,7 @@ impl AppView {
                 .border_color(rgb(p.border))
                 .flex()
                 .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(rgb(if failed > 0 { p.error } else { p.muted }))
-                        .child(summary),
-                )
+                .justify_end()
                 .child(
                     Button::new("transfer-clear")
                         .ghost()

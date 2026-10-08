@@ -67,9 +67,16 @@ impl AppView {
             .gap_3()
             .child(
                 div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
                     .text_size(px(16.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(format!("TShell {}", env!("CARGO_PKG_VERSION"))),
+                    .child(format!("TShell {}", env!("CARGO_PKG_VERSION")))
+                    .child(
+                        icon_button("update-help", IconName::Info, crate::t!("updates.hint"))
+                            .text_color(rgb(self.palette.muted)),
+                    ),
             )
             .child(style::notice(
                 icon,
@@ -80,12 +87,6 @@ impl AppView {
                     self.palette.text
                 },
             ))
-            .child(
-                div()
-                    .text_color(rgb(self.palette.muted))
-                    .text_size(px(12.))
-                    .child(crate::t!("updates.hint")),
-            )
             .child(
                 div()
                     .flex()

@@ -319,3 +319,40 @@ fn active_pane_highlights_only_existing_dividers() {
         assert_eq!(lines[1].origin.y, px(edge));
     }
 }
+
+#[test]
+fn forward_rules_round_trip_across_hosts_and_modes() {
+    let mut preferences = super::Preferences::default();
+    preferences.forwards.insert(
+        "deploy@example.test:22".into(),
+        vec![crate::ssh_forward::LocalForward {
+            kind: crate::ssh_forward::ForwardKind::Local,
+            bind_host: "127.0.0.1".into(),
+            local_port: 8080,
+            target_host: "localhost".into(),
+            target_port: 80,
+        }],
+    );
+    preferences.forwards.insert(
+        "deploy@database.test:2222".into(),
+        vec![
+            crate::ssh_forward::LocalForward {
+                kind: crate::ssh_forward::ForwardKind::Remote,
+                bind_host: "127.0.0.1".into(),
+                local_port: 5432,
+                target_host: "localhost".into(),
+                target_port: 15432,
+            },
+            crate::ssh_forward::LocalForward {
+                kind: crate::ssh_forward::ForwardKind::Dynamic,
+                bind_host: "127.0.0.1".into(),
+                local_port: 1080,
+                target_host: "localhost".into(),
+                target_port: 0,
+            },
+        ],
+    );
+    let encoded = serde_json::to_string(&preferences).unwrap();
+    let restored: super::Preferences = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(restored.forwards, preferences.forwards);
+}

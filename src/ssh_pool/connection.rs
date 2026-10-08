@@ -120,9 +120,31 @@ fn expand(path: &str) -> PathBuf {
 
 pub(super) struct Handler {
     profile: Profile,
+    forward: Option<(u16, tokio::sync::mpsc::Sender<russh::Channel<client::Msg>>)>,
 }
 impl client::Handler for Handler {
     type Error = anyhow::Error;
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        _: &str,
+        connected_port: u32,
+        _: &str,
+        _: u32,
+        reply: client::ChannelOpenHandle,
+        _: &mut client::Session,
+    ) -> Result<()> {
+        if let Some((port, sender)) = &self.forward
+            && u32::from(*port) == connected_port
+            && sender.capacity() > 0
+        {
+            reply.accept().await;
+            if let Err(error) = sender.try_send(channel) {
+                let _ = error.into_inner().close().await;
+            }
+        }
+        Ok(())
+    }
     async fn check_server_key(&mut self, server: &PublicKeyOrCertificate) -> Result<bool> {
         let PublicKeyOrCertificate::PublicKey { key, .. } = server else {
             bail!("{}", crate::t!("ssh.host_cert_unsupported"));
@@ -243,6 +265,13 @@ trait Stream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Stream for T {}
 
 pub(super) async fn connect(host: &HostConfig) -> Result<Connection> {
+    connect_forward(host, None).await
+}
+
+pub(super) async fn connect_forward(
+    host: &HostConfig,
+    forward: Option<(u16, tokio::sync::mpsc::Sender<russh::Channel<client::Msg>>)>,
+) -> Result<Connection> {
     let direct = !host.user.is_empty();
     if direct {
         if let Some(path) = &host.identity_file {
@@ -258,6 +287,14 @@ pub(super) async fn connect(host: &HostConfig) -> Result<Connection> {
     } else {
         Profile::load(host).await?
     };
+    connect_profile(p, forward).await
+}
+
+async fn connect_profile(
+    p: Profile,
+    forward: Option<(u16, tokio::sync::mpsc::Sender<russh::Channel<client::Msg>>)>,
+) -> Result<Connection> {
+    let direct = p.direct;
     let user = p.get("user").to_owned();
     let hostname = p.get("hostname").to_owned();
     let port: u16 = p.get("port").parse()?;
@@ -333,7 +370,15 @@ pub(super) async fn connect(host: &HostConfig) -> Result<Connection> {
         keepalive_max: 3,
         ..Default::default()
     });
-    let mut handle = client::connect_stream(config, stream, Handler { profile: p.clone() }).await?;
+    let mut handle = client::connect_stream(
+        config,
+        stream,
+        Handler {
+            profile: p.clone(),
+            forward,
+        },
+    )
+    .await?;
     if !direct {
         ensure!(
             p.get("pubkeyauthentication") != "false" && p.get("pubkeyauthentication") != "no",
@@ -396,7 +441,7 @@ pub(super) async fn connect(host: &HostConfig) -> Result<Connection> {
     }
     if !authenticated
         && p.get("identityagent") != "none"
-        && (!direct || host.identity_file.is_none())
+        && (!direct || p.paths("identityfile").is_empty())
     {
         #[cfg(windows)]
         let agent = keys::agent::client::AgentClient::connect_named_pipe(
@@ -453,6 +498,24 @@ pub(super) async fn connect(host: &HostConfig) -> Result<Connection> {
         handle,
         _proxy: proxy,
     })
+}
+
+#[cfg(test)]
+pub(super) async fn connect_fixture(
+    host: &HostConfig,
+    known_hosts: &std::path::Path,
+    forward: Option<(u16, tokio::sync::mpsc::Sender<russh::Channel<client::Msg>>)>,
+) -> Result<Connection> {
+    let mut profile = Profile::direct(host)?;
+    profile.values.insert(
+        "userknownhostsfile".into(),
+        vec![known_hosts.display().to_string()],
+    );
+    profile.values.insert("identityfile".into(), Vec::new());
+    profile
+        .values
+        .insert("stricthostkeychecking".into(), vec!["yes".into()]);
+    connect_profile(profile, forward).await
 }
 
 async fn authenticate_interactive(

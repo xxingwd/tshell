@@ -9,6 +9,7 @@ use std::{
 };
 mod blocking;
 mod connection;
+pub(crate) mod forwarding;
 pub(crate) mod interactive;
 pub(crate) use blocking::{BlockingChannel, ChannelGuard, Writer};
 

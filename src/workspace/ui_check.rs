@@ -30,6 +30,83 @@ fn check_equal_split_bounds(app: &AppView) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn check_session_switch_layout(
+    handle: WindowHandle<Root>,
+    app: &Entity<AppView>,
+    cx: &mut AsyncApp,
+) -> anyhow::Result<()> {
+    // Select and draw in one UI callback so no settling frame can hide a shift.
+    let draw_bounds = |action: Option<Action>, cx: &mut AsyncApp| {
+        cx.update_window(handle.into(), |_, window, cx| {
+            app.update(cx, |app, cx| {
+                if let Some(action) = action {
+                    app.act(action, cx);
+                } else {
+                    app.sync(cx);
+                }
+            });
+            window.refresh();
+            window.draw(cx).clear(cx);
+            let app = app.read(cx);
+            let host = &app.hosts[app.active];
+            host.snapshot
+                .window()
+                .unwrap()
+                .panes
+                .iter()
+                .map(|pane| host.views[&pane.id].read(cx).rendered_bounds())
+                .collect::<Vec<_>>()
+        })
+    };
+    let original = app.read_with(cx, |app, _| app.hosts[0].snapshot.active_session.clone());
+    let baseline = draw_bounds(None, cx)?;
+    let first = draw_bounds(
+        Some(Action::NewNamedSession {
+            name: "session-layout-check".into(),
+            path: std::env::temp_dir().to_string_lossy().into_owned(),
+        }),
+        cx,
+    )?;
+    anyhow::ensure!(
+        first == baseline,
+        "new session shifted on its first frame: {first:?} != {baseline:?}"
+    );
+    let other = app.read_with(cx, |app, _| app.hosts[0].snapshot.active_session.clone());
+    draw_bounds(Some(Action::Split(SplitAxis::Horizontal)), cx)?;
+    draw_bounds(Some(Action::Split(SplitAxis::Vertical)), cx)?;
+    let grouped = draw_bounds(None, cx)?;
+    let first_tab = app.read_with(cx, |app, _| {
+        app.hosts[0].snapshot.window().unwrap().id.clone()
+    });
+    let first = draw_bounds(Some(Action::NewWindow), cx)?;
+    anyhow::ensure!(first == baseline, "new tab shifted on its first frame");
+    let second_tab = app.read_with(cx, |app, _| {
+        app.hosts[0].snapshot.window().unwrap().id.clone()
+    });
+    for reset_viewport in [false, true] {
+        for (action, expected) in [
+            (Action::SelectWindow(first_tab.clone()), &grouped),
+            (Action::SelectSession(original.clone()), &baseline),
+            (Action::SelectSession(other.clone()), &grouped),
+            (Action::SelectWindow(second_tab.clone()), &baseline),
+        ] {
+            if reset_viewport {
+                app.update(cx, |app, _| app.hosts[0].viewport = None);
+            }
+            let first = draw_bounds(Some(action), cx)?;
+            let settled = draw_bounds(None, cx)?;
+            anyhow::ensure!(
+                first == *expected && first == settled,
+                "terminal bounds changed after switching: first={first:?}, settled={settled:?}, expected={expected:?}, reset={reset_viewport}"
+            );
+        }
+        draw_bounds(Some(Action::SelectWindow(first_tab.clone())), cx)?;
+    }
+    draw_bounds(Some(Action::SelectSession(original)), cx)?;
+    draw_bounds(Some(Action::RemoveSession(other)), cx)?;
+    Ok(())
+}
+
 /// Exercise the real overlay draw/focus lifecycle in an isolated workspace.
 pub(crate) fn run_ui_check(output: PathBuf) -> bool {
     if std::env::var_os("TSHELL_DATA_DIR").is_none() {
@@ -48,14 +125,14 @@ pub(crate) fn run_ui_check(output: PathBuf) -> bool {
                     Ok(()) => {
                         result.store(true, Ordering::Release);
                         serde_json::json!({"passed": true, "clipboard_checked": std::env::var_os("TSHELL_UI_CHECK_SKIP_CLIPBOARD").is_none(), "remote_files_checked": std::env::var_os("TSHELL_REMOTE_UI_ROOT").is_some(), "checked": [
-            "event-driven title wakes workspace without polling", "terminal Tab input retains focus", "Ctrl+B toggles sidebar with terminal focus", "sidebar viewport and persisted state", "Zen preserves sidebar preference", "single and grouped terminal sidebar rendering", "equal split shortcuts and close redistribution", "host and key settings pages", "standalone host validation",
+            "event-driven title wakes workspace without polling", "terminal Tab input retains focus", "Ctrl+B toggles sidebar with terminal focus", "sidebar viewport and persisted state", "Zen preserves sidebar preference", "session and tab first-frame terminal bounds stay stable", "single and grouped terminal sidebar rendering", "equal split shortcuts and close redistribution", "host and key settings pages", "standalone host validation",
                             "terminal viewport unchanged", "settings restores terminal focus",
             "command palette focus and dispatch", "GPUI frame overlay and status item defaults", "Git mode", "file tree", "syntax editor", "status bar and notifications", "unread terminal notice acknowledgement",
                             "settings dialog and pages", "component settings pages render after scrolling", "resource order, visibility, persistence and stop", "font preference", "ligature preference", "2 file-backed terminal themes", "theme selection", "theme persistence", "theme.json create, edit, delete and invalid-file fallback", "unified interface appearance", "opacity preference",
             "shortcut recording and cancellation", "Escape removes overlay", "host rename dialog",
             "language selector", "session deletion persists and preserves other sessions", "host disconnect preserves configuration and other hosts",
             "new tab has no dialog", "session file state", "Markdown and HTML preview", "session directory and optional name", "session groups with compact tab separators", "named session creation and previous tab restoration",
-            "transfer panel dark and light layout", "transfer header drag and viewport constraints", "transfer launcher collapse and expansion", "individual transfer cancellation and clearing", "transfer hover retention and automatic collapse",
+            "SSH forwarding dialog dark and narrow light layout", "forwarding dialog X closes after cancelling or saving Add", "transfer panel dark and light layout", "transfer header drag and viewport constraints", "transfer launcher collapse and expansion", "individual transfer cancellation and clearing", "transfer hover retention and automatic collapse",
             "Git raw Unicode/tab selection in both layouts", "Git word and line selection", "Git off-screen selection anchor", "terminal search focus, navigation and live output", "terminal search dark and narrow light layouts", "Ctrl-click links and unchanged ordinary TUI mouse reports", "terminal file link line/column and draft preservation", "terminal directory link Explorer root", "notification pane targeting and closed identity"
                         ]})
                     }
@@ -348,6 +425,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         })??;
         draw(cx)?;
     }
+    check_session_switch_layout(handle, &app, cx)?;
     cx.update_window(handle.into(), |_, _, cx| {
         app.update(cx, |app, cx| {
             app.act(Action::Split(SplitAxis::Horizontal), cx)
@@ -619,11 +697,11 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
                     .is_focused(window),
                 "command search is not focused"
             );
-            let files_command = shortcuts::BINDINGS
-                .iter()
-                .position(|binding| binding.action == Shortcut::ShowFiles)
-                .unwrap();
-            app.run_palette_command(files_command, window, cx);
+            app.run_palette_target(
+                launcher::PaletteTarget::Shortcut(Shortcut::ShowFiles),
+                window,
+                cx,
+            );
             anyhow::ensure!(
                 app.workspace_mode == WorkspaceMode::Files,
                 "file explorer command did not switch workspace"
@@ -1988,6 +2066,90 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         draw(cx)?;
     }
     // Search through the actual command model and confirm the filtered result.
+    for (query, section) in [
+        ("new_session", Some(2)),
+        ("add_host", Some(2)),
+        ("edit_host", Some(2)),
+        ("column", Some(2)),
+        ("refresh_files", Some(2)),
+        ("toggle_sidebar", Some(2)),
+        ("palette-no-match-fixture", None),
+        ("remove_host", None),
+    ] {
+        cx.update_window(handle.into(), |_, window, cx| {
+            app.update(cx, |app, cx| {
+                app.show_command_palette(window, cx);
+                app.command_state
+                    .update(cx, |state, cx| state.set_query(query, window, cx));
+            });
+        })?;
+        draw(cx)?;
+        app.read_with(cx, |app, cx| {
+            anyhow::ensure!(
+                app.command_state
+                    .read(cx)
+                    .selected_index()
+                    .map(|index| index.section)
+                    == section,
+                "command palette category/disabled filtering failed for {query}"
+            );
+            Ok::<_, anyhow::Error>(())
+        })?;
+    }
+    cx.update_window(handle.into(), |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.command_state
+                .update(cx, |state, cx| state.set_query("show_", window, cx));
+        });
+    })?;
+    draw(cx)?;
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.dispatch_keystroke(Keystroke::parse("down").unwrap(), cx);
+    })?;
+    draw(cx)?;
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.dispatch_keystroke(Keystroke::parse("enter").unwrap(), cx);
+    })?;
+    cx.background_executor()
+        .timer(Duration::from_millis(25))
+        .await;
+    draw(cx)?;
+    app.read_with(cx, |app, _| {
+        anyhow::ensure!(
+            !app.command_palette && app.workspace_mode == WorkspaceMode::Files,
+            "filtered arrow/Enter command selected the wrong original target"
+        );
+        Ok::<_, anyhow::Error>(())
+    })?;
+    cx.update_window(handle.into(), |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.show_command_palette(window, cx);
+            app.command_state
+                .update(cx, |state, cx| state.set_query("new_session", window, cx));
+        });
+    })?;
+    draw(cx)?;
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.dispatch_keystroke(Keystroke::parse("enter").unwrap(), cx);
+    })?;
+    cx.background_executor()
+        .timer(Duration::from_millis(25))
+        .await;
+    draw(cx)?;
+    cx.update_window(handle.into(), |_, window, cx| {
+        app.update(cx, |app, cx| {
+            anyhow::ensure!(
+                app.creating_tab && !app.command_palette,
+                "new-session command did not replace the palette with its editor"
+            );
+            app.close_modal(window, cx);
+            anyhow::ensure!(
+                !window.has_active_dialog(cx),
+                "reopening the command palette left stacked dialogs after dismissal"
+            );
+            Ok::<_, anyhow::Error>(())
+        })
+    })??;
     let launcher_dir = Preferences::path().with_file_name("launcher-search-directory");
     std::fs::create_dir_all(&launcher_dir)?;
     let original_session = app.read_with(cx, |app, _| app.hosts[0].snapshot.active_session.clone());
@@ -2001,6 +2163,89 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             cx,
         );
         app.act(Action::SelectSession(original_session), cx);
+    });
+    let session_targets = app.read_with(cx, |app, _| {
+        app.hosts[0]
+            .snapshot
+            .sessions
+            .iter()
+            .enumerate()
+            .filter(|(index, session)| *index == 0 || session.name == "launcher-search-session")
+            .map(|(index, session)| (index, session.id.clone()))
+            .collect::<Vec<_>>()
+    });
+    for (index, session_id) in &session_targets {
+        let key = format!("alt-{}", index + 1);
+        let sessions_before = app.read_with(cx, |app, _| app.hosts[0].snapshot.sessions.len());
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.dispatch_keystroke(Keystroke::parse(&key).unwrap(), cx);
+        })?;
+        draw(cx)?;
+        app.read_with(cx, |app, _| {
+            anyhow::ensure!(
+                app.active == 0 && app.hosts[0].snapshot.active_session == *session_id,
+                "number shortcut selected the wrong host/session: {key}"
+            );
+            anyhow::ensure!(
+                app.hosts[0].snapshot.sessions.len() == sessions_before,
+                "number shortcut created a session"
+            );
+            anyhow::ensure!(
+                app.workspace_mode == WorkspaceMode::Terminal,
+                "number shortcut did not show the selected terminal"
+            );
+            Ok::<_, anyhow::Error>(())
+        })?;
+    }
+    let active_session = app.read_with(cx, |app, _| app.hosts[0].snapshot.active_session.clone());
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.dispatch_keystroke(Keystroke::parse("alt-9").unwrap(), cx);
+    })?;
+    draw(cx)?;
+    app.read_with(cx, |app, _| {
+        anyhow::ensure!(
+            app.active == 0 && app.hosts[0].snapshot.active_session == active_session,
+            "unavailable session shortcut changed the selection"
+        );
+        Ok::<_, anyhow::Error>(())
+    })?;
+    app.update(cx, |app, _| {
+        let mut snapshot = app.hosts[0].snapshot.clone();
+        for session in &mut snapshot.sessions {
+            session.name = "palette-other-host-session".into();
+            session.cwd = "palette-other-host-directory".into();
+        }
+        app.hosts.push(Host {
+            name: "Other host fixture".into(),
+            config: None,
+            backend: None,
+            snapshot,
+            pending: Vec::new(),
+            views: BTreeMap::new(),
+            read_notices: BTreeMap::new(),
+            collapsed_sessions: BTreeSet::new(),
+            viewport: None,
+        });
+    });
+    for query in ["palette-other-host-session", "palette-other-host-directory"] {
+        cx.update_window(handle.into(), |_, window, cx| {
+            app.update(cx, |app, cx| {
+                app.show_command_palette(window, cx);
+                app.command_state
+                    .update(cx, |state, cx| state.set_query(query, window, cx));
+            });
+        })?;
+        draw(cx)?;
+        app.read_with(cx, |app, cx| {
+            anyhow::ensure!(
+                app.command_state.read(cx).matched_count() == 0,
+                "command palette exposed another host's session: {query}"
+            );
+            Ok::<_, anyhow::Error>(())
+        })?;
+    }
+    app.update(cx, |app, _| {
+        app.hosts.pop();
     });
     for (query, section) in [
         ("launcher-search-session", 1),
@@ -2021,7 +2266,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
                     .read(cx)
                     .selected_index()
                     .is_some_and(|index| index.section == section),
-                "launcher query did not select the correct source group: {query}"
+                "launcher query did not select the correct category target: {query}"
             );
             Ok::<_, anyhow::Error>(())
         })?;
@@ -2193,10 +2438,83 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         Ok(())
     })?;
     draw(cx)?;
+    #[cfg(feature = "ui-check-screenshots")]
+    check_command_palette_styles(handle, app.clone(), cx).await?;
+    ssh_ui_check::check(handle, app.clone(), cx).await?;
     transfer_queue::check_transfer_panel(handle, app.clone(), cx).await?;
     #[cfg(feature = "ui-check-screenshots")]
     check_workspace_styles(handle, app.clone(), cx).await?;
     feature_check::check(handle, app, cx).await?;
+    Ok(())
+}
+
+#[cfg(feature = "ui-check-screenshots")]
+async fn check_command_palette_styles(
+    handle: WindowHandle<Root>,
+    app: Entity<AppView>,
+    cx: &mut AsyncApp,
+) -> anyhow::Result<()> {
+    let Some(directory) = std::env::var_os("TSHELL_UI_SCREENSHOT_DIR") else {
+        return Ok(());
+    };
+    let directory = PathBuf::from(directory);
+    std::fs::create_dir_all(&directory)?;
+    let original = app.read_with(cx, |app, _| (app.active, app.appearance));
+    for (name, appearance, viewport) in [
+        ("dark", Appearance::Dark, size(px(1320.), px(840.))),
+        ("light-small", Appearance::Light, size(px(860.), px(520.))),
+    ] {
+        handle.update(cx, |root, window, _| {
+            root.style().size.width = Some(viewport.width.into());
+            root.style().size.height = Some(viewport.height.into());
+            window.resize(viewport);
+        })?;
+        cx.update_window(handle.into(), |_, window, cx| {
+            app.update(cx, |app, cx| {
+                app.switch_host(0, cx);
+                app.select_theme(ThemeMode::Dark, "vscode-dark", window, cx);
+                app.select_theme(ThemeMode::Light, "vscode-light", window, cx);
+                app.set_appearance(appearance, window, cx);
+                app.show_command_palette(window, cx);
+            });
+        })?;
+        cx.background_executor()
+            .timer(Duration::from_millis(30))
+            .await;
+        for (suffix, query) in [
+            ("", None),
+            ("-hosts", Some("localhost")),
+            ("-sessions", Some("UI session")),
+        ] {
+            cx.update_window(handle.into(), |_, window, cx| {
+                app.update(cx, |app, cx| {
+                    app.command_state.update(cx, |state, cx| {
+                        state.set_query(query.unwrap_or(""), window, cx)
+                    });
+                });
+                window.refresh();
+                let _ = window.draw(cx);
+                window.render_to_image()?.save(
+                    directory.join(format!("workspace-{name}-command-palette{suffix}.png")),
+                )?;
+                Ok::<_, anyhow::Error>(())
+            })??;
+        }
+        cx.update_window(handle.into(), |_, window, cx| {
+            app.update(cx, |app, cx| app.close_modal(window, cx));
+        })?;
+    }
+    handle.update(cx, |root, window, _| {
+        root.style().size.width = Some(px(1320.).into());
+        root.style().size.height = Some(px(840.).into());
+        window.resize(size(px(1320.), px(840.)));
+    })?;
+    cx.update_window(handle.into(), |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.switch_host(original.0, cx);
+            app.set_appearance(original.1, window, cx);
+        });
+    })?;
     Ok(())
 }
 
@@ -2290,7 +2608,17 @@ async fn check_workspace_styles(
         cx.update_window(handle.into(), |_, _, cx| {
             app.update(cx, |app, cx| app.act(Action::CloseWindow, cx));
         })?;
-        for (page, suffix) in [(0, "settings"), (5, "hosts"), (2, "metrics")] {
+        let mut pages = vec![
+            (0, "settings"),
+            (8, "themes"),
+            (1, "shortcuts"),
+            (2, "metrics"),
+            (5, "hosts"),
+            (6, "keys"),
+        ];
+        #[cfg(windows)]
+        pages.push((7, "updates"));
+        for (page, suffix) in pages {
             cx.update_window(handle.into(), |_, window, cx| {
                 app.update(cx, |app, cx| {
                     app.settings_ui.page = page;
@@ -2298,10 +2626,44 @@ async fn check_workspace_styles(
                 });
             })?;
             capture(&format!("{name}-{suffix}"), cx)?;
+            if page == 0 {
+                for (steps, section) in [(3, "font"), (12, "background")] {
+                    for _ in 0..steps {
+                        cx.update_window(handle.into(), |_, window, cx| {
+                            window.dispatch_event(
+                                PlatformInput::ScrollWheel(ScrollWheelEvent {
+                                    position: point(viewport.width - px(70.), viewport.height / 2.),
+                                    delta: ScrollDelta::Lines(point(0., -3.)),
+                                    ..Default::default()
+                                }),
+                                cx,
+                            );
+                            window.refresh();
+                            let _ = window.draw(cx);
+                        })?;
+                    }
+                    capture(&format!("{name}-settings-{section}"), cx)?;
+                }
+            }
             cx.update_window(handle.into(), |_, window, cx| {
                 app.update(cx, |app, cx| app.close_modal(window, cx));
             })?;
         }
+        let language = app.read_with(cx, |app, _| app.language);
+        for page in [0, 2] {
+            cx.update_window(handle.into(), |_, window, cx| {
+                app.update(cx, |app, cx| {
+                    app.set_language(crate::i18n::Language::En, cx);
+                    app.settings_ui.page = page;
+                    app.show_settings(window, cx);
+                });
+            })?;
+            capture(&format!("{name}-settings-en-{page}"), cx)?;
+            cx.update_window(handle.into(), |_, window, cx| {
+                app.update(cx, |app, cx| app.close_modal(window, cx));
+            })?;
+        }
+        app.update(cx, |app, cx| app.set_language(language, cx));
         cx.update_window(handle.into(), |_, window, cx| {
             app.update(cx, |app, cx| {
                 app.show_add(window, cx);
@@ -2311,6 +2673,13 @@ async fn check_workspace_styles(
             });
         })?;
         capture(&format!("{name}-host-error"), cx)?;
+        cx.update_window(handle.into(), |_, window, cx| {
+            app.update(cx, |app, cx| {
+                app.close_modal(window, cx);
+                app.show_new_session(window, cx);
+            });
+        })?;
+        capture(&format!("{name}-new-session"), cx)?;
         cx.update_window(handle.into(), |_, window, cx| {
             app.update(cx, |app, cx| {
                 app.close_modal(window, cx);

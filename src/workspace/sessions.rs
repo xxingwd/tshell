@@ -1,6 +1,19 @@
 //! Session groups and compact tab separators, sourced from the live backend.
 use super::*;
 impl AppView {
+    pub(super) fn select_session_at(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(session_id) = self.hosts[self.active]
+            .snapshot
+            .sessions
+            .get(index)
+            .map(|session| session.id.clone())
+        else {
+            return;
+        };
+        self.act(Action::SelectSession(session_id), cx);
+        self.show_terminal(cx);
+    }
+
     pub(super) fn edit_session(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let Some(session) = self.hosts[self.active]
             .snapshot

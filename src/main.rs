@@ -7,6 +7,7 @@ mod backend;
 mod i18n;
 mod input;
 mod shortcuts;
+mod ssh_forward;
 mod ssh_pool;
 mod terminal;
 mod terminal_clipboard;

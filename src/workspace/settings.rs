@@ -66,7 +66,7 @@ fn theme_option(name: &str, colors: crate::terminal_protocol::TerminalTheme) -> 
     };
     div()
         .w_full()
-        .min_h(px(52.))
+        .min_h(px(44.))
         .flex()
         .items_center()
         .gap_3()
@@ -106,23 +106,26 @@ fn setting_row(
         .items_center()
         .justify_between()
         .gap_3()
-        .min_h(px(52.))
+        .min_h(px(44.))
         .py_2()
         .child(
             div()
                 .flex()
-                .flex_col()
+                .items_center()
                 .flex_1()
                 .min_w(px(160.))
-                .gap_1()
+                .gap_2()
                 .text_size(px(13.))
-                .child(label)
+                .child(label.clone())
                 .when_some(hint, |view, hint| {
                     view.child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(rgb(palette.muted))
-                            .child(hint),
+                        icon_button(
+                            SharedString::from(format!("setting-help-{label}")),
+                            IconName::Info,
+                            hint,
+                        )
+                        .size(px(20.))
+                        .text_color(rgb(palette.muted)),
                     )
                 }),
         )
@@ -947,7 +950,7 @@ impl AppView {
             .gap_2()
             .child(setting_row(
                 crate::t!("settings.language").to_string(),
-                Some(crate::t!("settings.language_hint").to_string()),
+                None,
                 div().flex().justify_end().gap_2().children(
                     crate::i18n::Language::ALL
                         .iter()
@@ -1253,7 +1256,7 @@ impl AppView {
             .gap_2()
             .child(setting_row(
                 crate::t!("settings.font_family").to_string(),
-                Some(crate::t!("settings.font_mono_hint").to_string()),
+                None,
                 Select::new(&self.settings_ui.fonts)
                     .search_placeholder(crate::t!("settings.font_search"))
                     .w_full(),
@@ -1379,7 +1382,7 @@ impl AppView {
                         div()
                             .flex()
                             .flex_col()
-                            .gap_2()
+                            .gap_1()
                             .when(side == metrics_config::Side::Right, |view| {
                                 view.mt_3()
                                     .pt_3()
@@ -1442,8 +1445,8 @@ impl AppView {
             .items_center()
             .gap_2()
             .px_4()
-            .py_2()
-            .min_h(px(48.))
+            .py_1()
+            .min_h(px(36.))
             .border_1()
             .border_color(rgba(0))
             .drag_over::<MetricDrag>(move |style, drag, _, _| {
@@ -1644,7 +1647,7 @@ impl AppView {
                 1 => div()
                     .flex()
                     .flex_col()
-                    .gap_3()
+                    .gap_1()
                     .when_some(self.settings_ui.notice.clone(), |v, notice| {
                         v.child(div().text_color(rgb(p.error)).child(notice))
                     })
@@ -1667,8 +1670,8 @@ impl AppView {
                                     .flex()
                                     .items_center()
                                     .gap_2()
-                                    .py_2()
-                                    .min_h(px(48.))
+                                    .py_1()
+                                    .min_h(px(36.))
                                     .child(div().flex_1().child(binding.label()))
                                     .child(
                                         Button::new(("shortcut", index))
@@ -1821,35 +1824,34 @@ impl AppView {
                     )
                     .into_any_element(),
             };
-        let description = match page {
-            8 => Some(crate::t!("settings.theme_description")),
-            1 => Some(crate::t!("settings.shortcuts_hint")),
-            2 => Some(crate::t!("settings.metrics_hint")),
-            5 => Some(crate::t!("settings.hosts_description")),
-            6 => Some(crate::t!("settings.keys_description")),
-            _ => None,
-        };
-        if let Some(description) = description {
+        if matches!(page, 1 | 2 | 5 | 6 | 8) {
             div()
                 .w_full()
                 .flex()
                 .flex_col()
-                .gap_3()
+                .gap_2()
                 .child(
                     div()
                         .w_full()
-                        .min_h(px(32.))
+                        .min_h(px(style::CONTROL_HEIGHT))
                         .flex()
                         .items_center()
-                        .justify_between()
-                        .gap_3()
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_color(rgb(p.muted))
-                                .child(description),
-                        )
+                        .justify_end()
+                        .gap_2()
+                        .when(matches!(page, 1 | 2), |row| {
+                            row.child(
+                                icon_button(
+                                    "settings-page-help",
+                                    IconName::Info,
+                                    if page == 1 {
+                                        crate::t!("settings.shortcuts_hint")
+                                    } else {
+                                        crate::t!("settings.metrics_hint")
+                                    },
+                                )
+                                .text_color(rgb(p.muted)),
+                            )
+                        })
                         .child(settings_page_action(page, cx.entity().downgrade())),
                 )
                 .child(content)

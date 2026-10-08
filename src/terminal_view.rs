@@ -151,6 +151,11 @@ pub struct TerminalView {
 }
 
 impl TerminalView {
+    #[cfg(debug_assertions)]
+    pub(crate) fn rendered_bounds(&self) -> Bounds<Pixels> {
+        self.bounds
+    }
+
     fn session_mode(&self) -> TermMode {
         self.session.as_ref().map(|s| s.mode()).unwrap_or_default()
     }

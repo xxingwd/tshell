@@ -36,6 +36,7 @@ pub enum Shortcut {
     Move(Direction),
     MovePane(Direction),
     Session(usize),
+    SelectSession(usize),
 }
 pub type Overrides = std::collections::BTreeMap<String, Vec<String>>;
 pub struct Binding {
@@ -47,7 +48,12 @@ pub struct Binding {
 }
 impl Binding {
     pub fn label(&self) -> String {
-        crate::t!(self.key).to_string()
+        match self.action {
+            Shortcut::Session(index) | Shortcut::SelectSession(index) => {
+                crate::t!(self.key, index = index + 1).to_string()
+            }
+            _ => crate::t!(self.key).to_string(),
+        }
     }
 }
 pub const BINDINGS: &[Binding] = &[
@@ -322,6 +328,60 @@ pub const BINDINGS: &[Binding] = &[
         defaults: &["ctrl-alt-9"],
     },
     Binding {
+        id: "select_session_1",
+        key: "shortcut.select_session",
+        action: Shortcut::SelectSession(0),
+        defaults: &["alt-1"],
+    },
+    Binding {
+        id: "select_session_2",
+        key: "shortcut.select_session",
+        action: Shortcut::SelectSession(1),
+        defaults: &["alt-2"],
+    },
+    Binding {
+        id: "select_session_3",
+        key: "shortcut.select_session",
+        action: Shortcut::SelectSession(2),
+        defaults: &["alt-3"],
+    },
+    Binding {
+        id: "select_session_4",
+        key: "shortcut.select_session",
+        action: Shortcut::SelectSession(3),
+        defaults: &["alt-4"],
+    },
+    Binding {
+        id: "select_session_5",
+        key: "shortcut.select_session",
+        action: Shortcut::SelectSession(4),
+        defaults: &["alt-5"],
+    },
+    Binding {
+        id: "select_session_6",
+        key: "shortcut.select_session",
+        action: Shortcut::SelectSession(5),
+        defaults: &["alt-6"],
+    },
+    Binding {
+        id: "select_session_7",
+        key: "shortcut.select_session",
+        action: Shortcut::SelectSession(6),
+        defaults: &["alt-7"],
+    },
+    Binding {
+        id: "select_session_8",
+        key: "shortcut.select_session",
+        action: Shortcut::SelectSession(7),
+        defaults: &["alt-8"],
+    },
+    Binding {
+        id: "select_session_9",
+        key: "shortcut.select_session",
+        action: Shortcut::SelectSession(8),
+        defaults: &["alt-9"],
+    },
+    Binding {
         id: "copy",
         key: "shortcut.copy",
         action: Shortcut::Copy,
@@ -457,9 +517,45 @@ mod tests {
         );
     }
     #[test]
+    fn number_shortcuts_select_sessions_and_keep_host_bindings_separate() {
+        for index in 0..9 {
+            assert_eq!(
+                resolve(&Keystroke::parse(&format!("alt-{}", index + 1)).unwrap()),
+                Some(Shortcut::SelectSession(index))
+            );
+            assert_eq!(
+                resolve(&Keystroke::parse(&format!("ctrl-alt-{}", index + 1)).unwrap()),
+                Some(Shortcut::Session(index))
+            );
+        }
+        let binding_index = BINDINGS
+            .iter()
+            .position(|binding| binding.action == Shortcut::SelectSession(0))
+            .unwrap();
+        let mut overrides = Overrides::new();
+        assign(
+            binding_index,
+            &Keystroke::parse("ctrl-alt-q").unwrap(),
+            &mut overrides,
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_with(&Keystroke::parse("alt-1").unwrap(), &overrides),
+            None
+        );
+        assert_eq!(
+            resolve_with(&Keystroke::parse("ctrl-alt-q").unwrap(), &overrides),
+            Some(Shortcut::SelectSession(0))
+        );
+        assert!(!BINDINGS[binding_index].label().contains("%{index}"));
+    }
+
+    #[test]
     fn workspace_defaults_and_terminal_passthrough() {
         for (key, action) in [
             ("alt-n", Shortcut::NewColumn),
+            ("alt-1", Shortcut::SelectSession(0)),
+            ("alt-9", Shortcut::SelectSession(8)),
             ("alt-shift-n", Shortcut::NewRow),
             ("alt-enter", Shortcut::Focus),
             ("ctrl-1", Shortcut::ShowTerminal),

@@ -14,8 +14,8 @@ corner. The panel stays inside the workspace when the window is resized.
 Moving the pointer away for four seconds collapses the panel to a small launcher
 at the right edge, preserving its vertical position. Hovering or dragging keeps
 it open. Manual expansion and newly queued transfers restart the same idle timer.
-The launcher shows pending or failed task counts and restores the expanded
-position when clicked. Each task has a separate cancel or clear button; long
+The launcher is an icon button that indicates failures and restores the expanded
+position when clicked. The panel omits aggregate task counts. Each task has a separate cancel or clear button; long
 file names, paths, and errors are available in tooltips.
 
 Running tasks show sampled transfer speed and estimated remaining time when the

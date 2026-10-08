@@ -21,7 +21,7 @@ xterm.js or OpenSSH feature parity.
 - A host -> session -> tab -> split workspace model with collapsible navigation,
   keyboard-driven commands, equal column/row splits, floating/focus modes, and persisted
   interface preferences.
-- Compact native controls, explicit sidebar hierarchy, responsive settings,
+- Compact native controls, concise labels with on-demand help, responsive settings,
   field-level host validation, and segmented Git diff modes. See
   [workspace interface](docs/workspace-interface.md).
 - Explorer and read-only Git views for local and remote working directories.
@@ -57,6 +57,10 @@ xterm.js or OpenSSH feature parity.
   See [terminal tools](docs/terminal-tools.md).
 - Linux host metrics (CPU, memory, and root filesystem usage) over the existing
   SSH connection, with no sudo or Python requirement.
+- Native local, remote, and SOCKS5 SSH forwarding in a global list. Add rules
+  inline with a type, SSH host, and ports; saved rules start when TShell launches.
+  An icon in the bottom status bar opens the forwarding list. See
+  [SSH port forwarding](docs/ssh-forwarding.md).
 - Windows x64 packaging and an opt-in-background update path backed by release
   metadata checksums. See [Windows release notes](docs/windows-release.md).
 
@@ -114,7 +118,12 @@ operation is running. Disconnecting the same host preserves its file drafts.
 Changing connection details clears that host's file and tool
 views so paths from the previous connection are not reused.
 
-The command palette is available with `Ctrl+Shift+K`. Important defaults are:
+The command palette is available with `Ctrl+Shift+K`. One searchable list groups
+hosts, sessions, and actions. Host management, terminal/split commands, file/Git
+commands, and settings belong to Actions; Hosts and Sessions contain only destinations.
+Selected hosts and sessions use a checkmark. Only the active host's sessions
+appear, in sidebar order. Search by name, address, directory,
+or command, then use the arrow keys and Enter to select. Important defaults are:
 
 | Shortcut | Action |
 | --- | --- |
@@ -123,6 +132,7 @@ The command palette is available with `Ctrl+Shift+K`. Important defaults are:
 | `Ctrl+Shift+T` / `Ctrl+Shift+W` | New / close terminal tab |
 | `Alt+Enter` | Focus the current split or restore the layout |
 | `Alt+F` | Float the current tab or restore tiling |
+| `Alt+1` … `Alt+9` | Select session 1–9 on the active host in sidebar order |
 | `Alt+N` | Add a column and equalize columns |
 | `Alt+Shift+N` | Add a row and equalize the current column |
 | `Alt+H/J/K/L` or `Alt` + arrows | Move focus |
