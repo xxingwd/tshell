@@ -1,5 +1,5 @@
 //! Git output is shared by local and SSH workspaces. Paths stay NUL-delimited.
-use super::{HostConfig, workbench};
+use super::{HostDefinition, workbench};
 use anyhow::{Context, Result};
 use std::{
     collections::BTreeMap,
@@ -58,10 +58,10 @@ fn remote_command(root: &Path, args: &[&str]) -> String {
     }
 }
 
-fn run(root: &Path, host: Option<&HostConfig>, args: &[&str]) -> Result<Vec<u8>> {
+fn run(root: &Path, host: Option<&HostDefinition>, args: &[&str]) -> Result<Vec<u8>> {
     if let Some(host) = host {
         return crate::ssh_pool::output(
-            host,
+            &host.ssh,
             remote_command(root, args),
             workbench::MAX_FILE_BYTES as usize,
         );
@@ -89,13 +89,13 @@ fn run(root: &Path, host: Option<&HostConfig>, args: &[&str]) -> Result<Vec<u8>>
     Ok(output.stdout)
 }
 
-fn base(root: &Path, host: Option<&HostConfig>) -> Result<String> {
+fn base(root: &Path, host: Option<&HostDefinition>) -> Result<String> {
     let bytes = run(root, host, &["rev-parse", "--verify", "HEAD"])
         .or_else(|_| run(root, host, &["hash-object", "-t", "tree", "--stdin"]))?;
     Ok(String::from_utf8(bytes)?.trim().to_owned())
 }
 
-pub(super) fn changes(root: &Path, host: Option<&HostConfig>) -> Result<Vec<GitChange>> {
+pub(super) fn changes(root: &Path, host: Option<&HostDefinition>) -> Result<Vec<GitChange>> {
     let directory = run(root, host, &["rev-parse", "--show-toplevel"])?;
     let root = PathBuf::from(String::from_utf8(directory)?.trim_end_matches(['\r', '\n']));
     let status = run(
@@ -126,7 +126,10 @@ fn change_path(root: &Path, relative: &Path, remote: bool) -> PathBuf {
 }
 
 /// Only counts are returned here; patch text is reserved for `patch` on click.
-pub(super) fn tracked_counts(changes: &mut [GitChange], host: Option<&HostConfig>) -> Result<()> {
+pub(super) fn tracked_counts(
+    changes: &mut [GitChange],
+    host: Option<&HostDefinition>,
+) -> Result<()> {
     let Some(first) = changes.first() else {
         return Ok(());
     };
@@ -156,7 +159,10 @@ pub(super) fn tracked_counts(changes: &mut [GitChange], host: Option<&HostConfig
 }
 
 /// One SSH round trip for a batch, instead of one round trip per file.
-pub(super) fn untracked_counts(changes: &mut [GitChange], host: Option<&HostConfig>) -> Result<()> {
+pub(super) fn untracked_counts(
+    changes: &mut [GitChange],
+    host: Option<&HostDefinition>,
+) -> Result<()> {
     if let Some(host) = host {
         let commands = changes
             .iter()
@@ -183,7 +189,7 @@ pub(super) fn untracked_counts(changes: &mut [GitChange], host: Option<&HostConf
             return Ok(());
         }
         let stats = parse_stats(&crate::ssh_pool::output(
-            host,
+            &host.ssh,
             commands,
             workbench::MAX_FILE_BYTES as usize,
         )?);
@@ -207,7 +213,7 @@ pub(super) fn untracked_counts(changes: &mut [GitChange], host: Option<&HostConf
     Ok(())
 }
 
-fn file_diff(change: &GitChange, host: Option<&HostConfig>, format: &str) -> Result<Vec<u8>> {
+fn file_diff(change: &GitChange, host: Option<&HostDefinition>, format: &str) -> Result<Vec<u8>> {
     let path = change
         .path
         .strip_prefix(&change.root)
@@ -252,7 +258,7 @@ fn file_diff(change: &GitChange, host: Option<&HostConfig>, format: &str) -> Res
     run(&change.root, host, &args)
 }
 
-pub(super) fn patch(change: &GitChange, host: Option<&HostConfig>) -> Result<Vec<DiffLine>> {
+pub(super) fn patch(change: &GitChange, host: Option<&HostDefinition>) -> Result<Vec<DiffLine>> {
     Ok(parse_patch(&String::from_utf8_lossy(&file_diff(
         change, host, "--patch",
     )?)))
@@ -360,7 +366,7 @@ pub(super) fn parse_patch(patch: &str) -> Vec<DiffLine> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn with_counts(root: &Path, host: Option<&HostConfig>) -> Result<Vec<GitChange>> {
+    fn with_counts(root: &Path, host: Option<&HostDefinition>) -> Result<Vec<GitChange>> {
         let mut changes = changes(root, host)?;
         assert!(changes.iter().all(|change| change.stats.is_none()));
         tracked_counts(&mut changes, host)?;

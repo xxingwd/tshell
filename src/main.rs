@@ -4,11 +4,9 @@ extern crate gpui_kit as gpui;
 mod app_identity;
 mod appearance;
 mod backend;
-mod i18n;
+mod host;
 mod input;
 mod shortcuts;
-mod ssh_forward;
-mod ssh_pool;
 mod terminal;
 mod terminal_clipboard;
 mod terminal_decorations;
@@ -31,15 +29,16 @@ mod workspace;
 #[cfg(test)]
 mod xterm_compat_tests;
 
+use tshell_host::{forwarding as ssh_forward, ssh as ssh_pool};
+use tshell_ui::i18n;
+
 use gpui_kit::component::{Root, TitleBar};
 use gpui_kit::{prelude::*, *};
-
-rust_i18n::i18n!("locales", fallback = "en");
 
 /// Translate a UI string; see [`i18n`] for the locale files.
 ///
 /// Re-exported at the crate root so every module can reach it as `crate::t!`.
-pub(crate) use rust_i18n::t;
+pub(crate) use tshell_ui::t;
 
 fn main() {
     tracing_subscriber::fmt()

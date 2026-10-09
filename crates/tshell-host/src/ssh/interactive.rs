@@ -1,4 +1,5 @@
-use anyhow::{Context, Result};
+use crate::diagnostic::ResultExt;
+use anyhow::Result;
 use async_channel::{Receiver, Sender};
 use std::{
     collections::BTreeMap,
@@ -7,7 +8,7 @@ use std::{
 
 type Credentials = Arc<tokio::sync::Mutex<Option<String>>>;
 
-pub(crate) fn credentials(host: &str) -> Credentials {
+pub fn credentials(host: &str) -> Credentials {
     static CREDENTIALS: OnceLock<parking_lot::Mutex<BTreeMap<String, Credentials>>> =
         OnceLock::new();
     CREDENTIALS
@@ -18,12 +19,23 @@ pub(crate) fn credentials(host: &str) -> Credentials {
         .clone()
 }
 
-pub(crate) enum PromptKind {
-    Secret { label: String, echo: bool },
+pub enum PromptLabel {
+    Diagnostic(crate::Diagnostic),
+    Remote(String),
+}
+
+impl From<crate::Diagnostic> for PromptLabel {
+    fn from(value: crate::Diagnostic) -> Self {
+        Self::Diagnostic(value)
+    }
+}
+
+pub enum PromptKind {
+    Secret { label: PromptLabel, echo: bool },
     HostKey { fingerprint: String },
 }
 
-pub(crate) struct Prompt {
+pub struct Prompt {
     pub host: String,
     pub kind: PromptKind,
     pub reply: Sender<Option<String>>,
@@ -36,19 +48,19 @@ fn channel() -> &'static parking_lot::Mutex<Option<Sender<Prompt>>> {
     CHANNEL.get_or_init(Default::default)
 }
 
-pub(crate) fn subscribe() -> Receiver<Prompt> {
+pub fn subscribe() -> Receiver<Prompt> {
     let (sender, receiver) = async_channel::unbounded();
     *channel().lock() = Some(sender);
     receiver
 }
 
-pub(crate) async fn ask(host: &str, kind: PromptKind) -> Result<Option<String>> {
+pub async fn ask(host: &str, kind: PromptKind) -> Result<Option<String>> {
     let (reply, answer) = async_channel::bounded(1);
     let (finish, finished) = async_channel::bounded(1);
     let sender = channel()
         .lock()
         .clone()
-        .context(crate::t!("ssh.prompt_unavailable"))?;
+        .with_diagnostic(crate::diagnostic!("ssh.prompt_unavailable"))?;
     sender
         .send(Prompt {
             host: host.to_owned(),
@@ -58,9 +70,9 @@ pub(crate) async fn ask(host: &str, kind: PromptKind) -> Result<Option<String>> 
             finished,
         })
         .await
-        .context(crate::t!("ssh.prompt_unavailable"))?;
+        .with_diagnostic(crate::diagnostic!("ssh.prompt_unavailable"))?;
     answer
         .recv()
         .await
-        .context(crate::t!("ssh.prompt_unavailable"))
+        .with_diagnostic(crate::diagnostic!("ssh.prompt_unavailable"))
 }

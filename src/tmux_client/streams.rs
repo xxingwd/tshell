@@ -30,7 +30,7 @@ impl Streams {
 
     pub fn reconcile(
         &mut self,
-        config: &HostConfig,
+        config: &HostDefinition,
         sessions: &[SessionInfo],
         tx: &SyncSender<Message>,
     ) -> Option<Instant> {
@@ -54,8 +54,8 @@ impl Streams {
             let updates = tx.clone();
             self.opening.insert(id.clone());
             thread::spawn(move || {
-                let result =
-                    open(&host, &id, updates.clone()).map_err(|error| format!("{error:#}"));
+                let result = open(&host, &id, updates.clone())
+                    .map_err(|error| crate::i18n::format_error(&error));
                 let _ = updates.send(Message::StreamOpened(id, result));
             });
         }
@@ -152,9 +152,9 @@ impl Streams {
     }
 }
 
-fn open(config: &HostConfig, session: &str, tx: SyncSender<Message>) -> Result<Stream> {
+fn open(config: &HostDefinition, session: &str, tx: SyncSender<Message>) -> Result<Stream> {
     let mut channel = crate::ssh_pool::BlockingChannel::exec_pty(
-        config,
+        &config.ssh,
         format!(
             "exec {} -CC attach-session -t {}",
             config.tmux()?,
@@ -200,7 +200,7 @@ fn open(config: &HostConfig, session: &str, tx: SyncSender<Message>) -> Result<S
         })();
         let _ = tx.send(Message::StreamClosed(
             session,
-            result.err().map(|e| e.to_string()),
+            result.err().map(|error| crate::i18n::format_error(&error)),
         ));
     });
     // Extended data is not part of the control protocol; drain it so it cannot block stdout.
@@ -243,12 +243,14 @@ mod tests {
         streams
             .retry
             .insert("$1".into(), (failed_at, "closed".into()));
-        let host = HostConfig {
-            destination: "unused".into(),
+        let host = HostDefinition {
+            ssh: tshell_host::SshConfig {
+                destination: "unused".into(),
+                user: String::new(),
+                port: None,
+                identity_file: None,
+            },
             name: String::new(),
-            user: String::new(),
-            port: None,
-            identity_file: None,
             tmux: true,
             socket: None,
         };

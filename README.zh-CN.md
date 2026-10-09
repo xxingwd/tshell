@@ -182,9 +182,11 @@ xterm.js 源码链接、已提交的 fixture、渲染行为和有意扩展。当
 - `src/backend.rs` 和 `src/backend/`：类型化工作区操作、快照、生命周期和分屏几何。
 - `src/terminal.rs`、`src/terminal/` 和 `src/terminal_view/`：PTY 与终端状态、
   渲染、选区、字形和协议观察器。
-- `src/ssh_pool/`：可复用 SSH 连接和交互式认证。
+- `crates/tshell-host/` 管理 SSH 配置、连接池、认证、转发、SFTP 和文件操作，不依赖 UI。
+- `crates/tshell-ui/` 管理共享控件、语义调色板和本地化；根 `locales/` 是唯一翻译来源。
+- `src/host.rs` 保存主机名称和 tmux 偏好，与 SSH 连接配置分开。
 - `src/tmux_client/`：tmux 控制流和同步。
-- `src/workspace/`：主机、session、设置、Explorer、Git、SFTP、指标、编辑器状态
+- `src/workspace/`：主机、session、设置、Explorer、Git、指标、编辑器状态
   和更新界面。
 - `src/terminal_theme/`：内置和自定义终端配色。
 
@@ -196,7 +198,7 @@ xterm.js 源码链接、已提交的 fixture、渲染行为和有意扩展。当
 运行常规测试：
 
 ```powershell
-cargo test --locked
+cargo test --workspace --locked
 ```
 
 重点检查包括：
@@ -211,7 +213,7 @@ cargo test --locked osc52
 
 ```powershell
 $env:TSHELL_SSH_TEST_HOST = 'your-ssh-alias'
-cargo test --locked -- --include-ignored
+cargo test --workspace --locked -- --include-ignored
 ```
 
 可以在 Node 24+ 和网络可用时通过 `tools/generate-xterm-fixtures.mjs` 重新生成

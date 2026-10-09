@@ -46,15 +46,12 @@ async fn put(client: &sftp::Client, path: String, data: Vec<u8>) -> Result<()> {
 #[test]
 #[ignore = "requires TSHELL_SSH_TEST_HOST with SFTP; creates and removes an isolated directory via SFTP only"]
 fn remote_file_round_trip_and_conflict() -> Result<()> {
-    let host = HostConfig {
+    let host = SshConfig {
         destination: std::env::var("TSHELL_SSH_TEST_HOST")?,
-        name: String::new(),
+
         user: String::new(),
         port: None,
         identity_file: None,
-        tmux: false,
-
-        socket: None,
     };
     let host = Session::new(host);
     let root = run(&host, |client| {
@@ -96,7 +93,7 @@ fn remote_file_round_trip_and_conflict() -> Result<()> {
         })
     })?;
     {
-        use crate::workspace::file_ops::Operation;
+        use crate::files::Operation;
         let folder = std::path::PathBuf::from(format!("{root}/ops"));
         let renamed = std::path::PathBuf::from(format!("{root}/renamed"));
         let copied = std::path::PathBuf::from(format!("{root}/copied"));
@@ -107,7 +104,7 @@ fn remote_file_round_trip_and_conflict() -> Result<()> {
                 directory: true,
             },
         )?;
-        let empty = crate::workspace::file_ops::child(&folder, "empty.txt", true)?;
+        let empty = crate::files::child(&folder, "empty.txt", true)?;
         operate(
             &host,
             Operation::Create {
@@ -129,7 +126,7 @@ fn remote_file_round_trip_and_conflict() -> Result<()> {
             &host,
             Operation::Copy {
                 from: Path::new(&unusual).to_owned(),
-                to: crate::workspace::file_ops::child(&folder, "copy.txt", true)?,
+                to: crate::files::child(&folder, "copy.txt", true)?,
             },
         )?;
         operate(
@@ -140,10 +137,7 @@ fn remote_file_round_trip_and_conflict() -> Result<()> {
             },
         )?;
         assert_eq!(
-            read(
-                &host,
-                &crate::workspace::file_ops::child(&copied, "copy.txt", true)?
-            )?,
+            read(&host, &crate::files::child(&copied, "copy.txt", true)?)?,
             "hello\r\n"
         );
         assert!(
@@ -227,13 +221,10 @@ fn remote_file_round_trip_and_conflict() -> Result<()> {
         &Path::new(&root).join("upload-folder"),
         &downloaded_folder,
     )?;
+    operate(&host, crate::files::Operation::Delete(uploaded))?;
     operate(
         &host,
-        crate::workspace::file_ops::Operation::Delete(uploaded),
-    )?;
-    operate(
-        &host,
-        crate::workspace::file_ops::Operation::Delete(Path::new(&root).join("upload-folder")),
+        crate::files::Operation::Delete(Path::new(&root).join("upload-folder")),
     )?;
     std::fs::remove_dir_all(local)?;
     write(&host, path, "你好\nfn main() {}\n", "hello\r\n")?;

@@ -18,7 +18,7 @@ pub(crate) fn run_render_check(output: std::path::PathBuf) -> bool {
                         report
                     }
                     Err(error) => {
-                        serde_json::json!({"passed": false, "error": format!("{error:#}")})
+                        serde_json::json!({"passed": false, "error": crate::i18n::format_error(&error)})
                     }
                 };
                 if std::fs::write(output, serde_json::to_vec_pretty(&json).unwrap()).is_err() {

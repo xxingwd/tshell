@@ -17,7 +17,7 @@ pub struct LocalBackend {
     pub(super) screens: BTreeMap<String, Arc<Session>>,
     next: u64,
     cwd: PathBuf,
-    ssh: Option<crate::tmux_client::HostConfig>,
+    ssh: Option<tshell_host::SshConfig>,
 }
 impl LocalBackend {
     #[cfg(test)]
@@ -25,15 +25,12 @@ impl LocalBackend {
         Self::with_transport(cwd, None)
     }
     #[cfg(test)]
-    pub fn with_transport(
-        cwd: PathBuf,
-        ssh: Option<crate::tmux_client::HostConfig>,
-    ) -> Result<Self> {
+    pub fn with_transport(cwd: PathBuf, ssh: Option<tshell_host::SshConfig>) -> Result<Self> {
         Self::restore(cwd, ssh, None)
     }
     pub fn restore(
         cwd: PathBuf,
-        ssh: Option<crate::tmux_client::HostConfig>,
+        ssh: Option<tshell_host::SshConfig>,
         profiles: Option<Vec<SessionProfile>>,
     ) -> Result<Self> {
         let mut this = Self {
@@ -575,14 +572,11 @@ mod tests {
 
         let mut backend =
             LocalBackend::restore(std::env::temp_dir(), None, Some(Vec::new())).unwrap();
-        backend.ssh = Some(crate::tmux_client::HostConfig {
+        backend.ssh = Some(tshell_host::SshConfig {
             destination: "example.invalid".into(),
-            name: String::new(),
             user: "test".into(),
             port: None,
             identity_file: None,
-            tmux: false,
-            socket: None,
         });
         let screen = Session::remote("test".into(), 28, 100, Arc::new(|_| Ok(())));
         screen.ready.store(false, Ordering::Release);
@@ -649,14 +643,11 @@ mod tests {
     #[test]
     #[ignore = "requires TSHELL_SSH_TEST_HOST; verifies background plain SSH terminals"]
     fn plain_ssh_background_terminals_keep_reading() {
-        let config = crate::tmux_client::HostConfig {
+        let config = tshell_host::SshConfig {
             destination: std::env::var("TSHELL_SSH_TEST_HOST").unwrap(),
-            name: String::new(),
             user: String::new(),
             port: None,
             identity_file: None,
-            tmux: false,
-            socket: None,
         };
         check_background_output(
             LocalBackend::with_transport(std::env::current_dir().unwrap(), Some(config)).unwrap(),
@@ -843,14 +834,11 @@ mod tests {
     #[test]
     #[ignore = "requires TSHELL_SSH_TEST_HOST; plain SSH session directories and live background terminals"]
     fn plain_ssh_sessions_keep_separate_directories() {
-        let config = crate::tmux_client::HostConfig {
+        let config = tshell_host::SshConfig {
             destination: std::env::var("TSHELL_SSH_TEST_HOST").unwrap(),
-            name: String::new(),
             user: String::new(),
             port: None,
             identity_file: None,
-            tmux: false,
-            socket: None,
         };
         let profiles = vec![
             SessionProfile {

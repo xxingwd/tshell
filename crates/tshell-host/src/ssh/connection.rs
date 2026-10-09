@@ -1,5 +1,6 @@
-use crate::tmux_client::HostConfig;
-use anyhow::{Context, Result, bail, ensure};
+use crate::SshConfig;
+use crate::diagnostic::ResultExt;
+use anyhow::{Result, bail, ensure};
 use russh::{
     MethodKind, MethodSet,
     client::{self, KeyboardInteractiveAuthResponse},
@@ -17,9 +18,9 @@ struct Profile {
     direct: bool,
 }
 impl Profile {
-    fn direct(host: &HostConfig) -> Result<Self> {
+    fn direct(host: &SshConfig) -> Result<Self> {
         let known_hosts = dirs::home_dir()
-            .context(crate::t!("ssh.known_hosts_missing"))?
+            .with_diagnostic(crate::diagnostic!("ssh.known_hosts_missing"))?
             .join(".ssh")
             .join("known_hosts");
         let mut values = BTreeMap::new();
@@ -47,7 +48,7 @@ impl Profile {
         })
     }
 
-    async fn load(host: &HostConfig) -> Result<Self> {
+    async fn load(host: &SshConfig) -> Result<Self> {
         let command = host.ssh_command()?;
         // -G must precede -- and the destination.
         let args: Vec<_> = command.get_args().map(|arg| arg.to_owned()).collect();
@@ -65,8 +66,7 @@ impl Profile {
         .await??;
         ensure!(
             output.status.success(),
-            "{}",
-            crate::t!(
+            crate::diagnostic!(
                 "ssh.config_parse_failed",
                 error = String::from_utf8_lossy(&output.stderr)
             )
@@ -147,7 +147,7 @@ impl client::Handler for Handler {
     }
     async fn check_server_key(&mut self, server: &PublicKeyOrCertificate) -> Result<bool> {
         let PublicKeyOrCertificate::PublicKey { key, .. } = server else {
-            bail!("{}", crate::t!("ssh.host_cert_unsupported"));
+            bail!(crate::diagnostic!("ssh.host_cert_unsupported"));
         };
         let p = &self.profile;
         let host = if p.get("hostkeyalias").is_empty() {
@@ -166,8 +166,7 @@ impl client::Handler for Handler {
             let contents = std::fs::read_to_string(file)?;
             ensure!(
                 !has_relevant_marker(&contents, host, port),
-                "{}",
-                crate::t!("ssh.known_hosts_markers")
+                crate::diagnostic!("ssh.known_hosts_markers")
             );
             if keys::check_known_hosts_path(host, port, key, file)? {
                 return Ok(true);
@@ -180,7 +179,7 @@ impl client::Handler for Handler {
                     .get("userknownhostsfile")
                     .split_whitespace()
                     .next()
-                    .context(crate::t!("ssh.known_hosts_missing"))?;
+                    .with_diagnostic(crate::diagnostic!("ssh.known_hosts_missing"))?;
                 let path = expand(path);
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent)?;
@@ -196,12 +195,12 @@ impl client::Handler for Handler {
                 )
                 .await?
                 .is_some();
-                ensure!(accepted, "{}", crate::t!("ssh.host_key_rejected"));
+                ensure!(accepted, crate::diagnostic!("ssh.host_key_rejected"));
                 let path = expand(p.get("userknownhostsfile"));
                 keys::known_hosts::learn_known_hosts_path(host, port, key, path)?;
                 Ok(true)
             }
-            _ => bail!("{}", crate::t!("ssh.unknown_host_key")),
+            _ => bail!(crate::diagnostic!("ssh.unknown_host_key")),
         }
     }
 }
@@ -264,12 +263,12 @@ pub(super) struct Connection {
 trait Stream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Stream for T {}
 
-pub(super) async fn connect(host: &HostConfig) -> Result<Connection> {
+pub(super) async fn connect(host: &SshConfig) -> Result<Connection> {
     connect_forward(host, None).await
 }
 
 pub(super) async fn connect_forward(
-    host: &HostConfig,
+    host: &SshConfig,
     forward: Option<(u16, tokio::sync::mpsc::Sender<russh::Channel<client::Msg>>)>,
 ) -> Result<Connection> {
     let direct = !host.user.is_empty();
@@ -277,8 +276,7 @@ pub(super) async fn connect_forward(
         if let Some(path) = &host.identity_file {
             ensure!(
                 path.is_file(),
-                "{}",
-                crate::t!("ssh.identity_file_missing", path = path.display())
+                crate::diagnostic!("ssh.identity_file_missing", path = path.display())
             );
         }
     }
@@ -308,14 +306,17 @@ async fn connect_profile(
     let proxy_command = p.get("proxycommand");
     let jumps = p.get("proxyjump");
     let proxy_builder = if !proxy_command.is_empty() && proxy_command != "none" {
-        let arguments =
-            shell_words::split(proxy_command).context(crate::t!("ssh.proxy_parse_failed"))?;
+        let arguments = shell_words::split(proxy_command)
+            .with_diagnostic(crate::diagnostic!("ssh.proxy_parse_failed"))?;
         let arguments = arguments
             .into_iter()
             .map(|arg| expand_tokens(&arg, &hostname, port, &user))
             .collect::<Result<Vec<_>>>()?;
-        let mut command =
-            std::process::Command::new(arguments.first().context(crate::t!("ssh.proxy_empty"))?);
+        let mut command = std::process::Command::new(
+            arguments
+                .first()
+                .with_diagnostic(crate::diagnostic!("ssh.proxy_empty"))?,
+        );
         command.args(&arguments[1..]);
         Some(command)
     } else if !jumps.is_empty() && jumps != "none" {
@@ -346,10 +347,16 @@ async fn connect_profile(
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .context(crate::t!("ssh.proxy_spawn_failed"))?;
+            .with_diagnostic(crate::diagnostic!("ssh.proxy_spawn_failed"))?;
         let stream = tokio::io::join(
-            child.stdout.take().context(crate::t!("ssh.proxy_stdout"))?,
-            child.stdin.take().context(crate::t!("ssh.proxy_stdin"))?,
+            child
+                .stdout
+                .take()
+                .with_diagnostic(crate::diagnostic!("ssh.proxy_stdout"))?,
+            child
+                .stdin
+                .take()
+                .with_diagnostic(crate::diagnostic!("ssh.proxy_stdin"))?,
         );
         proxy = Some(child);
         Box::new(stream)
@@ -359,7 +366,7 @@ async fn connect_profile(
             tokio::net::TcpStream::connect((hostname.as_str(), port)),
         )
         .await
-        .context(crate::t!("ssh.auth_timeout"))??;
+        .with_diagnostic(crate::diagnostic!("ssh.auth_timeout"))??;
         if let Err(error) = socket.set_nodelay(true) {
             tracing::debug!(%error, "Could not enable TCP_NODELAY for SSH socket");
         }
@@ -382,8 +389,7 @@ async fn connect_profile(
     if !direct {
         ensure!(
             p.get("pubkeyauthentication") != "false" && p.get("pubkeyauthentication") != "no",
-            "{}",
-            crate::t!("ssh.public_key_required")
+            crate::diagnostic!("ssh.public_key_required")
         );
     }
     let mut methods = MethodSet::client_supported();
@@ -411,7 +417,8 @@ async fn connect_profile(
                 let answer = super::interactive::ask(
                     &target,
                     super::interactive::PromptKind::Secret {
-                        label: crate::t!("ssh.key_passphrase", path = path.display()).to_string(),
+                        label: crate::diagnostic!("ssh.key_passphrase", path = path.display())
+                            .into(),
                         echo: false,
                     },
                 )
@@ -493,7 +500,7 @@ async fn connect_profile(
                     .await?;
         }
     }
-    ensure!(authenticated, "{}", crate::t!("ssh.key_auth_failed"));
+    ensure!(authenticated, crate::diagnostic!("ssh.key_auth_failed"));
     Ok(Connection {
         handle,
         _proxy: proxy,
@@ -502,7 +509,7 @@ async fn connect_profile(
 
 #[cfg(test)]
 pub(super) async fn connect_fixture(
-    host: &HostConfig,
+    host: &SshConfig,
     known_hosts: &std::path::Path,
     forward: Option<(u16, tokio::sync::mpsc::Sender<russh::Channel<client::Msg>>)>,
 ) -> Result<Connection> {
@@ -532,17 +539,17 @@ async fn authenticate_interactive(
                 None => super::interactive::ask(
                     host,
                     super::interactive::PromptKind::Secret {
-                        label: if attempt == 0 {
-                            crate::t!("ssh.password_prompt")
+                        label: (if attempt == 0 {
+                            crate::diagnostic!("ssh.password_prompt")
                         } else {
-                            crate::t!("ssh.password_retry")
-                        }
-                        .to_string(),
+                            crate::diagnostic!("ssh.password_retry")
+                        })
+                        .into(),
                         echo: false,
                     },
                 )
                 .await?
-                .context(crate::t!("ssh.authentication_cancelled"))?,
+                .with_diagnostic(crate::diagnostic!("ssh.authentication_cancelled"))?,
             };
             match handle.authenticate_password(user, password.clone()).await? {
                 client::AuthResult::Success => {
@@ -588,13 +595,13 @@ async fn authenticate_interactive(
                         let Some(answer) = super::interactive::ask(
                             host,
                             super::interactive::PromptKind::Secret {
-                                label,
+                                label: super::interactive::PromptLabel::Remote(label),
                                 echo: prompt.echo,
                             },
                         )
                         .await?
                         else {
-                            bail!("{}", crate::t!("ssh.authentication_cancelled"));
+                            bail!(crate::diagnostic!("ssh.authentication_cancelled"));
                         };
                         answers.push(answer);
                     }
@@ -624,21 +631,27 @@ fn expand_tokens(value: &str, host: &str, port: u16, user: &str) -> Result<Strin
             Some('h') => result.push_str(host),
             Some('p') => result.push_str(&port.to_string()),
             Some('r') => result.push_str(user),
-            token => bail!(
-                "{}",
-                crate::t!("ssh.proxy_placeholder", token = format!("{token:?}"))
-            ),
+            token => bail!(crate::diagnostic!(
+                "ssh.proxy_placeholder",
+                token = format!("{token:?}")
+            )),
         }
     }
     Ok(result)
 }
 fn jump_destination(value: &str) -> Result<(String, Option<u16>)> {
-    ensure!(!value.starts_with('-'), "{}", crate::t!("ssh.jump_invalid"));
+    ensure!(
+        !value.starts_with('-'),
+        crate::diagnostic!("ssh.jump_invalid")
+    );
     if let Some((host, port)) = value.rsplit_once(':') {
         if !host.contains(':') || host.ends_with(']') {
             return Ok((
                 host.to_owned(),
-                Some(port.parse().context(crate::t!("ssh.jump_port_invalid"))?),
+                Some(
+                    port.parse()
+                        .with_diagnostic(crate::diagnostic!("ssh.jump_port_invalid"))?,
+                ),
             ));
         }
     }
@@ -651,14 +664,11 @@ mod tests {
 
     #[test]
     fn direct_profile_uses_only_explicit_host_fields() {
-        let host = HostConfig {
+        let host = SshConfig {
             destination: "example.test".into(),
-            name: "Example".into(),
             user: "deploy".into(),
             port: Some(2222),
             identity_file: Some(PathBuf::from("test-key")),
-            tmux: false,
-            socket: None,
         };
         let profile = Profile::direct(&host).unwrap();
         assert_eq!(profile.get("hostname"), "example.test");

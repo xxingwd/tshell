@@ -19,7 +19,7 @@ impl AppView {
         Some(
             self.sftp_sessions
                 .entry((self.active, id))
-                .or_insert_with(|| remote_files::Session::new(host))
+                .or_insert_with(|| remote_files::Session::new(host.ssh))
                 .clone(),
         )
     }
@@ -74,8 +74,11 @@ impl AppView {
                     Err(error) => {
                         this.file_loading = None;
                         this.message = Some(
-                            crate::t!("file.read_directory_failed", error = format!("{error:#}"))
-                                .to_string(),
+                            crate::t!(
+                                "file.read_directory_failed",
+                                error = crate::i18n::format_error(&error)
+                            )
+                            .to_string(),
                         );
                     }
                 }
@@ -122,8 +125,11 @@ impl AppView {
                     }
                     Err(error) => {
                         this.message = Some(
-                            crate::t!("file.read_directory_failed", error = format!("{error:#}"))
-                                .to_string(),
+                            crate::t!(
+                                "file.read_directory_failed",
+                                error = crate::i18n::format_error(&error)
+                            )
+                            .to_string(),
                         );
                     }
                 }
@@ -304,9 +310,10 @@ impl AppView {
                         Notification::warning(crate::t!("file.changed_again")),
                         cx,
                     ),
-                    Err(error) => {
-                        window.push_notification(Notification::error(format!("{error:#}")), cx)
-                    }
+                    Err(error) => window.push_notification(
+                        Notification::error(crate::i18n::format_error(&error)),
+                        cx,
+                    ),
                 }
                 cx.notify();
             });
@@ -384,9 +391,10 @@ impl AppView {
                             cx,
                         );
                     }
-                    Err(error) => {
-                        window.push_notification(Notification::error(format!("{error:#}")), cx)
-                    }
+                    Err(error) => window.push_notification(
+                        Notification::error(crate::i18n::format_error(&error)),
+                        cx,
+                    ),
                 }
                 cx.notify();
             });

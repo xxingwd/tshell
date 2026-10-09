@@ -1,14 +1,13 @@
-use super::*;
+use crate::appearance::Palette;
+use gpui_kit::assets::IconName;
+use gpui_kit::component::Icon;
+use gpui_kit::{prelude::*, *};
 
-pub(super) const CONTROL_HEIGHT: f32 = 28.;
-pub(super) const ROW_HEIGHT: f32 = 30.;
-pub(super) const TOOLBAR_HEIGHT: f32 = 36.;
+pub const CONTROL_HEIGHT: f32 = 28.;
+pub const ROW_HEIGHT: f32 = 30.;
+pub const TOOLBAR_HEIGHT: f32 = 36.;
 
-pub(super) fn empty_state(
-    icon: IconName,
-    message: impl Into<SharedString>,
-    palette: Palette,
-) -> Div {
+pub fn empty_state(icon: IconName, message: impl Into<SharedString>, palette: Palette) -> Div {
     div()
         .size_full()
         .min_w_0()
@@ -24,7 +23,7 @@ pub(super) fn empty_state(
         .child(div().max_w_full().text_center().child(message.into()))
 }
 
-pub(super) fn section_heading(label: impl Into<SharedString>, palette: Palette) -> Div {
+pub fn section_heading(label: impl Into<SharedString>, palette: Palette) -> Div {
     div()
         .text_size(px(12.))
         .font_weight(FontWeight::SEMIBOLD)
@@ -32,7 +31,7 @@ pub(super) fn section_heading(label: impl Into<SharedString>, palette: Palette) 
         .child(label.into())
 }
 
-pub(super) fn notice(icon: IconName, message: impl Into<SharedString>, color: u32) -> Div {
+pub fn notice(icon: IconName, message: impl Into<SharedString>, color: u32) -> Div {
     div()
         .min_w_0()
         .flex()

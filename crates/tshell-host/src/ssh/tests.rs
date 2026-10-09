@@ -88,16 +88,13 @@ fn channel_capacity_preserves_shells_and_tools() -> Result<()> {
     })
 }
 
-fn host() -> HostConfig {
-    HostConfig {
+fn host() -> SshConfig {
+    SshConfig {
         destination: std::env::var("TSHELL_SSH_TEST_HOST").unwrap(),
-        name: String::new(),
+
         user: String::new(),
         port: None,
         identity_file: None,
-        tmux: false,
-
-        socket: None,
     }
 }
 async fn collect(channel: &mut SharedChannel) -> Result<String> {

@@ -7,15 +7,7 @@ pub use custom::{ThemeDefinition, ThemeFile};
 
 pub const DEFAULT_THEME_ID: &str = "vscode-dark";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct InterfaceColors {
-    pub panel: u32,
-    pub border: u32,
-    pub muted: u32,
-    pub hover: u32,
-    pub selected: u32,
-    pub error: u32,
-}
+pub(crate) use tshell_ui::appearance::InterfaceColors;
 
 pub fn paired_theme(id: &str, light: bool) -> Option<&'static str> {
     match id {
@@ -52,6 +44,7 @@ pub fn default_palette() -> Palette {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::appearance::PaletteTerminalTheme;
 
     #[test]
     fn embedded_defaults_are_valid_and_complete() {

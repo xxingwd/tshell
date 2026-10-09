@@ -1,4 +1,5 @@
 use super::*;
+use crate::appearance::PaletteTerminalTheme;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -137,7 +138,7 @@ pub(crate) fn run_ui_check(output: PathBuf) -> bool {
                         ]})
                     }
                     Err(error) => {
-                        serde_json::json!({"passed": false, "error": format!("{error:#}")})
+                        serde_json::json!({"passed": false, "error": crate::i18n::format_error(&error)})
                     }
                 };
                 if std::fs::write(output, serde_json::to_vec_pretty(&json).unwrap()).is_err() {
@@ -229,12 +230,14 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         app.file_states.remove(&key);
         app.message = None;
         let index = app.hosts.len();
-        let config = HostConfig {
-            destination: "guard.test".into(),
+        let config = HostDefinition {
+            ssh: tshell_host::SshConfig {
+                destination: "guard.test".into(),
+                user: "test".into(),
+                port: None,
+                identity_file: None,
+            },
             name: "Guard test".into(),
-            user: "test".into(),
-            port: None,
-            identity_file: None,
             tmux: false,
             socket: None,
         };
@@ -1123,7 +1126,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     for (kind, key, expected) in [
         (
             crate::ssh_pool::interactive::PromptKind::Secret {
-                label: "Test password".into(),
+                label: crate::ssh_pool::interactive::PromptLabel::Remote("Test password".into()),
                 echo: false,
             },
             "enter",
@@ -1907,12 +1910,14 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         std::env::var("TSHELL_SSH_TEST_HOST"),
         std::env::var("TSHELL_REMOTE_UI_ROOT"),
     ) {
-        let host = HostConfig {
-            destination,
+        let host = HostDefinition {
+            ssh: tshell_host::SshConfig {
+                destination,
+                user: String::new(),
+                port: None,
+                identity_file: None,
+            },
             name: "Remote test".into(),
-            user: String::new(),
-            port: None,
-            identity_file: None,
             tmux: false,
 
             socket: None,
@@ -2010,9 +2015,9 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         let remote_path = path.clone();
         let remote = cx
             .background_executor()
-            .spawn(
-                async move { remote_files::read(&remote_files::Session::new(host), &remote_path) },
-            )
+            .spawn(async move {
+                remote_files::read(&remote_files::Session::new(host.ssh), &remote_path)
+            })
             .await?;
         anyhow::ensure!(
             remote == "fn main() { /* remote UI saved */ }",
@@ -2063,12 +2068,14 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     if let Ok(destination) = std::env::var("TSHELL_SSH_TEST_HOST") {
         app.update(cx, |app, cx| {
             app.active = 0;
-            app.hosts[0].config = Some(HostConfig {
-                destination,
+            app.hosts[0].config = Some(HostDefinition {
+                ssh: tshell_host::SshConfig {
+                    destination,
+                    user: String::new(),
+                    port: None,
+                    identity_file: None,
+                },
                 name: String::new(),
-                user: String::new(),
-                port: None,
-                identity_file: None,
                 tmux: false,
 
                 socket: None,
@@ -2368,12 +2375,14 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             "local host was disconnected"
         );
         let local = app.hosts[0].snapshot.clone();
-        let config = HostConfig {
+        let config = HostDefinition {
+            ssh: tshell_host::SshConfig {
+                destination: "example.invalid".into(),
+                user: "test".into(),
+                port: None,
+                identity_file: None,
+            },
             name: "Disconnect test".into(),
-            destination: "example.invalid".into(),
-            user: "test".into(),
-            port: None,
-            identity_file: None,
             tmux: false,
             socket: None,
         };

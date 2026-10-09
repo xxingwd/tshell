@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::Context;
 use russh::server;
 
 struct Server;
@@ -62,7 +63,7 @@ fn local_remote_and_socks_forward_payloads_count_bytes_and_stop() -> Result<()> 
             ForwardKind::Dynamic,
         ] {
             let key = russh::keys::PrivateKey::from_openssh(include_str!(
-                "../../tests/fixtures/ssh-test-host-key"
+                "../../../../tests/fixtures/ssh-test-host-key"
             ))?;
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
             let ssh_port = listener.local_addr()?.port();
@@ -103,14 +104,12 @@ fn local_remote_and_socks_forward_payloads_count_bytes_and_stop() -> Result<()> 
                 target_host: "127.0.0.1".into(),
                 target_port: echo_port,
             };
-            let host = HostConfig {
+            let host = SshConfig {
                 destination: "127.0.0.1".into(),
-                name: String::new(),
+
                 user: "fixture".into(),
                 port: Some(ssh_port),
                 identity_file: None,
-                tmux: false,
-                socket: None,
             };
             let stats = Statistics::new();
             let worker_stats = stats.clone();
@@ -135,7 +134,7 @@ fn local_remote_and_socks_forward_payloads_count_bytes_and_stop() -> Result<()> 
                 .await
             });
             tokio::time::timeout(Duration::from_secs(5), async {
-                while stats.phase() != crate::ssh_forward::Phase::Running {
+                while stats.phase() != crate::forwarding::Phase::Running {
                     events.recv().await?;
                 }
                 Ok::<_, anyhow::Error>(())

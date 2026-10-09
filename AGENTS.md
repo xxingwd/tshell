@@ -18,7 +18,7 @@ features and must not be changed merely to imitate a browser terminal.
 
 Keep the repository shallow and put code beside the subsystem it owns:
 
-- `src/main.rs`, `src/app_identity.rs`, `src/appearance.rs`, `src/i18n.rs`,
+- `src/main.rs`, `src/app_identity.rs`, `src/appearance.rs`, `src/host.rs`,
   `src/input.rs`, and `src/shortcuts.rs` contain application bootstrap and
   cross-cutting UI behavior.
 - `src/backend.rs` and `src/backend/` contain workspace actions, snapshots,
@@ -26,12 +26,18 @@ Keep the repository shallow and put code beside the subsystem it owns:
 - `src/terminal.rs`, `src/terminal/`, `src/terminal_view/`, and terminal
   rendering/protocol modules contain PTY input/output, parsing, snapshots,
   selection, glyphs, decorations, metrics, and notifications.
-- `src/ssh_pool.rs` and `src/ssh_pool/` contain SSH connection pooling,
-  authentication, interactive prompts, and tests.
+- `crates/tshell-host/` owns transport-only SSH configuration, runtime,
+  connection pooling, authentication prompts, forwarding, SFTP and file IO.
+  It must not depend on GPUI, terminal state, tmux, or application host preferences.
+- `crates/tshell-ui/` owns shared semantic palettes, controls and localisation.
+  `locales/` remains the only application translation catalog; the UI crate
+  tracks it at build time. Host diagnostics are translated when displayed.
+- `src/host.rs` owns application host preferences; `SshConfig` lives in
+  `tshell-host`. Keep the existing flat JSON field layout compatible.
 - `src/tmux.rs`, `src/tmux_client.rs`, `src/tmux_client/`, and `src/tmux_titles.rs`
   contain the tmux control protocol and title/layout synchronization.
 - `src/workspace.rs` and `src/workspace/` contain hosts, sessions, settings,
-  Explorer, Git, SFTP, metrics, editor state, updates, and UI checks.
+  Explorer, Git, metrics, editor state, updates, and UI checks.
 - `src/terminal_theme.rs` and `src/terminal_theme/` contain terminal palettes,
   custom theme persistence, and theme defaults.
 - `src/update.rs` and `src/update/` contain Windows update discovery,
@@ -124,7 +130,7 @@ the baseline silently to upstream main.
 
 ## Verification and Change Boundaries
 
-- Use `cargo test --locked` for the normal suite. Run focused compatibility,
+- Use `cargo test --workspace --locked` for the normal suite. Run focused compatibility,
   SSH, tmux, or UI-check commands when touching those boundaries.
 - Keep JavaScript and PowerShell tooling limited to fixture generation,
   packaging, or validation. They are not runtime dependencies.

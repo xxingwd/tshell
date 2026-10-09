@@ -12,12 +12,14 @@ pub(super) async fn check(
                 ("Development", "fixture.invalid"),
                 ("Database", "database.invalid"),
             ] {
-                let config = HostConfig {
-                    destination: destination.into(),
+                let config = HostDefinition {
+                    ssh: tshell_host::SshConfig {
+                        destination: destination.into(),
+                        user: "deploy".into(),
+                        port: Some(2222),
+                        identity_file: None,
+                    },
                     name: name.into(),
-                    user: "deploy".into(),
-                    port: Some(2222),
-                    identity_file: None,
                     tmux: false,
                     socket: None,
                 };

@@ -1,14 +1,15 @@
-use crate::tmux_client::HostConfig;
-use anyhow::{Context, Result, ensure};
+use crate::SshConfig;
+use crate::diagnostic::ResultExt;
+use anyhow::{Result, ensure};
 use std::{future::Future, path::Path, pin::Pin, time::Duration};
 mod operations;
 mod pool;
-pub(crate) use pool::Session;
+pub use pool::Session;
 mod sftp;
 mod transfer;
-pub(super) use transfer::{TransferControl, TransferProgress};
+pub use transfer::{TransferControl, TransferProgress};
 
-pub(super) use super::workbench::Node;
+pub use crate::files::Node;
 
 type Operation<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
@@ -18,10 +19,12 @@ fn run<T: Send + 'static>(
 ) -> Result<T> {
     let host = host.clone();
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    crate::ssh_pool::runtime().spawn(async move {
+    crate::ssh::runtime().spawn(async move {
         let _ = sender.send(pool::run(host, operation).await);
     });
-    receiver.recv().context(crate::t!("sftp.worker_stopped"))?
+    receiver
+        .recv()
+        .with_diagnostic(crate::diagnostic!("sftp.worker_stopped"))?
 }
 
 fn run_transfer<T: Send + 'static>(
@@ -30,21 +33,23 @@ fn run_transfer<T: Send + 'static>(
 ) -> Result<T> {
     let host = host.host.clone();
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    crate::ssh_pool::runtime().spawn(async move {
+    crate::ssh::runtime().spawn(async move {
         let result = async {
             let client = sftp::connect(&host).await?;
             operation(&client).await
         };
         let _ = sender.send(result.await);
     });
-    receiver.recv().context(crate::t!("sftp.worker_stopped"))?
+    receiver
+        .recv()
+        .with_diagnostic(crate::diagnostic!("sftp.worker_stopped"))?
 }
 
-pub(super) fn tree(host: &Session, path: &Path) -> Result<Node> {
+pub fn tree(host: &Session, path: &Path) -> Result<Node> {
     tree_expanded(host, path, Default::default())
 }
 
-pub(super) fn tree_expanded(
+pub fn tree_expanded(
     host: &Session,
     path: &Path,
     expanded: std::collections::BTreeSet<String>,
@@ -61,8 +66,7 @@ pub(super) fn tree_expanded(
                     .attrs
                     .file_type()
                     .is_dir(),
-                "{}",
-                crate::t!("sftp.workspace_not_directory")
+                crate::diagnostic!("sftp.workspace_not_directory")
             );
             build_tree(client, path, true, &expanded, &mut 1200).await
         })
@@ -132,14 +136,14 @@ async fn build_tree(
     Ok(node)
 }
 
-pub(super) fn read(host: &Session, path: &Path) -> Result<String> {
+pub fn read(host: &Session, path: &Path) -> Result<String> {
     let path = path.to_string_lossy().into_owned();
     run(host, move |client| {
         Box::pin(async move { client.read(&path).await })
     })
 }
 
-pub(super) fn inspect_path(host: &Session, path: &Path) -> Result<(std::path::PathBuf, bool)> {
+pub fn inspect_path(host: &Session, path: &Path) -> Result<(std::path::PathBuf, bool)> {
     let path = path.to_string_lossy().into_owned();
     run(host, move |client| {
         Box::pin(async move {
@@ -156,18 +160,18 @@ pub(super) fn inspect_path(host: &Session, path: &Path) -> Result<(std::path::Pa
     })
 }
 
-pub(super) fn read_bytes(host: &Session, path: &Path) -> Result<Vec<u8>> {
+pub fn read_bytes(host: &Session, path: &Path) -> Result<Vec<u8>> {
     let path = path.to_string_lossy().into_owned();
     run(host, move |client| {
         Box::pin(async move { client.read_bytes(&path).await })
     })
 }
 
-pub(super) fn download(host: &Session, source: &Path, destination: &Path) -> Result<()> {
+pub fn download(host: &Session, source: &Path, destination: &Path) -> Result<()> {
     download_with_control(host, source, destination, TransferControl::new())
 }
 
-pub(super) fn download_with_control(
+pub fn download_with_control(
     host: &Session,
     source: &Path,
     destination: &Path,
@@ -180,15 +184,11 @@ pub(super) fn download_with_control(
     })
 }
 
-pub(super) fn upload(
-    host: &Session,
-    sources: Vec<std::path::PathBuf>,
-    target: &Path,
-) -> Result<()> {
+pub fn upload(host: &Session, sources: Vec<std::path::PathBuf>, target: &Path) -> Result<()> {
     upload_with_control(host, sources, target, TransferControl::new())
 }
 
-pub(super) fn upload_with_control(
+pub fn upload_with_control(
     host: &Session,
     sources: Vec<std::path::PathBuf>,
     target: &Path,
@@ -200,7 +200,7 @@ pub(super) fn upload_with_control(
     })
 }
 
-pub(super) fn write(host: &Session, path: &Path, text: &str, expected: &str) -> Result<()> {
+pub fn write(host: &Session, path: &Path, text: &str, expected: &str) -> Result<()> {
     let path = path.to_string_lossy().into_owned();
     let text = text.to_owned();
     let expected = expected.to_owned();
@@ -212,7 +212,7 @@ pub(super) fn write(host: &Session, path: &Path, text: &str, expected: &str) -> 
 #[cfg(test)]
 mod tests;
 
-pub(super) fn directory(host: &Session, path: &str) -> Result<String> {
+pub fn directory(host: &Session, path: &str) -> Result<String> {
     let path = path.to_owned();
     run(host, move |client| {
         Box::pin(async move {
@@ -225,21 +225,20 @@ pub(super) fn directory(host: &Session, path: &str) -> Result<String> {
                     .attrs
                     .file_type()
                     .is_dir(),
-                "{}",
-                crate::t!("sftp.not_directory")
+                crate::diagnostic!("sftp.not_directory")
             );
             Ok(path)
         })
     })
 }
 
-pub(super) fn complete(host: &Session, input: &str) -> Result<Vec<String>> {
+pub fn complete(host: &Session, input: &str) -> Result<Vec<String>> {
     let input = input.to_owned();
     run(host, move |client| {
         Box::pin(async move {
             let input = if input.is_empty() { "~" } else { &input };
             let not_found = |error: &anyhow::Error| {
-                error.downcast_ref::<russh_sftp::client::error::Error>().is_some_and(|e| matches!(e, russh_sftp::client::error::Error::Status(s) if s.status_code == russh_sftp::protocol::StatusCode::NoSuchFile))
+                crate::diagnostic::find_cause::<russh_sftp::client::error::Error>(error).is_some_and(|e| matches!(e, russh_sftp::client::error::Error::Status(s) if s.status_code == russh_sftp::protocol::StatusCode::NoSuchFile))
             };
             let directory = async {
                 let path = client.resolve(input).await?;
@@ -289,7 +288,7 @@ pub(super) fn complete(host: &Session, input: &str) -> Result<Vec<String>> {
     })
 }
 
-pub(super) fn operate(host: &Session, operation: super::file_ops::Operation) -> Result<()> {
+pub fn operate(host: &Session, operation: crate::files::Operation) -> Result<()> {
     run(host, move |client| {
         Box::pin(async move { operations::execute(client, &operation).await })
     })

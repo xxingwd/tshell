@@ -1,6 +1,7 @@
 //! Separate auxiliary/ordinary-terminal pools; tmux sessions use dedicated transports.
-use crate::tmux_client::HostConfig;
-use anyhow::{Context, Result, bail, ensure};
+use crate::SshConfig;
+use crate::diagnostic::ResultExt;
+use anyhow::{Result, bail, ensure};
 use russh::{Channel, ChannelMsg, client};
 use std::{
     collections::BTreeMap,
@@ -9,9 +10,9 @@ use std::{
 };
 mod blocking;
 mod connection;
-pub(crate) mod forwarding;
-pub(crate) mod interactive;
-pub(crate) use blocking::{BlockingChannel, ChannelGuard, Writer};
+pub mod forwarding;
+pub mod interactive;
+pub use blocking::{BlockingChannel, ChannelGuard, Writer};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum PoolKind {
@@ -26,10 +27,10 @@ type Key = (
     Option<std::path::PathBuf>,
     PoolKind,
 );
-pub(crate) struct Auxiliary {
+pub struct Auxiliary {
     _entry: Arc<Entry>,
 }
-pub(crate) fn auxiliary(host: &HostConfig) -> Auxiliary {
+pub fn auxiliary(host: &SshConfig) -> Auxiliary {
     Auxiliary {
         _entry: entry(host, PoolKind::Auxiliary),
     }
@@ -56,7 +57,7 @@ impl Drop for Entry {
         }
     }
 }
-pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
+pub fn runtime() -> &'static tokio::runtime::Runtime {
     static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     RUNTIME.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
@@ -66,7 +67,7 @@ pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
             .expect("SSH runtime")
     })
 }
-fn entry(host: &HostConfig, kind: PoolKind) -> Arc<Entry> {
+fn entry(host: &SshConfig, kind: PoolKind) -> Arc<Entry> {
     static POOL: OnceLock<parking_lot::Mutex<BTreeMap<Key, Weak<Entry>>>> = OnceLock::new();
     let mut pool = POOL.get_or_init(Default::default).lock();
     pool.retain(|_, value| value.strong_count() > 0);
@@ -90,7 +91,7 @@ fn entry(host: &HostConfig, kind: PoolKind) -> Arc<Entry> {
     entry
 }
 
-pub(crate) struct SharedChannel {
+pub struct SharedChannel {
     channel: Option<Channel<client::Msg>>,
     _entry: Arc<Entry>,
     _slot: Option<tokio::sync::OwnedSemaphorePermit>,
@@ -114,7 +115,7 @@ impl Drop for SharedChannel {
     }
 }
 impl SharedChannel {
-    pub(crate) fn into_stream(
+    pub fn into_stream(
         mut self,
     ) -> impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static {
         Stream {
@@ -160,18 +161,18 @@ impl tokio::io::AsyncWrite for Stream {
     }
 }
 
-pub(crate) async fn open(host: &HostConfig) -> Result<SharedChannel> {
+pub async fn open(host: &SshConfig) -> Result<SharedChannel> {
     open_entry(host, entry(host, PoolKind::Terminal), false).await
 }
-pub(crate) async fn open_aux(host: &HostConfig) -> Result<SharedChannel> {
+pub async fn open_aux(host: &SshConfig) -> Result<SharedChannel> {
     open_entry(host, entry(host, PoolKind::Auxiliary), true).await
 }
-pub(crate) async fn open_file(host: &HostConfig) -> Result<SharedChannel> {
+pub async fn open_file(host: &SshConfig) -> Result<SharedChannel> {
     open_entry(host, entry(host, PoolKind::Files), false).await
 }
 
 /// Measure an SSH protocol round trip without opening a shell or writing to a PTY.
-pub(crate) async fn ping(host: &HostConfig) -> Result<Duration> {
+pub async fn ping(host: &SshConfig) -> Result<Duration> {
     let pool = entry(host, PoolKind::Auxiliary);
     for attempt in 0..2 {
         let mut connections = pool.connection.lock().await;
@@ -180,7 +181,7 @@ pub(crate) async fn ping(host: &HostConfig) -> Result<Duration> {
             let started = Instant::now();
             tokio::time::timeout(Duration::from_secs(10), connection.handle.send_ping())
                 .await
-                .context(crate::t!("ssh.request_timeout"))??;
+                .with_diagnostic(crate::diagnostic!("ssh.request_timeout"))??;
             return Ok(started.elapsed());
         }
         drop(connections);
@@ -189,10 +190,10 @@ pub(crate) async fn ping(host: &HostConfig) -> Result<Duration> {
             drop(channel);
         }
     }
-    bail!("{}", crate::t!("ssh.channel_closed"));
+    bail!(crate::diagnostic!("ssh.channel_closed"));
 }
 
-pub(crate) fn ping_async(host: HostConfig) -> async_channel::Receiver<Result<Duration>> {
+pub fn ping_async(host: SshConfig) -> async_channel::Receiver<Result<Duration>> {
     let (sender, receiver) = async_channel::bounded(1);
     runtime().spawn(async move {
         let result = ping(&host).await;
@@ -200,11 +201,7 @@ pub(crate) fn ping_async(host: HostConfig) -> async_channel::Receiver<Result<Dur
     });
     receiver
 }
-async fn open_entry(
-    host: &HostConfig,
-    entry: Arc<Entry>,
-    auxiliary: bool,
-) -> Result<SharedChannel> {
+async fn open_entry(host: &SshConfig, entry: Arc<Entry>, auxiliary: bool) -> Result<SharedChannel> {
     let host = host.clone();
     // Always create the transport on the process-wide runtime, not a short-lived caller runtime.
     runtime()
@@ -216,7 +213,7 @@ async fn open_entry(
                         entry.slots.clone().acquire_owned(),
                     )
                     .await
-                    .context(crate::t!("ssh.helper_timeout"))??,
+                    .with_diagnostic(crate::diagnostic!("ssh.helper_timeout"))??,
                 )
             } else {
                 None
@@ -231,13 +228,13 @@ async fn open_entry(
                 } else {
                     let count = entry.connection.lock().await.len();
                     if auxiliary && count > 0 {
-                        bail!("{}", crate::t!("ssh.channel_refused"));
+                        bail!(crate::diagnostic!("ssh.channel_refused"));
                     }
-                    ensure!(count < 8, "{}", crate::t!("ssh.pool_full", max = 8));
+                    ensure!(count < 8, crate::diagnostic!("ssh.pool_full", max = 8));
                     let transport = if host.user.is_empty() {
                         tokio::time::timeout(Duration::from_secs(25), connection::connect(&host))
                             .await
-                            .context(crate::t!("ssh.auth_timeout"))??
+                            .with_diagnostic(crate::diagnostic!("ssh.auth_timeout"))??
                     } else {
                         connection::connect(&host).await?
                     };
@@ -247,8 +244,8 @@ async fn open_entry(
                         transport.handle.channel_open_session(),
                     )
                     .await
-                    .context(crate::t!("ssh.channel_timeout"))?
-                    .context(crate::t!("ssh.first_channel_refused"))?;
+                    .with_diagnostic(crate::diagnostic!("ssh.channel_timeout"))?
+                    .with_diagnostic(crate::diagnostic!("ssh.first_channel_refused"))?;
                     entry.connection.lock().await.push(transport);
                     channel
                 }
@@ -271,7 +268,7 @@ async fn open_existing(entry: &Entry) -> Result<Option<Channel<client::Msg>>> {
             transport.handle.channel_open_session(),
         )
         .await
-        .context(crate::t!("ssh.channel_timeout"))?
+        .with_diagnostic(crate::diagnostic!("ssh.channel_timeout"))?
         {
             Ok(channel) => return Ok(Some(channel)),
             Err(russh::Error::ChannelOpenFailure(
@@ -285,20 +282,20 @@ async fn open_existing(entry: &Entry) -> Result<Option<Channel<client::Msg>>> {
 }
 
 #[cfg(test)]
-pub(crate) async fn exec(host: &HostConfig, command: &str) -> Result<SharedChannel> {
+pub async fn exec(host: &SshConfig, command: &str) -> Result<SharedChannel> {
     let mut channel = open(host).await?;
     channel.exec(true, command).await?;
     confirmed(&mut channel).await?;
     Ok(channel)
 }
-pub(crate) async fn exec_aux(host: &HostConfig, command: &str) -> Result<SharedChannel> {
+pub async fn exec_aux(host: &SshConfig, command: &str) -> Result<SharedChannel> {
     let mut channel = open_aux(host).await?;
     channel.exec(true, command).await?;
     confirmed(&mut channel).await?;
     Ok(channel)
 }
 #[cfg(test)]
-pub(crate) async fn exec_dedicated(host: &HostConfig, command: &str) -> Result<SharedChannel> {
+pub async fn exec_dedicated(host: &SshConfig, command: &str) -> Result<SharedChannel> {
     let entry = Arc::new(Entry {
         connection: tokio::sync::Mutex::new(Vec::new()),
         connecting: tokio::sync::Mutex::new(()),
@@ -311,8 +308,8 @@ pub(crate) async fn exec_dedicated(host: &HostConfig, command: &str) -> Result<S
     Ok(channel)
 }
 
-pub(crate) async fn exec_dedicated_pty(
-    host: &HostConfig,
+pub async fn exec_dedicated_pty(
+    host: &SshConfig,
     command: &str,
     cols: u32,
     rows: u32,
@@ -332,24 +329,24 @@ pub(crate) async fn exec_dedicated_pty(
     confirmed(&mut channel).await?;
     Ok(channel)
 }
-pub(crate) async fn confirmed(channel: &mut SharedChannel) -> Result<()> {
+pub async fn confirmed(channel: &mut SharedChannel) -> Result<()> {
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             match channel.wait().await {
                 Some(ChannelMsg::Success) => return Ok(()),
                 Some(ChannelMsg::WindowAdjusted { .. }) => continue,
-                Some(ChannelMsg::Failure) => bail!("{}", crate::t!("ssh.channel_failed")),
-                other => bail!(
-                    "{}",
-                    crate::t!("ssh.channel_unconfirmed", reply = format!("{other:?}"))
-                ),
+                Some(ChannelMsg::Failure) => bail!(crate::diagnostic!("ssh.channel_failed")),
+                other => bail!(crate::diagnostic!(
+                    "ssh.channel_unconfirmed",
+                    reply = format!("{other:?}")
+                )),
             }
         }
     })
     .await
-    .context(crate::t!("ssh.request_timeout"))?
+    .with_diagnostic(crate::diagnostic!("ssh.request_timeout"))?
 }
-pub(crate) fn output(host: &HostConfig, command: String, limit: usize) -> Result<Vec<u8>> {
+pub fn output(host: &SshConfig, command: String, limit: usize) -> Result<Vec<u8>> {
     let host = host.clone();
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     runtime().spawn(async move {
@@ -367,8 +364,7 @@ pub(crate) fn output(host: &HostConfig, command: String, limit: usize) -> Result
                         ChannelMsg::Data { data } => {
                             ensure!(
                                 stdout.len() + data.len() <= limit,
-                                "{}",
-                                crate::t!("ssh.response_too_large")
+                                crate::diagnostic!("ssh.response_too_large")
                             );
                             stdout.extend_from_slice(&data);
                         }
@@ -382,8 +378,7 @@ pub(crate) fn output(host: &HostConfig, command: String, limit: usize) -> Result
                 }
                 ensure!(
                     status == Some(0),
-                    "{}",
-                    crate::t!(
+                    crate::diagnostic!(
                         "ssh.command_failed",
                         output = String::from_utf8_lossy(&stderr)
                     )
@@ -391,12 +386,14 @@ pub(crate) fn output(host: &HostConfig, command: String, limit: usize) -> Result
                 Ok(stdout)
             })
             .await
-            .context(crate::t!("ssh.command_timeout"))?
+            .with_diagnostic(crate::diagnostic!("ssh.command_timeout"))?
         }
         .await;
         let _ = sender.send(result);
     });
-    receiver.recv().context(crate::t!("ssh.worker_stopped"))?
+    receiver
+        .recv()
+        .with_diagnostic(crate::diagnostic!("ssh.worker_stopped"))?
 }
 
 #[cfg(test)]

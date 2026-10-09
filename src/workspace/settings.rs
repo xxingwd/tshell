@@ -317,7 +317,7 @@ fn local_keys(hosts: &[Host]) -> Vec<KeyInfo> {
     paths.extend(hosts.iter().filter_map(|host| {
         host.config
             .as_ref()
-            .and_then(|config| config.identity_file.clone())
+            .and_then(|config| config.ssh.identity_file.clone())
     }));
     paths
         .into_iter()
@@ -354,10 +354,10 @@ impl AppView {
         else {
             return;
         };
-        if config.identity_file.as_ref() == Some(&path) {
+        if config.ssh.identity_file.as_ref() == Some(&path) {
             return;
         }
-        config.identity_file = Some(path);
+        config.ssh.identity_file = Some(path);
         self.hosts[host].backend = None;
         self.hosts[host].views.clear();
         self.hosts[host].viewport = None;
@@ -403,9 +403,9 @@ impl AppView {
                     .map(|config| {
                         format!(
                             "{}@{}:{}",
-                            config.user,
-                            config.destination,
-                            config.port.unwrap_or(22)
+                            config.ssh.user,
+                            config.ssh.destination,
+                            config.ssh.port.unwrap_or(22)
                         )
                     })
                     .unwrap_or_else(|| crate::t!("settings.local_host").into_owned());
@@ -517,7 +517,7 @@ impl AppView {
                                     host.name.clone(),
                                     host.config
                                         .as_ref()
-                                        .and_then(|config| config.identity_file.as_ref())
+                                        .and_then(|config| config.ssh.identity_file.as_ref())
                                         == Some(&key.path),
                                 )
                             })

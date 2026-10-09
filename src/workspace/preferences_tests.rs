@@ -253,19 +253,21 @@ fn pane_dividers_join_across_local_and_tmux_gaps() {
 
 #[test]
 fn session_storage_excludes_tmux_and_ignores_display_names() {
-    let mut host = crate::tmux_client::HostConfig {
-        destination: "host".into(),
+    let mut host = crate::host::HostDefinition {
+        ssh: tshell_host::SshConfig {
+            destination: "host".into(),
+            user: String::new(),
+            port: None,
+            identity_file: None,
+        },
         name: "first".into(),
-        user: String::new(),
-        port: None,
-        identity_file: None,
         tmux: false,
         socket: None,
     };
     let key = super::session_storage_key(Some(&host));
     host.name = "renamed".into();
     assert_eq!(super::session_storage_key(Some(&host)), key);
-    host.user = "other".into();
+    host.ssh.user = "other".into();
     assert_ne!(super::session_storage_key(Some(&host)), key);
     host.tmux = true;
     assert_eq!(super::session_storage_key(Some(&host)), None);
@@ -274,17 +276,21 @@ fn session_storage_excludes_tmux_and_ignores_display_names() {
 
 #[test]
 fn host_credentials_round_trip_without_password_field() {
-    let host: crate::tmux_client::HostConfig = serde_json::from_str(
+    let host: crate::host::HostDefinition = serde_json::from_str(
         r#"{"destination":"example.test","user":"deploy","port":2222,"identity_file":"C:/keys/work","tmux":false}"#,
     )
     .unwrap();
-    assert_eq!(host.user, "deploy");
+    assert_eq!(host.ssh.user, "deploy");
     assert_eq!(
-        host.identity_file.as_deref(),
+        host.ssh.identity_file.as_deref(),
         Some(std::path::Path::new("C:/keys/work"))
     );
     let saved = serde_json::to_value(host).unwrap();
     assert_eq!(saved["user"], "deploy");
+    assert_eq!(saved["destination"], "example.test");
+    assert_eq!(saved["port"], 2222);
+    assert_eq!(saved["tmux"], false);
+    assert!(saved.get("ssh").is_none());
     assert!(saved.get("password").is_none());
 }
 

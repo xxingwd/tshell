@@ -53,15 +53,12 @@ fn panel_stays_inside_smaller_viewport_after_dragging() {
 #[test]
 fn retry_replaces_cancelled_control_and_clears_old_progress_and_error() {
     use super::{TransferJob, TransferRequest, TransferState};
-    use crate::{tmux_client::HostConfig, workspace::remote_files};
-    let remote = remote_files::Session::new(HostConfig {
-        name: "retry".into(),
+    use crate::workspace::remote_files;
+    let remote = remote_files::Session::new(tshell_host::SshConfig {
         destination: "example.invalid".into(),
         user: "test".into(),
         port: None,
         identity_file: None,
-        tmux: false,
-        socket: None,
     });
     let mut job = TransferJob {
         id: 7,

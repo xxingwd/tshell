@@ -1,4 +1,4 @@
-use super::remote_files;
+use crate::sftp as remote_files;
 use anyhow::{Result, ensure};
 use std::{
     fs,
@@ -6,28 +6,26 @@ use std::{
 };
 
 #[derive(Clone, Debug)]
-pub(super) enum Operation {
+pub enum Operation {
     Create { path: PathBuf, directory: bool },
     Rename { from: PathBuf, to: PathBuf },
     Copy { from: PathBuf, to: PathBuf },
     Delete(PathBuf),
 }
 
-pub(super) fn child(parent: &Path, name: &str, remote: bool) -> Result<PathBuf> {
+pub fn child(parent: &Path, name: &str, remote: bool) -> Result<PathBuf> {
     ensure!(
         !name.trim().is_empty()
             && name != "."
             && name != ".."
             && !name.contains(['/', '\\'])
             && !name.chars().any(char::is_control),
-        "{}",
-        crate::t!("file.name_required")
+        crate::diagnostic!("file.name_required")
     );
     if !remote && cfg!(windows) {
         ensure!(
             !name.contains(['<', '>', ':', '"', '|', '?', '*']) && !name.ends_with(['.', ' ']),
-            "{}",
-            crate::t!("file.name_charset")
+            crate::diagnostic!("file.name_charset")
         );
     }
     Ok(if remote {
@@ -41,7 +39,7 @@ pub(super) fn child(parent: &Path, name: &str, remote: bool) -> Result<PathBuf> 
     })
 }
 
-pub(super) fn execute(host: Option<&remote_files::Session>, operation: &Operation) -> Result<()> {
+pub fn execute(host: Option<&remote_files::Session>, operation: &Operation) -> Result<()> {
     if let Some(host) = host {
         return remote_files::operate(host, operation.clone());
     }
@@ -58,18 +56,17 @@ pub(super) fn execute(host: Option<&remote_files::Session>, operation: &Operatio
         }
         Operation::Rename { from, to } => {
             match fs::symlink_metadata(to) {
-                Ok(_) => anyhow::bail!("{}", crate::t!("file.exists")),
+                Ok(_) => anyhow::bail!(crate::diagnostic!("file.exists")),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
             }
-            ensure!(!to.starts_with(from), "{}", crate::t!("file.into_self"));
+            ensure!(!to.starts_with(from), crate::diagnostic!("file.into_self"));
             fs::rename(from, to)?;
         }
         Operation::Copy { from, to } => {
             ensure!(
                 !to.starts_with(from),
-                "{}",
-                crate::t!("file.copy_into_self")
+                crate::diagnostic!("file.copy_into_self")
             );
             copy(from, to, 0)?;
         }
@@ -86,12 +83,11 @@ pub(super) fn execute(host: Option<&remote_files::Session>, operation: &Operatio
 }
 
 fn copy(from: &Path, to: &Path, depth: usize) -> Result<()> {
-    ensure!(depth < 64, "{}", crate::t!("file.too_deep"));
+    ensure!(depth < 64, crate::diagnostic!("file.too_deep"));
     let meta = fs::symlink_metadata(from)?;
     ensure!(
         !meta.file_type().is_symlink(),
-        "{}",
-        crate::t!("file.symlink_unsupported")
+        crate::diagnostic!("file.symlink_unsupported")
     );
     if meta.is_dir() {
         fs::create_dir(to)?;
@@ -107,7 +103,7 @@ fn copy(from: &Path, to: &Path, depth: usize) -> Result<()> {
         }
         result
     } else {
-        ensure!(meta.is_file(), "{}", crate::t!("file.only_regular"));
+        ensure!(meta.is_file(), crate::diagnostic!("file.only_regular"));
         let mut output = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -176,3 +172,23 @@ mod tests {
         execute(None, &Operation::Delete(root)).unwrap();
     }
 }
+
+pub struct Node {
+    pub path: String,
+    pub directory: bool,
+    pub children: Vec<Node>,
+    pub loaded: bool,
+}
+
+impl Node {
+    pub fn loaded_directories(&self, paths: &mut std::collections::BTreeSet<String>) {
+        if self.directory && self.loaded {
+            paths.insert(self.path.clone());
+        }
+        for child in &self.children {
+            child.loaded_directories(paths);
+        }
+    }
+}
+
+pub const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024;

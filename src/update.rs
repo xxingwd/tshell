@@ -63,7 +63,7 @@ impl Updater {
                     };
                     match config.check_and_stage(&send) {
                         Ok(state) => send(state),
-                        Err(error) => send(State::Failed(format!("{error:#}"))),
+                        Err(error) => send(State::Failed(crate::i18n::format_error(&error))),
                     }
                     delay = Duration::from_secs(6 * 60 * 60);
                 }
@@ -257,7 +257,7 @@ pub fn startup() -> Option<File> {
         Ok(file) => Some(file),
         Err(error) => {
             tracing::warn!("Update startup: {error:#}");
-            let _ = STARTUP_ERROR.set(format!("{error:#}"));
+            let _ = STARTUP_ERROR.set(crate::i18n::format_error(&error));
             None
         }
     }
@@ -294,7 +294,7 @@ fn startup_inner(config: &Config) -> Result<File> {
             Ok(false) => {}
             Err(error) => {
                 tracing::warn!("Update install: {error:#}");
-                let _ = STARTUP_ERROR.set(format!("{error:#}"));
+                let _ = STARTUP_ERROR.set(crate::i18n::format_error(&error));
             }
         }
         lease.unlock()?;

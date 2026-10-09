@@ -162,9 +162,10 @@ impl AppView {
                         this.tool_request += 1;
                         this.show_files(cx);
                     }
-                    Err(error) => {
-                        window.push_notification(Notification::error(format!("{error:#}")), cx)
-                    }
+                    Err(error) => window.push_notification(
+                        Notification::error(crate::i18n::format_error(&error)),
+                        cx,
+                    ),
                 }
                 cx.notify();
             });

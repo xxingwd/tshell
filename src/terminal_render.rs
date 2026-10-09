@@ -313,6 +313,7 @@ pub(crate) fn expand_wide_selection(spans: &mut [PaintSpan], rows: &[std::sync::
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::appearance::PaletteTerminalTheme;
     use crate::terminal::Session;
     use alacritty_terminal::index::{Column, Point as GridPoint};
     use gpui_kit::component::ThemeMode;

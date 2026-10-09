@@ -40,7 +40,7 @@ ZIP 解压到用户可写目录后运行 `tshell.exe`。CRT 静态链接，ConPT
 当前没有安装器、开机自启或 Authenticode 签名。正式构建由 CI 完成；本地验证可运行：
 
 ```powershell
-cargo test --locked --bin tshell
+cargo test --workspace --locked
 cargo build --locked --release --bin tshell
 ./tools/package-windows.ps1
 ```

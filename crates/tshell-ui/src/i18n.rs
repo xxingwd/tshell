@@ -7,7 +7,7 @@
 //! The locale is process-global because `gpui-component` shares the same
 //! `rust_i18n` backend, so setting it here also localises the component
 //! library's own text such as input context menus and select placeholders.
-use rust_i18n::t;
+use crate::t;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
@@ -141,8 +141,11 @@ mod tests {
 
     #[test]
     fn en_and_zh_cn_ship_the_same_keys() {
-        let en = leaf_keys(concat!(env!("CARGO_MANIFEST_DIR"), "/locales/en.yml"));
-        let zh = leaf_keys(concat!(env!("CARGO_MANIFEST_DIR"), "/locales/zh-CN.yml"));
+        let en = leaf_keys(concat!(env!("CARGO_MANIFEST_DIR"), "/../../locales/en.yml"));
+        let zh = leaf_keys(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../locales/zh-CN.yml"
+        ));
         assert!(en.len() > 100, "en.yml parsed only {} keys", en.len());
         let only_en: Vec<_> = en.difference(&zh).collect();
         let only_zh: Vec<_> = zh.difference(&en).collect();
@@ -154,8 +157,11 @@ mod tests {
 
     #[test]
     fn placeholders_match_across_locales() {
-        let en = leaf_entries(concat!(env!("CARGO_MANIFEST_DIR"), "/locales/en.yml"));
-        let zh = leaf_entries(concat!(env!("CARGO_MANIFEST_DIR"), "/locales/zh-CN.yml"));
+        let en = leaf_entries(concat!(env!("CARGO_MANIFEST_DIR"), "/../../locales/en.yml"));
+        let zh = leaf_entries(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../locales/zh-CN.yml"
+        ));
         for (key, en_value) in &en {
             let Some(zh_value) = zh.get(key) else {
                 continue;
@@ -190,4 +196,65 @@ mod tests {
         assert_eq!(Language::ZhCn.label(), "简体中文");
         set_language(Language::System);
     }
+
+    #[test]
+    fn background_failures_follow_display_language_and_preserve_remote_output() {
+        let _guard = LOCALE.lock().unwrap_or_else(|e| e.into_inner());
+        set_language(Language::En);
+        let remote_output = "Permission denied: /srv/资料 'archive'";
+        use tshell_host::diagnostic::ResultExt;
+        let error = Err::<(), _>(tshell_host::diagnostic!(
+            "ssh.command_failed",
+            output = remote_output
+        ))
+        .with_diagnostic(tshell_host::diagnostic!("sftp.op_failed"))
+        .unwrap_err();
+        let failure = tshell_host::Failure::from(&error);
+        assert_eq!(
+            format_failure(&failure),
+            format!("The SFTP file operation failed: SSH command failed: {remote_output}")
+        );
+        set_language(Language::ZhCn);
+        let translated = format_failure(&failure);
+        assert!(translated.contains(remote_output));
+        assert!(!translated.contains("sftp.op_failed"));
+        assert!(!translated.contains("SSH command failed"));
+        assert_eq!(format_error(&error), translated);
+        set_language(Language::System);
+    }
+}
+
+pub fn translate(
+    key: &str,
+    locale: Option<&str>,
+    arguments: &[(&str, String)],
+) -> Cow<'static, str> {
+    let current = rust_i18n::locale();
+    let text = crate::_rust_i18n_translate(locale.unwrap_or(&current), key);
+    if arguments.is_empty() {
+        return Cow::Owned(text.into_owned());
+    }
+    let names = arguments.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+    let values = arguments
+        .iter()
+        .map(|(_, value)| value.clone())
+        .collect::<Vec<_>>();
+    Cow::Owned(rust_i18n::replace_patterns(&text, &names, &values))
+}
+pub fn format_diagnostic(diagnostic: &tshell_host::Diagnostic) -> String {
+    translate(diagnostic.key, None, &diagnostic.arguments).into_owned()
+}
+pub fn format_failure(failure: &tshell_host::Failure) -> String {
+    failure
+        .0
+        .iter()
+        .map(|cause| match cause {
+            tshell_host::diagnostic::Cause::Diagnostic(message) => format_diagnostic(message),
+            tshell_host::diagnostic::Cause::Text(text) => text.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(": ")
+}
+pub fn format_error(error: &anyhow::Error) -> String {
+    format_failure(&tshell_host::Failure::from(error))
 }

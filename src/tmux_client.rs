@@ -1,19 +1,18 @@
 //! One dedicated SSH connection/control channel per tmux session; host tools use auxiliary SSH.
 //! tmux owns sessions, windows and panes; the client only keeps live state.
 mod streams;
+use crate::host::HostDefinition;
 use crate::{
     backend::{Action, Connection, SessionInfo, Snapshot, SplitAxis, WindowInfo},
-    terminal::{OutputWake, Session, validate_destination},
+    terminal::{OutputWake, Session},
     terminal_protocol::{TerminalTheme, default_theme},
     tmux::{ControlEvent, ControlParser, parse_layout},
 };
 use anyhow::{Context, Result, bail};
 use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     io::{self, Read, Write},
-    process::Command,
     sync::{
         Arc,
         mpsc::{self, SyncSender},
@@ -21,71 +20,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct HostConfig {
-    pub destination: String,
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub user: String,
-    pub port: Option<u16>,
-    #[serde(default)]
-    pub identity_file: Option<std::path::PathBuf>,
-    #[serde(default = "default_tmux")]
-    pub tmux: bool,
-    #[serde(skip)]
-    pub socket: Option<String>,
-}
-fn default_tmux() -> bool {
-    true
-}
-impl HostConfig {
-    pub(crate) fn ssh_command(&self) -> Result<Command> {
-        self.ssh_transport()
-    }
-    fn ssh_transport(&self) -> Result<Command> {
-        validate_destination(&self.destination)?;
-        let mut command = Command::new("ssh");
-        command.args([
-            "-T",
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=10",
-            "-o",
-            "ServerAliveInterval=15",
-            "-o",
-            "ServerAliveCountMax=3",
-        ]);
-        if let Some(port) = self.port {
-            command.args(["-p", &port.to_string()]);
-        }
-        if let Some(identity_file) = &self.identity_file {
-            command.arg("-i").arg(identity_file);
-        }
-        command.arg("--").arg(&self.destination);
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000);
-        }
-        Ok(command)
-    }
-    pub(crate) fn tmux(&self) -> Result<String> {
-        if let Some(socket) = &self.socket {
-            anyhow::ensure!(
-                socket
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '-'),
-                "invalid socket name"
-            );
-            Ok(format!("tmux -u -L {socket}"))
-        } else {
-            Ok("tmux -u".into())
-        }
-    }
-}
 
 struct State {
     updates: OutputWake,
@@ -180,7 +114,7 @@ pub struct TmuxClient {
     stopped: Arc<std::sync::atomic::AtomicBool>,
 }
 impl TmuxClient {
-    pub fn connect(config: HostConfig) -> Arc<Self> {
+    pub fn connect(config: HostDefinition) -> Arc<Self> {
         let updates = OutputWake::default();
         let shared = Arc::new(Mutex::new(State {
             updates: updates.clone(),
@@ -204,7 +138,7 @@ impl TmuxClient {
             if let Err(error) = run(config, shared.clone(), tx, rx, stopped) {
                 let mut s = shared.lock();
                 s.snapshot.connection = Connection::Closed;
-                s.snapshot.message = Some(format!("{error:#}"));
+                s.snapshot.message = Some(crate::i18n::format_error(&error));
                 s.snapshot.revision += 1;
                 s.updates.notify();
             }
@@ -324,7 +258,7 @@ fn refresh(queue: &mut VecDeque<Request>) {
     ));
 }
 
-fn discover(config: &HostConfig, initialize: bool) -> Result<Draft> {
+fn discover(config: &HostDefinition, initialize: bool) -> Result<Draft> {
     let tmux = config.tmux()?;
     let ensure = if initialize {
         format!(
@@ -336,7 +270,7 @@ fn discover(config: &HostConfig, initialize: bool) -> Result<Draft> {
     let command = format!(
         "{ensure}if ! {tmux} has-session 2>/dev/null; then exit 0; fi; {tmux} -C list-sessions -F 'Sx#{{q:session_id}} x#{{q:session_name}} x#{{q:session_path}}'; {tmux} -C list-windows -a -F 'Wx#{{q:session_id}} x#{{q:window_id}} x#{{q:window_index}} x#{{q:window_active}} x#{{q:window_width}} x#{{q:window_height}} x#{{q:window_visible_layout}} x#{{q:window_name}}'; {tmux} -C list-panes -a -F 'Px#{{q:pane_id}} x#{{q:window_id}} x#{{q:pane_active}} x#{{q:alternate_on}} x#{{q:pane_current_command}} x#{{q:pane_title}} x#{{q:pane_current_path}}'"
     );
-    let output = crate::ssh_pool::output(config, command, 4 * 1024 * 1024)?;
+    let output = crate::ssh_pool::output(&config.ssh, command, 4 * 1024 * 1024)?;
     let mut draft = Draft::default();
     let mut parser = ControlParser::default();
     let lines = parser
@@ -367,14 +301,14 @@ fn discover(config: &HostConfig, initialize: bool) -> Result<Draft> {
     }
     Ok(draft)
 }
-fn discover_async(config: HostConfig, tx: SyncSender<Message>) {
+fn discover_async(config: HostDefinition, tx: SyncSender<Message>) {
     thread::spawn(move || {
         let result = discover(&config, false);
         let _ = tx.send(Message::Discovery(result));
     });
 }
 
-fn auxiliary_request(config: HostConfig, request: Request, tx: SyncSender<Message>) {
+fn auxiliary_request(config: HostDefinition, request: Request, tx: SyncSender<Message>) {
     thread::spawn(move || {
         let result = (|| -> Result<Vec<Vec<u8>>> {
             let command = format!("{} -C {}", config.tmux()?, request.command);
@@ -382,7 +316,7 @@ fn auxiliary_request(config: HostConfig, request: Request, tx: SyncSender<Messag
                 Some(path) => format!("cd -- {} && {command}", shell_directory(path)),
                 None => command,
             };
-            let output = crate::ssh_pool::output(&config, command, 65536)?;
+            let output = crate::ssh_pool::output(&config.ssh, command, 65536)?;
             let events = ControlParser::default().push(&output)?;
             for event in events {
                 if let ControlEvent::Response { success, lines } = event {
@@ -402,21 +336,21 @@ fn auxiliary_request(config: HostConfig, request: Request, tx: SyncSender<Messag
         })();
         let (success, lines) = match result {
             Ok(lines) => (true, lines),
-            Err(error) => (false, vec![format!("{error:#}").into_bytes()]),
+            Err(error) => (false, vec![crate::i18n::format_error(&error).into_bytes()]),
         };
         let _ = tx.send(Message::Reply(request.response, success, lines));
     });
 }
 
 fn run(
-    config: HostConfig,
+    config: HostDefinition,
     shared: Arc<Mutex<State>>,
     tx: SyncSender<Message>,
     rx: mpsc::Receiver<Message>,
     stopped: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<()> {
     let mut reported_themes = BTreeMap::new();
-    let _auxiliary = crate::ssh_pool::auxiliary(&config);
+    let _auxiliary = crate::ssh_pool::auxiliary(&config.ssh);
     let initial = discover(&config, true)?;
     let mut initial = Some(initial);
     let mut queue = VecDeque::new();
@@ -492,8 +426,11 @@ fn run(
                     Err(error) => {
                         let mut state = shared.lock();
                         state.snapshot.message = Some(
-                            crate::t!("tmux.discovery_failed", error = format!("{error:#}"))
-                                .to_string(),
+                            crate::t!(
+                                "tmux.discovery_failed",
+                                error = crate::i18n::format_error(&error)
+                            )
+                            .to_string(),
                         );
                         retry_discovery = Some(Instant::now() + Duration::from_secs(10));
                         state.snapshot.revision += 1;
@@ -532,7 +469,11 @@ fn run(
                     Err(error) => {
                         let mut state = shared.lock();
                         state.snapshot.message = Some(
-                            crate::t!("tmux.read_failed", error = format!("{error:#}")).to_string(),
+                            crate::t!(
+                                "tmux.read_failed",
+                                error = crate::i18n::format_error(&error)
+                            )
+                            .to_string(),
                         );
                         state.snapshot.revision += 1;
                         retry_discovery = Some(Instant::now() + Duration::from_secs(10));
@@ -797,7 +738,8 @@ fn run(
                                         ) {
                                             hydrating.remove(&pane.id);
                                             pending_recapture.insert(pane.id.clone());
-                                            state.snapshot.message = Some(error.to_string());
+                                            state.snapshot.message =
+                                                Some(crate::i18n::format_error(&error));
                                             dirty = true;
                                         } else {
                                             pending_recapture.remove(&pane.id);
@@ -836,11 +778,14 @@ fn run(
                                         match streams.send(&owner.id, mode_request) {
                                             Ok(()) => {}
                                             Err((error, request))
-                                                if error
-                                                    .downcast_ref::<io::Error>()
-                                                    .is_some_and(|error| {
-                                                        error.kind() == io::ErrorKind::WouldBlock
-                                                    }) =>
+                                                if tshell_host::diagnostic::find_cause::<
+                                                    io::Error,
+                                                >(
+                                                    &error
+                                                )
+                                                .is_some_and(|error| {
+                                                    error.kind() == io::ErrorKind::WouldBlock
+                                                }) =>
                                             {
                                                 queue.push_front(request);
                                                 retry_send = Some(
@@ -1037,7 +982,7 @@ fn run(
                     }
                     Err(error) => {
                         let mut state = shared.lock();
-                        state.snapshot.message = Some(error.to_string());
+                        state.snapshot.message = Some(crate::i18n::format_error(&error));
                         state.snapshot.revision += 1;
                     }
                 }
@@ -1120,8 +1065,7 @@ fn run(
                 match streams.send(&target, request) {
                     Ok(()) => retry_send = None,
                     Err((error, request))
-                        if error
-                            .downcast_ref::<io::Error>()
+                        if tshell_host::diagnostic::find_cause::<io::Error>(&error)
                             .is_some_and(|error| error.kind() == io::ErrorKind::WouldBlock) =>
                     {
                         queue.push_front(request);
@@ -1132,8 +1076,11 @@ fn run(
                         retry_send = None;
                         let mut state = shared.lock();
                         state.snapshot.message = Some(
-                            crate::t!("tmux.command_failed", error = format!("{error:#}"))
-                                .to_string(),
+                            crate::t!(
+                                "tmux.command_failed",
+                                error = crate::i18n::format_error(&error)
+                            )
+                            .to_string(),
                         );
                         state.snapshot.revision += 1;
                     }
@@ -1639,25 +1586,27 @@ mod tests {
     #[ignore = "requires TSHELL_SSH_TEST_HOST; uses an isolated tmux socket"]
     fn real_tmux_last_shell_exit_removes_session() {
         use super::*;
-        struct Cleanup(HostConfig);
+        struct Cleanup(HostDefinition);
         impl Drop for Cleanup {
             fn drop(&mut self) {
                 let _ = self
                     .0
+                    .ssh
                     .ssh_command()
                     .unwrap()
                     .arg(format!("{} kill-server", self.0.tmux().unwrap()))
                     .output();
             }
         }
-        let config = HostConfig {
-            destination: std::env::var("TSHELL_SSH_TEST_HOST").unwrap(),
+        let config = HostDefinition {
+            ssh: tshell_host::SshConfig {
+                destination: std::env::var("TSHELL_SSH_TEST_HOST").unwrap(),
+                user: String::new(),
+                port: None,
+                identity_file: None,
+            },
             name: String::new(),
-            user: String::new(),
-            port: None,
-            identity_file: None,
             tmux: true,
-
             socket: Some(format!(
                 "tshell-recovery-{}-{}",
                 std::process::id(),
@@ -1733,30 +1682,11 @@ mod tests {
     }
     #[test]
     fn host_connects_without_a_session_binding() {
-        let old: super::HostConfig =
+        let old: super::HostDefinition =
             serde_json::from_str(r#"{"destination":"server","port":null,"tmux_name":"legacy"}"#)
                 .unwrap();
-        assert_eq!(old.destination, "server");
+        assert_eq!(old.ssh.destination, "server");
         assert!(!serde_json::to_string(&old).unwrap().contains("tmux_name"));
-    }
-
-    #[test]
-    fn ssh_config_query_uses_selected_identity_file() {
-        let host = HostConfig {
-            destination: "server".into(),
-            name: String::new(),
-            user: String::new(),
-            port: None,
-            identity_file: Some("key with spaces".into()),
-            tmux: false,
-            socket: None,
-        };
-        let command = host.ssh_command().unwrap();
-        let args: Vec<_> = command.get_args().collect();
-        assert!(
-            args.windows(2)
-                .any(|args| args == ["-i", "key with spaces"])
-        );
     }
 
     #[test]
@@ -1831,12 +1761,14 @@ mod tests {
     #[test]
     #[ignore = "requires TSHELL_SSH_TEST_HOST; isolated tmux UTF-8 metadata under C locale"]
     fn remote_metadata_preserves_chinese_in_c_locale() -> Result<()> {
-        let config = HostConfig {
-            destination: std::env::var("TSHELL_SSH_TEST_HOST")?,
+        let config = HostDefinition {
+            ssh: tshell_host::SshConfig {
+                destination: std::env::var("TSHELL_SSH_TEST_HOST")?,
+                user: String::new(),
+                port: None,
+                identity_file: None,
+            },
             name: String::new(),
-            user: String::new(),
-            port: None,
-            identity_file: None,
             tmux: true,
             socket: Some(format!(
                 "tshell-unicode-{}-{}",
@@ -1849,13 +1781,13 @@ mod tests {
         let tmux = config.tmux()?;
         let result = (|| -> Result<()> {
             crate::ssh_pool::output(
-                &config,
+                &config.ssh,
                 format!("LC_ALL=C {tmux} new-session -d -s '中文会话' -n '中文窗口'"),
                 65536,
             )?;
             for _ in 0..3 {
                 let output = crate::ssh_pool::output(
-                    &config,
+                    &config.ssh,
                     format!(
                         "LC_ALL=C {tmux} -C list-sessions -F '#{{session_name}}'; LC_ALL=C {tmux} -C list-windows -F '#{{window_name}}'"
                     ),
@@ -1880,7 +1812,7 @@ mod tests {
             }
             Ok(())
         })();
-        let _ = crate::ssh_pool::output(&config, format!("{tmux} kill-server"), 65536);
+        let _ = crate::ssh_pool::output(&config.ssh, format!("{tmux} kill-server"), 65536);
         result
     }
 
@@ -2110,10 +2042,10 @@ mod tests {
     #[test]
     #[ignore = "requires TSHELL_SSH_TEST_HOST; uses an isolated tmux socket"]
     fn real_tmux_grouped_splits_close_exit_resize_and_zoom_stay_equal() {
-        struct Cleanup(HostConfig);
+        struct Cleanup(HostDefinition);
         impl Drop for Cleanup {
             fn drop(&mut self) {
-                if let Ok(mut command) = self.0.ssh_command() {
+                if let Ok(mut command) = self.0.ssh.ssh_command() {
                     let _ = command
                         .arg(format!("{} kill-server", self.0.tmux().unwrap()))
                         .output();
@@ -2121,12 +2053,14 @@ mod tests {
             }
         }
         let destination = std::env::var("TSHELL_SSH_TEST_HOST").expect("set test host");
-        let config = HostConfig {
-            destination,
+        let config = HostDefinition {
+            ssh: tshell_host::SshConfig {
+                destination,
+                user: String::new(),
+                port: None,
+                identity_file: None,
+            },
             name: String::new(),
-            user: String::new(),
-            port: None,
-            identity_file: None,
             tmux: true,
 
             socket: Some(format!(
@@ -2249,10 +2183,10 @@ mod tests {
     #[test]
     #[ignore = "requires TSHELL_SSH_TEST_HOST; uses an isolated tmux socket"]
     fn real_ssh_tmux_workspace_round_trip() {
-        struct Cleanup(HostConfig);
+        struct Cleanup(HostDefinition);
         impl Drop for Cleanup {
             fn drop(&mut self) {
-                if let Ok(mut command) = self.0.ssh_command() {
+                if let Ok(mut command) = self.0.ssh.ssh_command() {
                     let _ = command
                         .arg(format!("{} kill-server", self.0.tmux().unwrap()))
                         .output();
@@ -2260,12 +2194,14 @@ mod tests {
             }
         }
         let destination = std::env::var("TSHELL_SSH_TEST_HOST").expect("set TSHELL_SSH_TEST_HOST");
-        let config = HostConfig {
-            destination,
+        let config = HostDefinition {
+            ssh: tshell_host::SshConfig {
+                destination,
+                user: String::new(),
+                port: None,
+                identity_file: None,
+            },
             name: String::new(),
-            user: String::new(),
-            port: None,
-            identity_file: None,
             tmux: true,
 
             socket: Some(format!(
@@ -2431,7 +2367,7 @@ mod tests {
             .apply(Action::SelectWindow(first_window.clone()))
             .unwrap();
         wait(&|s| s.window().is_some_and(|w| w.id == first_window));
-        let mut external = config.ssh_command().unwrap();
+        let mut external = config.ssh.ssh_command().unwrap();
         assert!(
             external
                 .arg(format!(
@@ -2506,7 +2442,7 @@ mod tests {
         let pair = wait(&|s| s.sessions.len() == 2 && s.active_session != first_session);
         let fresh = pair.session().unwrap().clone();
         let clients = crate::ssh_pool::output(
-            &config,
+            &config.ssh,
             format!(
                 "{} list-clients -F '#{{session_id}}'",
                 config.tmux().unwrap()
@@ -2540,6 +2476,7 @@ mod tests {
         drop(client);
         // Verify disconnect did not destroy the native sessions.
         let output = config
+            .ssh
             .ssh_command()
             .unwrap()
             .arg(format!(

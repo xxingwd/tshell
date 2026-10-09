@@ -46,24 +46,12 @@ pub(super) fn parse_git_status(bytes: &[u8]) -> Vec<GitChange> {
     changes
 }
 
-pub(super) struct Node {
-    pub path: String,
-    pub directory: bool,
-    pub children: Vec<Node>,
-    pub loaded: bool,
+pub(super) use tshell_host::files::Node;
+pub(super) trait NodeView {
+    fn item(self, root: bool) -> TreeItem;
 }
-
-impl Node {
-    pub fn loaded_directories(&self, paths: &mut std::collections::BTreeSet<String>) {
-        if self.directory && self.loaded {
-            paths.insert(self.path.clone());
-        }
-        for child in &self.children {
-            child.loaded_directories(paths);
-        }
-    }
-
-    pub(super) fn item(self, root: bool) -> TreeItem {
+impl NodeView for Node {
+    fn item(self, root: bool) -> TreeItem {
         let label = self
             .path
             .rsplit(if cfg!(windows) {

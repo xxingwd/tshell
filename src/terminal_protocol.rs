@@ -1,4 +1,5 @@
 //! Terminal query replies and opt-in colour-scheme notifications.
+use crate::appearance::PaletteTerminalTheme;
 use crate::terminal::Listener;
 use alacritty_terminal::{
     event::Event,

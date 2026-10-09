@@ -1,14 +1,16 @@
+use crate::appearance::PaletteTerminalTheme;
 use crate::{
     appearance::{Appearance, Palette},
     backend::{
         Action, Backend, Connection, LocalBackend, PANE_GAP, PANE_PADDING, PaneBounds,
         PixelViewport, Snapshot, SplitAxis,
     },
+    host::HostDefinition,
     shortcuts::{self, Shortcut},
     terminal::validate_destination,
     terminal_theme::{self, ThemeDefinition, ThemeFile},
     terminal_view::TerminalView,
-    tmux_client::{HostConfig, TmuxClient},
+    tmux_client::TmuxClient,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
@@ -42,7 +44,7 @@ mod editor_search;
 mod editor_theme;
 mod explorer;
 mod file_access;
-mod file_ops;
+use tshell_host::files as file_ops;
 mod git;
 mod git_selection;
 mod git_view;
@@ -53,10 +55,11 @@ mod metrics_transport;
 #[cfg(test)]
 mod preferences_tests;
 mod preview;
-mod remote_files;
+use tshell_host::sftp as remote_files;
+use workbench::NodeView;
 mod sessions;
 mod ssh_auth;
-mod style;
+use tshell_ui::controls as style;
 mod terminal_actions;
 mod tools;
 mod transfer_queue;
@@ -100,7 +103,7 @@ struct Preferences {
     sidebar_opacity: Option<f32>,
     acrylic_background: bool,
     keybindings: shortcuts::Overrides,
-    hosts: Vec<HostConfig>,
+    hosts: Vec<HostDefinition>,
     #[serde(default)]
     forwards: BTreeMap<String, Vec<crate::ssh_forward::LocalForward>>,
     sessions: BTreeMap<String, Vec<crate::backend::SessionProfile>>,
@@ -231,32 +234,32 @@ fn theme_slots(themes: &ThemeFile, prefs: &Preferences) -> (String, String) {
     )
 }
 // Name changes do not move saved sessions; tmux has no client-side session storage.
-fn session_storage_key(config: Option<&HostConfig>) -> Option<String> {
+fn session_storage_key(config: Option<&HostDefinition>) -> Option<String> {
     match config {
         None => Some("local".into()),
         Some(host) if !host.tmux => Some(format!(
             "ssh:{}:{}:{}",
-            host.port.unwrap_or(22),
-            host.destination,
-            host.user
+            host.ssh.port.unwrap_or(22),
+            host.ssh.destination,
+            host.ssh.user
         )),
         Some(_) => None,
     }
 }
 
-fn forward_storage_key(config: &HostConfig) -> String {
+fn forward_storage_key(config: &HostDefinition) -> String {
     format!(
         "{}:{}:{}",
-        config.destination,
-        config.user,
-        config.port.unwrap_or(22)
+        config.ssh.destination,
+        config.ssh.user,
+        config.ssh.port.unwrap_or(22)
     )
 }
 
 struct Host {
     pending: Vec<Action>,
     name: String,
-    config: Option<HostConfig>,
+    config: Option<HostDefinition>,
     backend: Option<Backend>,
     snapshot: Snapshot,
     views: BTreeMap<String, Entity<TerminalView>>,
@@ -297,10 +300,10 @@ impl Host {
 
 #[cfg(test)]
 mod host_tests {
-    use super::{Action, Backend, Connection, Host, HostConfig, LocalBackend, Snapshot};
+    use super::{Action, Backend, Connection, Host, HostDefinition, LocalBackend, Snapshot};
     use std::collections::{BTreeMap, BTreeSet};
 
-    fn host(config: Option<HostConfig>) -> Host {
+    fn host(config: Option<HostDefinition>) -> Host {
         Host {
             pending: vec![Action::NewSession],
             name: "Test host".into(),
@@ -321,12 +324,14 @@ mod host_tests {
 
     #[test]
     fn disconnect_preserves_remote_configuration_and_clears_live_state() {
-        let config = HostConfig {
+        let config = HostDefinition {
+            ssh: tshell_host::SshConfig {
+                destination: "example.invalid".into(),
+                user: "test".into(),
+                port: None,
+                identity_file: None,
+            },
             name: "Test host".into(),
-            destination: "example.invalid".into(),
-            user: "test".into(),
-            port: None,
-            identity_file: None,
             tmux: true,
             socket: None,
         };
@@ -776,7 +781,10 @@ impl AppView {
                 Ok(b) => (Some(Backend::Local(b)), None),
                 Err(e) => (
                     None,
-                    Some(crate::t!("ws.start_failed", error = format!("{e:#}")).to_string()),
+                    Some(
+                        crate::t!("ws.start_failed", error = crate::i18n::format_error(&e))
+                            .to_string(),
+                    ),
                 ),
             };
         let mut hosts = vec![Host {
@@ -798,7 +806,7 @@ impl AppView {
         for config in prefs.hosts {
             hosts.push(Host {
                 name: if config.name.is_empty() {
-                    config.destination.clone()
+                    config.ssh.destination.clone()
                 } else {
                     config.name.clone()
                 },
@@ -1307,7 +1315,9 @@ impl AppView {
         }
         self.sftp_sessions.retain(|(index, id), session| {
             self.hosts.get(*index).is_some_and(|host| {
-                host.config.as_ref() == Some(&session.host)
+                host.config
+                    .as_ref()
+                    .is_some_and(|config| config.ssh == session.host)
                     && host.backend.is_some()
                     && (!host.snapshot.connected()
                         || id.is_empty()
@@ -1450,7 +1460,7 @@ impl AppView {
                 };
                 let (index, config, tmux, (ssh_enabled, tmux_enabled)) = target;
                 let ssh = if ssh_enabled {
-                    crate::ssh_pool::ping_async(config.clone())
+                    crate::ssh_pool::ping_async(config.ssh.clone())
                         .recv()
                         .await
                         .ok()
@@ -1500,7 +1510,7 @@ impl AppView {
         self.message = None;
         if let Some(b) = &mut self.hosts[self.active].backend {
             if let Err(e) = b.apply(action) {
-                self.message = Some(format!("{e:#}"));
+                self.message = Some(crate::i18n::format_error(&e));
             }
         }
         self.sync(cx);
@@ -1520,7 +1530,7 @@ impl AppView {
                 } else {
                     match LocalBackend::restore(
                         self.default_cwd.clone(),
-                        Some(config.clone()),
+                        Some(config.ssh.clone()),
                         session_storage_key(Some(&config))
                             .and_then(|key| self.session_profiles.get(&key).cloned()),
                     ) {
@@ -1666,26 +1676,27 @@ impl AppView {
                 }
             }
         };
-        let config = HostConfig {
+        let config = HostDefinition {
+            ssh: tshell_host::SshConfig {
+                destination: destination.clone(),
+                user,
+                port,
+                identity_file,
+            },
             name: if name.is_empty() {
                 destination.clone()
             } else {
                 name.clone()
             },
-            destination: destination.clone(),
-            user,
-            port,
-            identity_file,
             tmux: self.use_tmux,
-
             socket: None,
         };
         if let Some(index) = self.editing_host {
             let old = self.hosts[index].config.as_ref().unwrap().clone();
-            let changed = old.destination != config.destination
-                || old.user != config.user
-                || old.port != config.port
-                || old.identity_file != config.identity_file
+            let changed = old.ssh.destination != config.ssh.destination
+                || old.ssh.user != config.ssh.user
+                || old.ssh.port != config.ssh.port
+                || old.ssh.identity_file != config.ssh.identity_file
                 || old.tmux != config.tmux;
             if changed && !self.prepare_host_connection_change(index, cx) {
                 return;
@@ -1983,7 +1994,7 @@ impl AppView {
             target_port,
         };
         if let Err(error) = forward.validate() {
-            self.forward_error = Some(error.to_string());
+            self.forward_error = Some(crate::i18n::format_error(&error));
             cx.notify();
             return;
         }
@@ -2041,7 +2052,7 @@ impl AppView {
         cx.notify();
     }
 
-    fn start_forward(&mut self, config: &HostConfig, rule_index: usize) {
+    fn start_forward(&mut self, config: &HostDefinition, rule_index: usize) {
         let key = forward_storage_key(config);
         if self
             .forward_processes
@@ -2057,19 +2068,28 @@ impl AppView {
         else {
             return;
         };
-        match crate::ssh_forward::Tunnel::start(config, &forward, self.workspace_updates.clone()) {
+        match crate::ssh_forward::Tunnel::start(
+            &config.ssh,
+            &forward,
+            self.workspace_updates.clone(),
+        ) {
             Ok(process) => {
                 self.forward_processes.insert((key, rule_index), process);
                 self.forward_error = None;
             }
             Err(error) => {
-                self.forward_error =
-                    Some(crate::t!("ssh.forward_error", error = error).to_string());
+                self.forward_error = Some(
+                    crate::t!(
+                        "ssh.forward_error",
+                        error = crate::i18n::format_error(&error)
+                    )
+                    .to_string(),
+                );
             }
         }
     }
 
-    fn start_forwards_for(&mut self, config: &HostConfig) {
+    fn start_forwards_for(&mut self, config: &HostDefinition) {
         let key = forward_storage_key(config);
         let count = self.forwards.get(&key).map_or(0, Vec::len);
         for rule_index in 0..count {
@@ -2086,7 +2106,7 @@ impl AppView {
         }
     }
 
-    fn stop_forwards_for(&mut self, config: &HostConfig) {
+    fn stop_forwards_for(&mut self, config: &HostDefinition) {
         let key = forward_storage_key(config);
         let process_keys: Vec<_> = self
             .forward_processes
@@ -2237,7 +2257,7 @@ impl AppView {
                     }
                     .to_string();
                     let detail = match phase {
-                        Phase::Failed(error) => error,
+                        Phase::Failed(error) => tshell_ui::i18n::format_failure(&error),
                         _ => format!(
                             "{} · {}",
                             rule.label(),
@@ -2532,8 +2552,11 @@ impl AppView {
                         }
                         Err(error) => {
                             this.directory_error = Some(
-                                crate::t!("ws.home_failed", error = format!("{error:#}"))
-                                    .to_string(),
+                                crate::t!(
+                                    "ws.home_failed",
+                                    error = crate::i18n::format_error(&error)
+                                )
+                                .to_string(),
                             );
                             cx.notify();
                         }
@@ -2683,15 +2706,20 @@ impl AppView {
                             Ok(path) => {
                                 this.validated_directory = Some((host_index, input.clone(), path))
                             }
-                            Err(error) => this.directory_error = Some(error.to_string()),
+                            Err(error) => {
+                                this.directory_error = Some(crate::i18n::format_error(&error))
+                            }
                         }
                     }
                     match result.1 {
                         Ok(paths) => this.directory_candidates = paths,
                         Err(error) if this.directory_error.is_none() => {
                             this.directory_error = Some(
-                                crate::t!("ws.completion_unavailable", error = error.to_string())
-                                    .to_string(),
+                                crate::t!(
+                                    "ws.completion_unavailable",
+                                    error = crate::i18n::format_error(&error)
+                                )
+                                .to_string(),
                             )
                         }
                         Err(_) => {}
@@ -2962,19 +2990,20 @@ impl AppView {
         });
         if let Some(c) = config {
             self.destination
-                .update(cx, |i, cx| i.set_value(c.destination, window, cx));
+                .update(cx, |i, cx| i.set_value(c.ssh.destination, window, cx));
             self.user
-                .update(cx, |i, cx| i.set_value(c.user, window, cx));
+                .update(cx, |i, cx| i.set_value(c.ssh.user, window, cx));
             self.port.update(cx, |i, cx| {
                 i.set_value(
-                    c.port.map(|p| p.to_string()).unwrap_or_default(),
+                    c.ssh.port.map(|p| p.to_string()).unwrap_or_default(),
                     window,
                     cx,
                 )
             });
             self.identity_file.update(cx, |i, cx| {
                 i.set_value(
-                    c.identity_file
+                    c.ssh
+                        .identity_file
                         .map(|path| path.to_string_lossy().into_owned())
                         .unwrap_or_default(),
                     window,
@@ -4176,7 +4205,7 @@ impl AppView {
         .then(|| {
             host.config
                 .clone()
-                .map(host_metrics::Target::Remote)
+                .map(|host| host_metrics::Target::Remote(host.ssh))
                 .unwrap_or(host_metrics::Target::Local)
         });
         let selection: BTreeSet<_> = self.metrics_config.resources().collect();

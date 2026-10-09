@@ -1,14 +1,15 @@
 //! One lazy SFTP channel owned by a workspace session; no idle timer.
 use super::*;
+use crate::diagnostic::ResultExt;
 use std::sync::Arc;
 
 #[derive(Clone)]
-pub(crate) struct Session {
-    pub host: HostConfig,
+pub struct Session {
+    pub host: SshConfig,
     client: Arc<tokio::sync::Mutex<Option<sftp::Client>>>,
 }
 impl Session {
-    pub fn new(host: HostConfig) -> Self {
+    pub fn new(host: SshConfig) -> Self {
         Self {
             host,
             client: Arc::default(),
@@ -16,7 +17,7 @@ impl Session {
     }
 }
 impl std::ops::Deref for Session {
-    type Target = HostConfig;
+    type Target = SshConfig;
     fn deref(&self) -> &Self::Target {
         &self.host
     }
@@ -28,19 +29,19 @@ pub(super) async fn run<T>(
 ) -> Result<T> {
     let mut cached = tokio::time::timeout(Duration::from_secs(60), session.client.lock())
         .await
-        .context(crate::t!("sftp.queue_timeout"))?;
+        .with_diagnostic(crate::diagnostic!("sftp.queue_timeout"))?;
     if cached.is_none() {
         *cached = Some(sftp::connect(&session.host).await?);
     }
     let result = tokio::time::timeout(Duration::from_secs(60), operation(cached.as_ref().unwrap()))
         .await
-        .context(crate::t!("sftp.op_timeout"))
+        .with_diagnostic(crate::diagnostic!("sftp.op_timeout"))
         .and_then(|result| result);
     // Drop a broken protocol session, but never replay a failed operation (especially writes).
     if result.as_ref().err().is_some_and(|e| {
-        e.downcast_ref::<tokio::time::error::Elapsed>().is_some()
+        crate::diagnostic::find_cause::<tokio::time::error::Elapsed>(e).is_some()
             || matches!(
-                e.downcast_ref::<russh_sftp::client::error::Error>(),
+                crate::diagnostic::find_cause::<russh_sftp::client::error::Error>(e),
                 Some(
                     russh_sftp::client::error::Error::IO(_)
                         | russh_sftp::client::error::Error::Timeout
@@ -51,5 +52,5 @@ pub(super) async fn run<T>(
     }) {
         cached.take();
     }
-    result.context(crate::t!("sftp.op_failed"))
+    result.with_diagnostic(crate::diagnostic!("sftp.op_failed"))
 }

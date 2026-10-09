@@ -1,6 +1,6 @@
 # TShell 架构重构与 Docker 实施计划
 
-更新日期：2026-10-09。状态：计划阶段，以下任务均未实施。
+更新日期：2026-10-09。状态：执行中，共享基础已迁入独立 crate；稳定主机身份及工具 Entity 重构尚未完成。
 
 本计划替换上一版。目标是直接建立清晰的最终结构，允许重写当前内部架构；继续保留用户配置、未保存文件、运行中的终端和已有功能行为。所有工具仍放在左侧，Docker 独立于终端会话。
 
@@ -180,12 +180,23 @@ connector 放在 Docker crate 的一个聚焦模块中：复用 host 的认证�
 
 ### 阶段一：建立 workspace 与真实共享能力
 
-- [ ] 记录当前工作树和已有功能测试基线，保留全部未提交工作与用户运行实例。
-- [ ] 建立 root workspace、共享依赖与内部 crate；保留入口、vendor patch、锁文件和发行构建。
+- [x] 记录当前工作树和已有功能测试基线，保留全部未提交工作与用户运行实例。
+- [x] 建立 root workspace、共享依赖与内部 crate；保留入口、vendor patch、锁文件和发行构建。
 - [ ] 建立 tshell-host：拆开应用主机定义与 SSH 配置，迁移稳定身份、runtime、SSH 连接/认证、通道与 SFTP。
 - [ ] 为现有终端、tmux、转发和指标调用更新 host 类型/路径，验证原有连接行为。
-- [ ] 建立 tshell-ui：共享控件、语义 token 与本地化；根 locales 保持唯一来源，语言/主题即时生效。
+- [x] 建立 tshell-ui：共享控件、语义 token 与本地化；根 locales 保持唯一来源，语言/主题即时生效。
 - [ ] 完成旧配置迁移和新 API；移除重复 HostConfig/身份/翻译初始化。
+
+当前落地：
+
+- 基线提交 `775ca51`，随后在 `codex/workspace-modules` 执行。基线 205 项通过、20 项忽略。
+- Cargo workspace 已包含主应用、`tshell-host` 与 `tshell-ui`，共用锁文件和 GPUI vendor patch。
+- `SshConfig` 只含连接字段；主应用 `src/host.rs` 的 `HostDefinition` 持有显示名与 tmux 选项。原配置继续按扁平字段读取/保存，无需用户手工修改。
+- host 已拥有 SSH runtime、连接池、认证请求、转发、SFTP 会话/传输和本地文件操作；根目录旧实现已移除。现有终端、tmux、指标和文件工具已接入。
+- UI 已拥有 Palette、共享控件与唯一翻译初始化；host 错误保留诊断类型和原始原因，在 UI 显示时翻译。UI build script 跟踪根 locales 的改动。
+- 本批验证：`cargo fmt --all -- --check`、`cargo test --workspace --locked`（207 通过、20 忽略）、`cargo check --workspace --locked --all-targets` 均通过。通过 `cargo build --locked --bin tshell --target-dir target/module-check` 构建独立程序，原生 `--workspace-ui-check` 报告通过。
+- 验证报告位于本地 `artifacts/module-refactor-tests.log`、`artifacts/module-refactor-check.log`、`artifacts/module-refactor-ui.json`。UI 使用隔离配置目录，并跳过剪贴板以保留用户内容；未配置真实 SSH 测试主机，远端验收仍待执行。本批未运行 release 打包或 Docker 验收。
+- 下一批先完成稳定 `HostId` 与配置迁移、具体本地/远端访问值和路径类型，再进入阶段二；目前仍保留旧会话恢复映射，不能视为工作区重构完成。
 
 验收：host 不依赖 GPUI/tmux；主应用与既有终端/SSH 工作流可用，配置兼容，真实连接实现只有一份。
 

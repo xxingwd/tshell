@@ -1,0 +1,278 @@
+use gpui_kit::{WindowAppearance, component::ThemeMode};
+use serde::{Deserialize, Serialize};
+
+// Fallback for UI palettes and bare rendering checks. App terminals replace
+// these colours with the user's selected palette from terminal_theme.
+pub const DEFAULT_ANSI: [u32; 16] = [
+    0x172033, 0xf87171, 0x4ade80, 0xfbbf24, 0x60a5fa, 0xc084fc, 0x22d3ee, 0xdbe4f0, 0x64748b,
+    0xfca5a5, 0x86efac, 0xfde68a, 0x93c5fd, 0xd8b4fe, 0x67e8f9, 0xffffff,
+];
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Appearance {
+    #[default]
+    System,
+    Dark,
+    Light,
+}
+impl Appearance {
+    pub fn next(self) -> Self {
+        match self {
+            Self::System => Self::Dark,
+            Self::Dark => Self::Light,
+            Self::Light => Self::System,
+        }
+    }
+
+    pub fn mode(self, system: WindowAppearance) -> ThemeMode {
+        match self {
+            Self::Dark => ThemeMode::Dark,
+            Self::Light => ThemeMode::Light,
+            Self::System => match system {
+                WindowAppearance::Dark | WindowAppearance::VibrantDark => ThemeMode::Dark,
+                _ => ThemeMode::Light,
+            },
+        }
+    }
+}
+
+fn mix(base: u32, tint: u32, amount: u8) -> u32 {
+    let blend = |shift: u32| -> u32 {
+        let a = (base >> shift) & 0xff_u32;
+        let b = (tint >> shift) & 0xff_u32;
+        (a * (255_u32 - u32::from(amount)) + b * u32::from(amount) + 127_u32) / 255_u32
+    };
+    blend(16) << 16 | blend(8) << 8 | blend(0)
+}
+
+fn contrast_text(background: u32) -> u32 {
+    let luminance = [16, 8, 0]
+        .into_iter()
+        .zip([0.2126, 0.7152, 0.0722])
+        .map(|(shift, weight)| {
+            let channel = ((background >> shift) & 0xff) as f32 / 255.;
+            let linear = if channel <= 0.04045 {
+                channel / 12.92
+            } else {
+                ((channel + 0.055) / 1.055).powf(2.4)
+            };
+            linear * weight
+        })
+        .sum::<f32>();
+    if luminance > 0.179 {
+        0x000000
+    } else {
+        0xffffff
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Palette {
+    pub background: u32,
+    pub panel: u32,
+    pub border: u32,
+    pub text: u32,
+    pub muted: u32,
+    pub accent: u32,
+    pub selected: u32,
+    pub hover: u32,
+    pub terminal: u32,
+    pub selection: u32,
+    pub error: u32,
+    pub ansi: [u32; 16],
+}
+impl Palette {
+    pub fn row_hover(self) -> u32 {
+        self.hover
+    }
+
+    pub fn row_selected(self) -> u32 {
+        self.selected
+    }
+
+    pub fn for_terminal(terminal: Self) -> Self {
+        let mut palette = terminal;
+        palette.background = terminal.terminal;
+        palette.panel = mix(terminal.terminal, terminal.text, 18);
+        palette.border = mix(terminal.terminal, terminal.text, 38);
+        palette.muted = mix(terminal.text, terminal.terminal, 100);
+        palette.hover = mix(palette.panel, palette.text, 20);
+        palette.selected = if palette.is_light() {
+            mix(palette.panel, palette.text, 36)
+        } else {
+            mix(palette.panel, 0x000000, 30)
+        };
+        palette
+    }
+
+    pub fn with_interface(mut self, colors: Option<InterfaceColors>) -> Self {
+        if let Some(colors) = colors {
+            self.panel = colors.panel;
+            self.border = colors.border;
+            self.muted = colors.muted;
+            self.hover = colors.hover;
+            self.selected = colors.selected;
+            self.error = colors.error;
+        }
+        self
+    }
+
+    pub fn apply_ui(self, theme: &mut gpui_kit::component::Theme) {
+        use gpui_kit::rgb;
+
+        let accent_foreground = rgb(contrast_text(self.accent)).into();
+        let accent_hover = rgb(mix(self.accent, self.text, 25)).into();
+        theme.background = rgb(self.background).into();
+        theme.foreground = rgb(self.text).into();
+        theme.accent = rgb(self.accent).into();
+        theme.accent_foreground = accent_foreground;
+        theme.accordion = rgb(self.panel).into();
+        theme.group_box = rgb(self.panel).into();
+        theme.group_box_foreground = rgb(self.text).into();
+        theme.muted = rgb(self.panel).into();
+        theme.muted_foreground = rgb(self.muted).into();
+        theme.border = rgb(self.border).into();
+        theme.input = rgb(self.border).into();
+        theme.sidebar = rgb(self.panel).into();
+        theme.sidebar_foreground = rgb(self.text).into();
+        theme.sidebar_border = rgb(self.border).into();
+        theme.sidebar_accent = rgb(self.row_selected()).into();
+        theme.sidebar_accent_foreground = rgb(self.text).into();
+        theme.sidebar_primary = rgb(self.accent).into();
+        theme.sidebar_primary_foreground = accent_foreground;
+        theme.title_bar = rgb(self.panel).into();
+        theme.title_bar_border = rgb(self.border).into();
+        theme.status_bar = rgb(self.panel).into();
+        theme.status_bar_border = rgb(self.border).into();
+        let light = self.is_light();
+        // Light input and select triggers use the theme background in GPUI Kit.
+        theme.popover = rgb(if light { self.background } else { self.panel }).into();
+        theme.popover_foreground = rgb(self.text).into();
+        let overlay: gpui_kit::Hsla = rgb(if light { self.text } else { 0x000000 }).into();
+        theme.overlay = overlay.alpha(if light { 0.26 } else { 0.55 });
+        theme.button = rgb(self.panel).into();
+        theme.button_foreground = rgb(self.text).into();
+        theme.button_hover = rgb(self.row_hover()).into();
+        theme.button_primary = rgb(self.accent).into();
+        theme.button_primary_hover = accent_hover;
+        theme.button_primary_active = accent_hover;
+        theme.button_primary_foreground = accent_foreground;
+        theme.secondary = rgb(self.panel).into();
+        theme.secondary_foreground = rgb(self.text).into();
+        theme.secondary_hover = rgb(self.row_hover()).into();
+        theme.colors.list = rgb(self.panel).into();
+        theme.list_hover = rgb(self.row_hover()).into();
+        theme.list_active = rgb(self.row_selected()).into();
+        theme.list_active_border = rgb(self.border).into();
+        theme.list_head = rgb(self.panel).into();
+        theme.tab_bar = rgb(self.panel).into();
+        theme.tab_bar_segmented = rgb(self.panel).into();
+        theme.tab = rgb(self.panel).into();
+        theme.tab_active = rgb(self.row_selected()).into();
+        theme.tab_active_foreground = rgb(self.text).into();
+        theme.table = rgb(self.panel).into();
+        theme.table_hover = rgb(self.row_hover()).into();
+        theme.table_active = rgb(self.row_selected()).into();
+        theme.table_head = rgb(self.panel).into();
+        theme.table_foot = rgb(self.panel).into();
+        theme.primary = rgb(self.accent).into();
+        theme.primary_hover = accent_hover;
+        theme.primary_active = accent_hover;
+        theme.primary_foreground = accent_foreground;
+        theme.link = rgb(self.accent).into();
+        theme.link_hover = accent_hover;
+        theme.link_active = accent_hover;
+        theme.selection = rgb(self.selection).into();
+        theme.scrollbar = rgb(self.panel).into();
+        theme.scrollbar_thumb = rgb(self.border).into();
+        theme.scrollbar_thumb_hover = rgb(self.muted).into();
+        // The ring renderer replaces alpha, so a transparent color cannot hide it.
+        theme.focus_ring = false;
+        theme.ring = theme.input;
+        theme.caret = rgb(self.accent).into();
+        theme.tokens = (&theme.colors).into();
+    }
+
+    pub fn is_light(self) -> bool {
+        let color = self.terminal;
+        (color >> 16) * 299 + ((color >> 8) & 255) * 587 + (color & 255) * 114 >= 128000
+    }
+    pub fn new(mode: ThemeMode) -> Self {
+        if mode == ThemeMode::Light {
+            Self {
+                background: 0xffffff,
+                panel: 0xffffff,
+                border: 0xe5e5e5,
+                text: 0x000000,
+                muted: 0x666666,
+                accent: 0x007acc,
+                selected: 0xe5e5e5,
+                hover: 0xececec,
+                terminal: 0xffffff,
+                selection: 0xadd6ff,
+                error: 0xee0000,
+                ansi: DEFAULT_ANSI,
+            }
+        } else {
+            Self {
+                background: 0x1e1e1e,
+                panel: 0x1e1e1e,
+                border: 0x3e3e42,
+                text: 0xd4d4d4,
+                muted: 0x858585,
+                accent: 0x007acc,
+                selected: 0x151515,
+                hover: 0x2d2d2d,
+                terminal: 0x1e1e1e,
+                selection: 0x264f78,
+                error: 0xf44747,
+                ansi: DEFAULT_ANSI,
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InterfaceColors {
+    pub panel: u32,
+    pub border: u32,
+    pub muted: u32,
+    pub hover: u32,
+    pub selected: u32,
+    pub error: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn interface_follows_terminal_without_changing_its_colors() {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            let mut terminal = Palette::new(mode);
+            terminal.terminal = 0x242b31;
+            terminal.text = 0xe8edf0;
+            terminal.accent = 0x339cff;
+            terminal.selection = 0x345678;
+            let palette = Palette::for_terminal(terminal);
+            assert_eq!(palette.background, terminal.terminal);
+            assert_eq!(palette.text, terminal.text);
+            assert_eq!(palette.accent, terminal.accent);
+            assert_eq!(palette.panel, mix(terminal.terminal, terminal.text, 18));
+            assert_eq!(palette.border, mix(terminal.terminal, terminal.text, 38));
+            assert_eq!(palette.hover, mix(palette.panel, palette.text, 20));
+            assert_eq!(palette.selected, palette.row_selected());
+            assert_eq!(palette.terminal, terminal.terminal);
+            assert_eq!(palette.ansi, terminal.ansi);
+            assert_eq!(palette.selection, terminal.selection);
+        }
+    }
+
+    #[test]
+    fn accent_text_remains_legible() {
+        assert_eq!(contrast_text(0xffffff), 0x000000);
+        assert_eq!(contrast_text(0x000000), 0xffffff);
+        assert_eq!(contrast_text(0x8752a0), 0xffffff);
+        assert_eq!(contrast_text(0xf4cd56), 0x000000);
+    }
+}

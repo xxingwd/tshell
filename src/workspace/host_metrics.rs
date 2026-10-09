@@ -3,18 +3,18 @@ mod extra;
 #[cfg(test)]
 use super::metrics_config::Config;
 use super::metrics_config::Metric;
-use crate::tmux_client::HostConfig;
 use anyhow::{Context, Result, bail, ensure};
 use std::time::Duration;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     time::timeout,
 };
+use tshell_host::SshConfig;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Target {
     Local,
-    Remote(HostConfig),
+    Remote(SshConfig),
 }
 
 #[derive(Clone, Debug)]
@@ -196,7 +196,7 @@ impl Monitor {
                     };
                     let error = result
                         .err()
-                        .map(|error| format!("{error:#}"))
+                        .map(|error| crate::i18n::format_error(&error))
                         .unwrap_or_else(|| crate::t!("metrics.disconnected").to_string());
                     failures += 1;
                     let stopped = failures >= 3;
@@ -267,14 +267,11 @@ mod tests {
     #[ignore = "reads selected metrics from local Windows or TSHELL_SSH_TEST_HOST"]
     fn selected_metrics_collect_only_memory() -> Result<()> {
         let target = match std::env::var("TSHELL_SSH_TEST_HOST") {
-            Ok(destination) => Target::Remote(HostConfig {
+            Ok(destination) => Target::Remote(tshell_host::SshConfig {
                 destination,
-                name: String::new(),
                 user: String::new(),
                 port: None,
                 identity_file: None,
-                tmux: false,
-                socket: None,
             }),
             Err(_) => Target::Local,
         };
@@ -437,15 +434,11 @@ mod tests {
     #[test]
     #[ignore = "requires TSHELL_SSH_TEST_HOST; read-only Linux resource query"]
     fn real_remote_metrics() {
-        let host = HostConfig {
+        let host = tshell_host::SshConfig {
             destination: std::env::var("TSHELL_SSH_TEST_HOST").unwrap(),
-            name: String::new(),
             user: String::new(),
             port: None,
             identity_file: None,
-            tmux: false,
-
-            socket: None,
         };
         let (monitor, receiver) =
             Monitor::start(Target::Remote(host), Metric::ALL.into_iter().collect());

@@ -1,5 +1,5 @@
 use super::{Operation, sftp::Client};
-use crate::workspace::file_ops;
+use crate::files as file_ops;
 use anyhow::{Result, ensure};
 use russh_sftp::{
     client::error::Error,
@@ -32,8 +32,7 @@ pub(super) async fn execute(client: &Client, operation: &file_ops::Operation) ->
             let (from, to) = (from.to_string_lossy(), to.to_string_lossy());
             ensure!(
                 !to.starts_with(&format!("{}/", from.trim_end_matches('/'))),
-                "{}",
-                crate::t!("file.into_self")
+                crate::diagnostic!("file.into_self")
             );
             // SFTP v3 rename refuses an existing target; do not use posix-rename (which overwrites).
             client.session.rename(from.as_ref(), to.as_ref()).await?;
@@ -42,8 +41,7 @@ pub(super) async fn execute(client: &Client, operation: &file_ops::Operation) ->
             let (from, to) = (from.to_string_lossy(), to.to_string_lossy());
             ensure!(
                 from != to && !to.starts_with(&format!("{}/", from.trim_end_matches('/'))),
-                "{}",
-                crate::t!("file.copy_into_self")
+                crate::diagnostic!("file.copy_into_self")
             );
             copy(client, &from, &to, 0).await?;
         }
@@ -54,7 +52,7 @@ pub(super) async fn execute(client: &Client, operation: &file_ops::Operation) ->
 
 pub(super) fn remove<'a>(client: &'a Client, path: &'a str, depth: usize) -> Operation<'a, ()> {
     Box::pin(async move {
-        ensure!(depth < 64, "{}", crate::t!("file.too_deep"));
+        ensure!(depth < 64, crate::diagnostic!("file.too_deep"));
         if client.session.lstat(path).await?.attrs.file_type().is_dir() {
             // Re-read after each batch; unlike the display tree, deletion must never truncate.
             loop {
@@ -65,8 +63,7 @@ pub(super) fn remove<'a>(client: &'a Client, path: &'a str, depth: usize) -> Ope
                 for entry in entries {
                     ensure!(
                         !entry.filename.contains('/') && !entry.filename.contains('\0'),
-                        "{}",
-                        crate::t!("file.invalid_entry")
+                        crate::diagnostic!("file.invalid_entry")
                     );
                     remove(
                         client,
@@ -86,27 +83,24 @@ pub(super) fn remove<'a>(client: &'a Client, path: &'a str, depth: usize) -> Ope
 
 fn copy<'a>(client: &'a Client, from: &'a str, to: &'a str, depth: usize) -> Operation<'a, ()> {
     Box::pin(async move {
-        ensure!(depth < 64, "{}", crate::t!("file.too_deep"));
+        ensure!(depth < 64, crate::diagnostic!("file.too_deep"));
         let attrs = client.session.lstat(from).await?.attrs;
         ensure!(
             attrs.file_type().is_dir() || attrs.file_type().is_file(),
-            "{}",
-            crate::t!("file.symlink_or_special")
+            crate::diagnostic!("file.symlink_or_special")
         );
         if attrs.file_type().is_dir() {
             let entries = client.entries(from, 10001).await?;
             ensure!(
                 entries.len() <= 10000,
-                "{}",
-                crate::t!("file.dir_too_large")
+                crate::diagnostic!("file.dir_too_large")
             );
             client.session.mkdir(to, FileAttributes::empty()).await?;
             let result: Result<()> = async {
                 for entry in entries {
                     ensure!(
                         !entry.filename.contains('/') && !entry.filename.contains('\0'),
-                        "{}",
-                        crate::t!("file.invalid_entry")
+                        crate::diagnostic!("file.invalid_entry")
                     );
                     copy(
                         client,
@@ -149,7 +143,7 @@ fn copy<'a>(client: &'a Client, from: &'a str, to: &'a str, depth: usize) -> Ope
             loop {
                 match client.session.read(input.clone(), offset, 32768).await {
                     Ok(data) => {
-                        ensure!(!data.data.is_empty(), "{}", crate::t!("file.empty_data"));
+                        ensure!(!data.data.is_empty(), crate::diagnostic!("file.empty_data"));
                         let length = data.data.len() as u64;
                         client
                             .session

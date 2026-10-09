@@ -44,6 +44,12 @@ impl AppView {
             .session()
             .map(|s| s.cwd.clone())
             .filter(|p| !p.is_empty());
+        let tmux = self.hosts[self.active]
+            .config
+            .as_ref()
+            .filter(|host| host.tmux)
+            .map(HostDefinition::tmux)
+            .transpose();
         let remote = self.remote_files();
         self.tool_request += 1;
         let request = self.tool_request;
@@ -60,10 +66,10 @@ impl AppView {
                 .background_executor()
                 .spawn(async move {
                     if let Some(host) = remote {
-                        if host.tmux {
+                        if let Some(tmux) = tmux? {
                             let command = format!(
                                 "{} display-message -p -t '{}' '#{{pane_current_path}}'",
-                                host.tmux()?,
+                                tmux,
                                 pane.replace('\'', "'\\''")
                             );
                             let bytes = crate::ssh_pool::output(&host, command, 65536)?;
@@ -104,10 +110,13 @@ impl AppView {
                     Err(error) => {
                         this.file_loading = None;
                         this.message = Some(
-                            crate::t!("tools.read_directory_failed", error = format!("{error:#}"))
-                                .to_string(),
+                            crate::t!(
+                                "tools.read_directory_failed",
+                                error = crate::i18n::format_error(&error)
+                            )
+                            .to_string(),
                         );
-                        this.git_error = Some(format!("{error:#}"));
+                        this.git_error = Some(crate::i18n::format_error(&error));
                         cx.notify();
                     }
                 }
@@ -155,7 +164,7 @@ impl AppView {
                         }
                         Err(error) => {
                             this.git_changes.clear();
-                            this.git_error = Some(format!("{error:#}"));
+                            this.git_error = Some(crate::i18n::format_error(&error));
                             cx.notify();
                             None
                         }
@@ -191,8 +200,11 @@ impl AppView {
                     }
                     if let Err(error) = result {
                         this.git_error = Some(
-                            crate::t!("tools.line_count_failed", error = format!("{error:#}"))
-                                .to_string(),
+                            crate::t!(
+                                "tools.line_count_failed",
+                                error = crate::i18n::format_error(&error)
+                            )
+                            .to_string(),
                         );
                     }
                     cx.notify();
@@ -227,7 +239,7 @@ impl AppView {
                             this.git_error = Some(
                                 crate::t!(
                                     "tools.added_line_count_failed",
-                                    error = format!("{error:#}")
+                                    error = crate::i18n::format_error(&error)
                                 )
                                 .to_string(),
                             );

@@ -394,7 +394,7 @@ impl AppView {
             Ok(()) => TransferState::Cancelled,
             Err(_) if job.control.is_cancelled() => TransferState::Cancelled,
             Err(error) => {
-                job.error = Some(format!("{error:#}"));
+                job.error = Some(crate::i18n::format_error(&error));
                 TransferState::Failed
             }
         };

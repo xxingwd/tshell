@@ -14,21 +14,17 @@ impl Session {
         remote_directory: Option<&str>,
     ) -> Result<Arc<Self>> {
         validate_destination(destination)?;
-        let host = crate::tmux_client::HostConfig {
+        let host = tshell_host::SshConfig {
             destination: destination.into(),
             user: String::new(),
             port,
             identity_file: None,
-            name: String::new(),
-            tmux: false,
-
-            socket: None,
         };
         Self::ssh_config_in(host, remote_directory)
     }
 
     pub fn ssh_config_in(
-        host: crate::tmux_client::HostConfig,
+        host: tshell_host::SshConfig,
         remote_directory: Option<&str>,
     ) -> Result<Arc<Self>> {
         validate_destination(&host.destination)?;
@@ -92,7 +88,7 @@ impl Session {
             if let Some(screen) = weak.upgrade() {
                 if let Err(error) = result {
                     screen.resize_barrier.fail();
-                    *screen.error.lock() = Some(format!("{error:#}"));
+                    *screen.error.lock() = Some(crate::i18n::format_error(&error));
                 }
                 screen.resize_barrier.fail();
                 screen.exited.store(true, Ordering::Release);

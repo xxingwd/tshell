@@ -42,7 +42,7 @@ jobs:
       - name: Test and build
         shell: pwsh
         run: |
-          cargo test --locked --bin tshell
+          cargo test --workspace --locked
           if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
           cargo build --locked --release --bin tshell
           if ($LASTEXITCODE -ne 0) { throw 'Build failed' }

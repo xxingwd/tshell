@@ -308,6 +308,7 @@ impl ThemeFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::appearance::PaletteTerminalTheme;
 
     #[test]
     fn theme_round_trips_and_rejects_bad_colors() {

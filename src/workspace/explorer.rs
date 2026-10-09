@@ -4,7 +4,7 @@ use gpui_kit::component::menu::PopupMenu;
 
 #[derive(Clone)]
 pub(super) struct FileClipboard {
-    host: Option<HostConfig>,
+    host: Option<HostDefinition>,
     path: PathBuf,
     cut: bool,
 }
@@ -276,7 +276,8 @@ impl AppView {
                 .ok_or_else(|| anyhow::anyhow!("{}", crate::t!("explorer.invalid_directory_name")))
                 .and_then(|name| file_ops::child(&download_directory, name, false));
             if let Err(error) = destination {
-                window.push_notification(Notification::error(format!("{error:#}")), cx);
+                window
+                    .push_notification(Notification::error(crate::i18n::format_error(&error)), cx);
                 return;
             }
         }
@@ -397,9 +398,10 @@ impl AppView {
                             app.load_files(cx);
                         }
                     }
-                    Err(error) => {
-                        window.push_notification(Notification::error(format!("{error:#}")), cx)
-                    }
+                    Err(error) => window.push_notification(
+                        Notification::error(crate::i18n::format_error(&error)),
+                        cx,
+                    ),
                 }
             });
         })
@@ -461,7 +463,10 @@ impl AppView {
                     let to = match file_ops::child(parent, &name, remote) {
                         Ok(path) => path,
                         Err(error) => {
-                            window.push_notification(Notification::warning(error.to_string()), cx);
+                            window.push_notification(
+                                Notification::warning(crate::i18n::format_error(&error)),
+                                cx,
+                            );
                             return false;
                         }
                     };
@@ -591,8 +596,11 @@ impl AppView {
                     }
                     Err(error) => window.push_notification(
                         Notification::error(
-                            crate::t!("explorer.operation_failed", error = format!("{error:#}"))
-                                .to_string(),
+                            crate::t!(
+                                "explorer.operation_failed",
+                                error = crate::i18n::format_error(&error)
+                            )
+                            .to_string(),
                         ),
                         cx,
                     ),

@@ -5,6 +5,19 @@ keyboard focus, menus, and selected states. Workspace styling uses the active
 scheme's semantic interface tokens; terminal font metrics and protocol rendering
 remain owned by the terminal view.
 
+## Module Ownership
+
+The root Cargo package composes the application. `tshell-ui` owns shared controls,
+semantic palettes and localisation; `tshell-host` owns SSH, authentication requests,
+forwarding, SFTP and file operations, with no GPUI or tmux dependency. Application
+host names and tmux preferences live in `src/host.rs`, separate from `SshConfig`;
+the saved host JSON retains its existing flat fields. Host errors preserve typed
+messages and their original causes until the UI formats them in the selected language.
+
+Explorer and Git still live in `src/workspace/` in this first migration. Session
+workspace ownership, stable host IDs and Docker integration are subsequent tasks
+recorded in [the implementation plan](../todo.md).
+
 ## Shared Layout
 
 - Familiar commands use Lucide icons with localized tooltips. Shared icon

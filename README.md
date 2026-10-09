@@ -227,9 +227,13 @@ compatibility document before changing terminal behavior.
   snapshots, lifecycle, and split geometry.
 - `src/terminal.rs`, `src/terminal/`, and `src/terminal_view/` connect PTYs to
   terminal state, rendering, selection, glyphs, and protocol observers.
-- `src/ssh_pool/` owns reusable SSH connections and interactive authentication.
+- `crates/tshell-host/` owns SSH configuration, reusable connections,
+  authentication, forwarding, SFTP, and file operations without UI dependencies.
+- `crates/tshell-ui/` owns shared controls, semantic palettes, and localization
+  from the root `locales/` catalog.
+- `src/host.rs` owns saved host names and tmux preferences separately from SSH.
 - `src/tmux_client/` implements the tmux control stream and synchronization.
-- `src/workspace/` owns hosts, sessions, settings, Explorer, Git, SFTP, metrics,
+- `src/workspace/` owns hosts, sessions, settings, Explorer, Git, metrics,
   editor state, and update UI.
 - `src/terminal_theme/` owns built-in and custom terminal palettes.
 
@@ -241,7 +245,7 @@ naming rules, and contribution constraints.
 Run the normal suite with:
 
 ```powershell
-cargo test --locked
+cargo test --workspace --locked
 ```
 
 Focused checks include:
@@ -256,7 +260,7 @@ Optional real-host coverage uses an existing passwordless SSH alias:
 
 ```powershell
 $env:TSHELL_SSH_TEST_HOST = 'your-ssh-alias'
-cargo test --locked -- --include-ignored
+cargo test --workspace --locked -- --include-ignored
 ```
 
 Compatibility fixtures can be regenerated with Node 24+ and network access via

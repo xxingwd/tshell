@@ -9306,7 +9306,6 @@ dependencies = [
  "regex",
  "reqwest",
  "russh",
- "russh-sftp",
  "rust-i18n",
  "semver",
  "serde",
@@ -9314,15 +9313,46 @@ dependencies = [
  "sha2 0.11.0",
  "shell-words",
  "similar",
- "sys-locale",
  "tauri-winrt-notification",
  "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "tshell-host",
+ "tshell-ui",
  "url",
  "winreg 0.55.0",
  "wry",
+]
+
+[[package]]
+name = "tshell-host"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "dirs 6.0.0",
+ "parking_lot",
+ "russh",
+ "russh-sftp",
+ "serde",
+ "serde_json",
+ "shell-words",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "tshell-ui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "gpui-kit",
+ "rust-i18n",
+ "serde",
+ "sys-locale",
+ "tshell-host",
 ]
 
 [[package]]

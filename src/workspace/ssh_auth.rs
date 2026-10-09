@@ -26,7 +26,12 @@ impl AuthDialog {
 impl Render for AuthDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let title = match &self.kind {
-            PromptKind::Secret { label, .. } => label.clone(),
+            PromptKind::Secret { label, .. } => match label {
+                crate::ssh_pool::interactive::PromptLabel::Diagnostic(label) => {
+                    crate::i18n::format_diagnostic(label)
+                }
+                crate::ssh_pool::interactive::PromptLabel::Remote(label) => label.clone(),
+            },
             PromptKind::HostKey { .. } => crate::t!("ssh.host_key_confirm").into_owned(),
         };
         div()

@@ -1,6 +1,6 @@
 //! Native TCP forwarding reuses the authentication and host-key verification boundary.
 use super::*;
-use crate::ssh_forward::{ForwardKind, LocalForward, Statistics};
+use crate::forwarding::{ForwardKind, LocalForward, Statistics};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(test)]
 #[path = "forwarding_tests.rs"]
@@ -88,8 +88,8 @@ async fn relay(
     Ok(())
 }
 
-pub(crate) async fn serve(
-    host: &HostConfig,
+pub async fn serve(
+    host: &SshConfig,
     rule: &LocalForward,
     stats: Statistics,
     updates: async_channel::Sender<()>,
@@ -152,7 +152,7 @@ where
             return result.map(|_| ());
         }
     };
-    stats.set_phase(crate::ssh_forward::Phase::Running);
+    stats.set_phase(crate::forwarding::Phase::Running);
     let _ = updates.try_send(());
     let mut relays = tokio::task::JoinSet::new();
     let mut interval = tokio::time::interval(Duration::from_millis(250));
@@ -163,7 +163,7 @@ where
                 biased;
                 _ = cancelled.changed() => return Ok(()),
                 _ = interval.tick() => {
-                    if transport.handle.is_closed() { return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, crate::t!("ssh.forward_transport_closed").to_string()).into()); }
+                    if transport.handle.is_closed() { return Err(crate::diagnostic!("ssh.forward_transport_closed").into()); }
                     let counters = stats.counters();
                     if counters != reported { reported = counters; let _ = updates.try_send(()); }
                 }

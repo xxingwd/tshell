@@ -1,14 +1,12 @@
 use super::*;
+use crate::appearance::PaletteTerminalTheme;
 
 fn sample_jobs() -> Vec<TransferJob> {
-    let remote = remote_files::Session::new(HostConfig {
-        name: "production".into(),
+    let remote = remote_files::Session::new(tshell_host::SshConfig {
         destination: "example.invalid".into(),
         user: "test".into(),
         port: None,
         identity_file: None,
-        tmux: false,
-        socket: None,
     });
     [
         (

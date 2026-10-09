@@ -123,7 +123,7 @@ impl AppView {
                 let destination = host
                     .config
                     .as_ref()
-                    .map(|config| config.destination.clone())
+                    .map(|config| config.ssh.destination.clone())
                     .unwrap_or_else(|| crate::t!("ws.local_keywords").to_string());
                 CommandItem::new()
                     .label(host.name.clone())

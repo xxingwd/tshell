@@ -1,8 +1,9 @@
 //! Bounded adapters for the existing blocking tmux control parser.
 use super::*;
+use crate::diagnostic::ResultExt;
 use std::io::{self, Read, Write};
 
-pub(crate) struct ChannelGuard {
+pub struct ChannelGuard {
     cancel: async_channel::Sender<()>,
 }
 impl ChannelGuard {
@@ -15,7 +16,7 @@ impl Drop for ChannelGuard {
         self.close();
     }
 }
-pub(crate) struct Reader {
+pub struct Reader {
     receiver: async_channel::Receiver<Vec<u8>>,
     pending: io::Cursor<Vec<u8>>,
 }
@@ -33,7 +34,7 @@ impl Read for Reader {
         self.pending.read(buf)
     }
 }
-pub(crate) struct Writer {
+pub struct Writer {
     sender: async_channel::Sender<Vec<u8>>,
 }
 impl Write for Writer {
@@ -52,14 +53,14 @@ impl Write for Writer {
         Ok(())
     }
 }
-pub(crate) struct BlockingChannel {
+pub struct BlockingChannel {
     pub stdin: Writer,
     pub stdout: Reader,
     pub stderr: Reader,
     pub control: ChannelGuard,
 }
 impl BlockingChannel {
-    pub fn exec_pty(host: &HostConfig, command: String, cols: u32, rows: u32) -> Result<Self> {
+    pub fn exec_pty(host: &SshConfig, command: String, cols: u32, rows: u32) -> Result<Self> {
         let host = host.clone();
         let (ready, result) = std::sync::mpsc::sync_channel(1);
         let (cancel, cancelled) = async_channel::bounded(1);
@@ -89,7 +90,9 @@ impl BlockingChannel {
             }
             let _ = channel.close().await;
         });
-        result.recv().context(crate::t!("ssh.worker_stopped"))??;
+        result
+            .recv()
+            .with_diagnostic(crate::diagnostic!("ssh.worker_stopped"))??;
         Ok(Self {
             stdin: Writer { sender: input },
             stdout: Reader {

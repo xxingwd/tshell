@@ -1,3 +1,26 @@
+[workspace]
+members = [".", "crates/tshell-host", "crates/tshell-ui"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+anyhow = "1"
+async-channel = "2"
+dirs = "6"
+gpui-kit = "=0.6.1"
+parking_lot = "0.12"
+russh = { version = "=0.63.3", default-features = false, features = ["ring", "rsa"] }
+russh-sftp = "=3.0.0"
+rust-i18n = { version = "4.2.2", default-features = false, features = ["load-path"] }
+serde = { version = "1", features = ["derive"] }
+shell-words = "=1.1.1"
+sys-locale = "0.3.2"
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util", "time"] }
+
 [package]
 name = "tshell"
 version = "0.1.2"
@@ -15,9 +38,11 @@ path = "src/main.rs"
 ui-check-screenshots = ["gpui-kit/test-support"]
 
 [dependencies]
-async-channel = "2"
+tshell-host = { path = "crates/tshell-host" }
+tshell-ui = { path = "crates/tshell-ui" }
+async-channel.workspace = true
 base64 = "=0.22.1"
-gpui-kit = { version = "=0.6.1", features = [
+gpui-kit = { workspace = true, features = [
     "profiler",
     "tree-sitter-bash",
     "tree-sitter-c",
@@ -38,25 +63,23 @@ gpui-kit = { version = "=0.6.1", features = [
 ] }
 alacritty_terminal = "0.26"
 portable-pty = "0.9"
-anyhow = "1"
-serde = { version = "1", features = ["derive"] }
+anyhow.workspace = true
+serde.workspace = true
 serde_json = "1"
 html5ever = "=0.27.0"
 markup5ever_rcdom = "=0.3.0"
-dirs = "6"
-parking_lot = "0.12"
-russh-sftp = "=3.0.0"
-russh = { version = "=0.63.3", default-features = false, features = ["ring", "rsa"] }
-shell-words = "=1.1.1"
+dirs.workspace = true
+parking_lot.workspace = true
+russh.workspace = true
+shell-words.workspace = true
 regex = "=1.13.1"
 url = "=2.5.8"
 similar = "=2.7.0"
 percent-encoding = "=2.3.2"
-tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util", "time"] }
+tokio.workspace = true
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-rust-i18n = { version = "4.2.2", default-features = false, features = ["load-path"] }
-sys-locale = "0.3.2"
+rust-i18n.workspace = true
 sha2 = "=0.11.0"
 semver = "1"
 hex = "=0.4.3"
@@ -82,7 +105,7 @@ embed-resource = "=3.0.11"
 gpui-pre-windows = { path = "vendor/gpui-pre-windows" }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
 
 [profile.release]
 strip = true

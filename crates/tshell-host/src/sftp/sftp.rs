@@ -1,5 +1,6 @@
-use crate::tmux_client::HostConfig;
-use anyhow::{Context, Result, bail, ensure};
+use crate::SshConfig;
+use crate::diagnostic::ResultExt;
+use anyhow::{Result, bail, ensure};
 use russh_sftp::{
     client::{RawSftpSession, error::Error},
     protocol::{File, FileAttributes, OpenFlags, Packet, StatusCode},
@@ -7,7 +8,7 @@ use russh_sftp::{
 use std::time::Duration;
 use tokio::time::timeout;
 
-pub(super) const MAX_BYTES: usize = super::super::workbench::MAX_FILE_BYTES as usize;
+pub(super) const MAX_BYTES: usize = crate::files::MAX_FILE_BYTES as usize;
 pub(super) const CHUNK: usize = 32 * 1024;
 
 pub(super) struct Client {
@@ -16,19 +17,18 @@ pub(super) struct Client {
     fsync: bool,
 }
 
-pub(super) async fn connect(host: &HostConfig) -> Result<Client> {
-    let mut channel = crate::ssh_pool::open_file(host).await?;
+pub(super) async fn connect(host: &SshConfig) -> Result<Client> {
+    let mut channel = crate::ssh::open_file(host).await?;
     channel.request_subsystem(true, "sftp").await?;
-    crate::ssh_pool::confirmed(&mut channel).await?;
+    crate::ssh::confirmed(&mut channel).await?;
     let session = RawSftpSession::new(channel.into_stream());
     session.set_timeout(10);
     let version = timeout(Duration::from_secs(15), session.init())
         .await
-        .context(crate::t!("sftp.init_timeout"))??;
+        .with_diagnostic(crate::diagnostic!("sftp.init_timeout"))??;
     ensure!(
         version.version == 3,
-        "{}",
-        crate::t!("sftp.version_unsupported", version = version.version)
+        crate::diagnostic!("sftp.version_unsupported", version = version.version)
     );
     Ok(Client {
         posix_rename: version
@@ -48,8 +48,7 @@ fn is_status(error: &Error, code: StatusCode) -> bool {
 }
 
 pub(super) fn permission_denied(error: &anyhow::Error) -> bool {
-    error
-        .downcast_ref::<Error>()
+    crate::diagnostic::find_cause::<Error>(error)
         .is_some_and(|error| is_status(error, StatusCode::PermissionDenied))
 }
 
@@ -73,7 +72,7 @@ impl Client {
             .into_iter()
             .next()
             .map(|file| file.filename)
-            .context(crate::t!("sftp.empty_path"))
+            .with_diagnostic(crate::diagnostic!("sftp.empty_path"))
     }
 
     pub async fn entries(&self, path: &str, limit: usize) -> Result<Vec<File>> {
@@ -83,7 +82,10 @@ impl Client {
             while files.len() < limit {
                 match self.session.readdir(handle.clone()).await {
                     Ok(page) => {
-                        ensure!(!page.files.is_empty(), "{}", crate::t!("sftp.empty_page"));
+                        ensure!(
+                            !page.files.is_empty(),
+                            crate::diagnostic!("sftp.empty_page")
+                        );
                         files.extend(
                             page.files
                                 .into_iter()
@@ -105,20 +107,19 @@ impl Client {
     }
 
     pub async fn read(&self, path: &str) -> Result<String> {
-        String::from_utf8(self.read_bytes(path).await?).context(crate::t!("sftp.not_utf8"))
+        String::from_utf8(self.read_bytes(path).await?)
+            .with_diagnostic(crate::diagnostic!("sftp.not_utf8"))
     }
 
     pub async fn read_bytes(&self, path: &str) -> Result<Vec<u8>> {
         let attrs = self.session.stat(path).await?.attrs;
         ensure!(
             attrs.file_type().is_file(),
-            "{}",
-            crate::t!("sftp.not_regular")
+            crate::diagnostic!("sftp.not_regular")
         );
         ensure!(
             attrs.size.unwrap_or(0) <= MAX_BYTES as u64,
-            "{}",
-            crate::t!("sftp.too_large")
+            crate::diagnostic!("sftp.too_large")
         );
         let handle = self
             .session
@@ -134,9 +135,12 @@ impl Client {
                     .await
                 {
                     Ok(data) => {
-                        ensure!(!data.data.is_empty(), "{}", crate::t!("sftp.empty_data"));
+                        ensure!(!data.data.is_empty(), crate::diagnostic!("sftp.empty_data"));
                         bytes.extend(data.data);
-                        ensure!(bytes.len() <= MAX_BYTES, "{}", crate::t!("sftp.too_large"));
+                        ensure!(
+                            bytes.len() <= MAX_BYTES,
+                            crate::diagnostic!("sftp.too_large")
+                        );
                     }
                     Err(error) if is_status(&error, StatusCode::Eof) => break,
                     Err(error) => return Err(error.into()),
@@ -152,18 +156,22 @@ impl Client {
     }
 
     pub async fn write(&self, path: &str, text: &str, expected: &str) -> Result<()> {
-        ensure!(text.len() <= MAX_BYTES, "{}", crate::t!("sftp.too_large"));
-        ensure!(self.posix_rename, "{}", crate::t!("sftp.no_atomic_rename"));
+        ensure!(
+            text.len() <= MAX_BYTES,
+            crate::diagnostic!("sftp.too_large")
+        );
+        ensure!(
+            self.posix_rename,
+            crate::diagnostic!("sftp.no_atomic_rename")
+        );
         let original = self.session.lstat(path).await?.attrs;
         ensure!(
             original.file_type().is_file(),
-            "{}",
-            crate::t!("sftp.regular_only")
+            crate::diagnostic!("sftp.regular_only")
         );
         ensure!(
             self.read(path).await? == expected,
-            "{}",
-            crate::t!("sftp.remote_modified")
+            crate::diagnostic!("sftp.remote_modified")
         );
         let parent = path
             .rsplit_once('/')
@@ -218,8 +226,7 @@ impl Client {
             closed?;
             ensure!(
                 self.read(path).await? == expected,
-                "{}",
-                crate::t!("sftp.save_cancelled")
+                crate::diagnostic!("sftp.save_cancelled")
             );
             let mut data = Vec::new();
             for path in [temporary.as_str(), path] {
@@ -233,7 +240,7 @@ impl Client {
             {
                 Packet::Status(status) if status.status_code == StatusCode::Ok => Ok(()),
                 Packet::Status(status) => Err(Error::Status(status).into()),
-                _ => bail!("{}", crate::t!("sftp.rename_invalid")),
+                _ => bail!(crate::diagnostic!("sftp.rename_invalid")),
             }
         }
         .await;
@@ -257,7 +264,7 @@ impl Client {
             {
                 Packet::Status(status) if status.status_code == StatusCode::Ok => return Ok(()),
                 Packet::Status(status) => return Err(Error::Status(status).into()),
-                _ => bail!("{}", crate::t!("sftp.rename_invalid")),
+                _ => bail!(crate::diagnostic!("sftp.rename_invalid")),
             }
         }
         match self.session.remove(target).await {

@@ -44,20 +44,7 @@ fn local_command(cwd: &PathBuf) -> CommandBuilder {
     command
 }
 
-pub fn validate_destination(value: &str) -> Result<String> {
-    let value = value.trim();
-    anyhow::ensure!(
-        !value.is_empty(),
-        "{}",
-        crate::t!("term.destination_required")
-    );
-    anyhow::ensure!(
-        !value.starts_with('-') && !value.chars().any(|c| c.is_whitespace() || c.is_control()),
-        "{}",
-        crate::t!("term.destination_whitespace")
-    );
-    Ok(value.to_owned())
-}
+pub use tshell_host::config::validate_destination;
 
 enum Command {
     Input(Vec<u8>),

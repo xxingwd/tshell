@@ -1,11 +1,11 @@
 //! SSH forwarding lifecycle, payload counters, and persisted rules.
 
-use crate::tmux_client::HostConfig;
+use crate::SshConfig;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub(crate) enum ForwardKind {
+pub enum ForwardKind {
     #[default]
     Local,
     Remote,
@@ -13,7 +13,7 @@ pub(crate) enum ForwardKind {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub(crate) struct LocalForward {
+pub struct LocalForward {
     #[serde(default)]
     pub kind: ForwardKind,
     pub bind_host: String,
@@ -23,33 +23,29 @@ pub(crate) struct LocalForward {
 }
 
 impl LocalForward {
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         ensure!(
             valid_host(&self.bind_host),
-            "{}",
-            crate::t!("ssh.forward_invalid_bind")
+            crate::diagnostic!("ssh.forward_invalid_bind")
         );
         ensure!(
             self.local_port > 0,
-            "{}",
-            crate::t!("ssh.forward_invalid_port")
+            crate::diagnostic!("ssh.forward_invalid_port")
         );
         if self.kind != ForwardKind::Dynamic {
             ensure!(
                 valid_host(&self.target_host),
-                "{}",
-                crate::t!("ssh.forward_invalid_target")
+                crate::diagnostic!("ssh.forward_invalid_target")
             );
             ensure!(
                 self.target_port > 0,
-                "{}",
-                crate::t!("ssh.forward_invalid_port")
+                crate::diagnostic!("ssh.forward_invalid_port")
             );
         }
         Ok(())
     }
 
-    pub(crate) fn label(&self) -> String {
+    pub fn label(&self) -> String {
         match self.kind {
             ForwardKind::Dynamic => format!("{}:{}", self.bind_host, self.local_port),
             ForwardKind::Local | ForwardKind::Remote => format!(
@@ -61,35 +57,35 @@ impl LocalForward {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Phase {
+pub enum Phase {
     Connecting,
     Running,
-    Failed(String),
+    Failed(crate::Failure),
     Stopped,
 }
 
 #[derive(Clone)]
-pub(crate) struct Statistics {
+pub struct Statistics {
     phase: std::sync::Arc<parking_lot::Mutex<Phase>>,
-    pub(crate) sent: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    pub(crate) received: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    pub sent: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    pub received: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Statistics {
-    pub(crate) fn phase(&self) -> Phase {
+    pub fn phase(&self) -> Phase {
         self.phase.lock().clone()
     }
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             phase: std::sync::Arc::new(parking_lot::Mutex::new(Phase::Connecting)),
             sent: Default::default(),
             received: Default::default(),
         }
     }
-    pub(crate) fn set_phase(&self, phase: Phase) {
+    pub fn set_phase(&self, phase: Phase) {
         *self.phase.lock() = phase;
     }
-    pub(crate) fn counters(&self) -> (u64, u64) {
+    pub fn counters(&self) -> (u64, u64) {
         use std::sync::atomic::Ordering;
         (
             self.sent.load(Ordering::Relaxed),
@@ -98,26 +94,26 @@ impl Statistics {
     }
 }
 
-pub(crate) struct Tunnel {
+pub struct Tunnel {
     cancel: tokio::sync::watch::Sender<bool>,
     stats: Statistics,
 }
 
 impl Tunnel {
-    pub(crate) fn start(
-        host: &HostConfig,
+    pub fn start(
+        host: &SshConfig,
         forward: &LocalForward,
         updates: async_channel::Sender<()>,
     ) -> Result<Self> {
         forward.validate()?;
-        crate::terminal::validate_destination(&host.destination)?;
+        crate::config::validate_destination(&host.destination)?;
         let (cancel, cancelled) = tokio::sync::watch::channel(false);
         let stats = Statistics::new();
         let worker_stats = stats.clone();
         let host = host.clone();
         let forward = forward.clone();
-        crate::ssh_pool::runtime().spawn(async move {
-            let result = crate::ssh_pool::forwarding::serve(
+        crate::ssh::runtime().spawn(async move {
+            let result = crate::ssh::forwarding::serve(
                 &host,
                 &forward,
                 worker_stats.clone(),
@@ -130,7 +126,7 @@ impl Tunnel {
             } else {
                 match result {
                     Ok(()) => Phase::Stopped,
-                    Err(error) => Phase::Failed(format!("{error:#}")),
+                    Err(error) => Phase::Failed(crate::Failure::from(&error)),
                 }
             };
             worker_stats.set_phase(phase);
@@ -139,16 +135,16 @@ impl Tunnel {
         Ok(Self { cancel, stats })
     }
 
-    pub(crate) fn phase(&self) -> Phase {
+    pub fn phase(&self) -> Phase {
         self.stats.phase()
     }
-    pub(crate) fn counters(&self) -> (u64, u64) {
+    pub fn counters(&self) -> (u64, u64) {
         self.stats.counters()
     }
-    pub(crate) fn is_active(&self) -> bool {
+    pub fn is_active(&self) -> bool {
         matches!(self.phase(), Phase::Connecting | Phase::Running)
     }
-    pub(crate) fn stop(&mut self) {
+    pub fn stop(&mut self) {
         let _ = self.cancel.send(true);
     }
 }

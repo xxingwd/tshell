@@ -6,7 +6,7 @@ use std::{fs, path::Path, sync::OnceLock};
 pub fn prepare() -> Result<()> {
     static READY: OnceLock<Result<Library, String>> = OnceLock::new();
     READY
-        .get_or_init(|| install().map_err(|error| format!("{error:#}")))
+        .get_or_init(|| install().map_err(|error| crate::i18n::format_error(&error)))
         .as_ref()
         .map_err(|error| anyhow::anyhow!(error.clone()))
         .map(|_| ())

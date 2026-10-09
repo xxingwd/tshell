@@ -2,6 +2,7 @@ use super::{
     Operation,
     sftp::{CHUNK, Client},
 };
+use crate::diagnostic::ResultExt;
 use anyhow::{Context, Result, ensure};
 use parking_lot::Mutex;
 use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
@@ -15,7 +16,7 @@ use std::{
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct TransferProgress {
+pub struct TransferProgress {
     pub scanning: bool,
     pub transferred: u64,
     pub total: Option<u64>,
@@ -23,7 +24,7 @@ pub(crate) struct TransferProgress {
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct TransferControl {
+pub struct TransferControl {
     cancelled: Arc<AtomicBool>,
     progress: Arc<Mutex<TransferProgress>>,
 }
@@ -46,7 +47,10 @@ impl TransferControl {
     }
 
     fn check(&self) -> Result<()> {
-        ensure!(!self.is_cancelled(), "{}", crate::t!("transfer.cancelled"));
+        ensure!(
+            !self.is_cancelled(),
+            crate::diagnostic!("transfer.cancelled")
+        );
         Ok(())
     }
 
@@ -91,26 +95,23 @@ fn scan_download<'a>(
 ) -> Operation<'a, Option<u64>> {
     Box::pin(async move {
         control.check()?;
-        ensure!(depth < 64, "{}", crate::t!("file.too_deep"));
+        ensure!(depth < 64, crate::diagnostic!("file.too_deep"));
         let attrs = client.session.lstat(source).await?.attrs;
         if attrs.file_type().is_file() {
             return Ok(attrs.size);
         }
         ensure!(
             attrs.file_type().is_dir(),
-            "{}",
-            crate::t!("file.symlink_or_special")
+            crate::diagnostic!("file.symlink_or_special")
         );
         let entries = client.entries(source, 10001).await?;
         ensure!(
             entries.len() <= 10000,
-            "{}",
-            crate::t!("file.dir_too_large")
+            crate::diagnostic!("file.dir_too_large")
         );
         let mut total = Some(0_u64);
         for entry in entries {
-            let child =
-                crate::workspace::file_ops::child(Path::new(source), &entry.filename, true)?;
+            let child = crate::files::child(Path::new(source), &entry.filename, true)?;
             let child = child.to_string_lossy();
             let size = scan_download(client, &child, control, depth + 1).await?;
             total = total.zip(size).map(|(sum, size)| sum.saturating_add(size));
@@ -128,28 +129,25 @@ fn download_entry<'a>(
 ) -> Operation<'a, ()> {
     Box::pin(async move {
         control.check()?;
-        ensure!(depth < 64, "{}", crate::t!("file.too_deep"));
+        ensure!(depth < 64, crate::diagnostic!("file.too_deep"));
         let attrs = client.session.lstat(source).await?.attrs;
         if attrs.file_type().is_file() {
             return download_file(client, source, destination, control).await;
         }
         ensure!(
             attrs.file_type().is_dir(),
-            "{}",
-            crate::t!("file.symlink_or_special")
+            crate::diagnostic!("file.symlink_or_special")
         );
         let entries = client.entries(source, 10001).await?;
         ensure!(
             entries.len() <= 10000,
-            "{}",
-            crate::t!("file.dir_too_large")
+            crate::diagnostic!("file.dir_too_large")
         );
         let existed = match std::fs::metadata(destination) {
             Ok(metadata) => {
                 ensure!(
                     metadata.is_dir(),
-                    "{}",
-                    crate::t!("file.replace_directory_with_file")
+                    crate::diagnostic!("file.replace_directory_with_file")
                 );
                 true
             }
@@ -162,7 +160,7 @@ fn download_entry<'a>(
         };
         let result = async {
             for entry in entries {
-                let child = crate::workspace::file_ops::child(destination, &entry.filename, false)?;
+                let child = crate::files::child(destination, &entry.filename, false)?;
                 let remote = format!("{}/{}", source.trim_end_matches('/'), entry.filename);
                 download_entry(client, &remote, &child, control, depth + 1).await?;
             }
@@ -244,7 +242,7 @@ async fn download_file(
 fn temporary_path(destination: &Path) -> Result<PathBuf> {
     let parent = destination
         .parent()
-        .context(crate::t!("file.destination_parent_missing"))?;
+        .with_diagnostic(crate::diagnostic!("file.destination_parent_missing"))?;
     let name = destination
         .file_name()
         .context("Destination has no file name")?
@@ -258,7 +256,7 @@ fn temporary_path(destination: &Path) -> Result<PathBuf> {
             return Ok(temporary);
         }
     }
-    anyhow::bail!("{}", crate::t!("file.temporary_transfer_failed"))
+    anyhow::bail!(crate::diagnostic!("file.temporary_transfer_failed"))
 }
 
 fn replace_local_file(temporary: &Path, destination: &Path) -> Result<()> {
@@ -268,8 +266,7 @@ fn replace_local_file(temporary: &Path, destination: &Path) -> Result<()> {
     }
     ensure!(
         destination.is_file(),
-        "{}",
-        crate::t!("file.replace_directory_with_file")
+        crate::diagnostic!("file.replace_directory_with_file")
     );
     let backup = temporary.with_extension("old");
     std::fs::rename(destination, &backup)?;
@@ -329,17 +326,16 @@ pub(super) async fn upload(
 
 fn scan_upload(source: &Path, control: &TransferControl, depth: usize) -> Result<u64> {
     control.check()?;
-    ensure!(depth < 64, "{}", crate::t!("file.too_deep"));
+    ensure!(depth < 64, crate::diagnostic!("file.too_deep"));
     let metadata = std::fs::symlink_metadata(source)?;
     ensure!(
         !metadata.file_type().is_symlink(),
-        "{}",
-        crate::t!("file.symlink_unsupported")
+        crate::diagnostic!("file.symlink_unsupported")
     );
     if metadata.is_file() {
         return Ok(metadata.len());
     }
-    ensure!(metadata.is_dir(), "{}", crate::t!("file.only_regular"));
+    ensure!(metadata.is_dir(), crate::diagnostic!("file.only_regular"));
     let mut total = 0_u64;
     for entry in std::fs::read_dir(source)? {
         total = total.saturating_add(scan_upload(&entry?.path(), control, depth + 1)?);
@@ -367,8 +363,7 @@ fn upload_entry<'a>(
                 Ok(attrs) => {
                     ensure!(
                         attrs.attrs.file_type().is_dir(),
-                        "{}",
-                        crate::t!("file.replace_file_with_directory")
+                        crate::diagnostic!("file.replace_file_with_directory")
                     );
                     true
                 }

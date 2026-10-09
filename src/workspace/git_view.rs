@@ -400,7 +400,7 @@ impl AppView {
                 .spawn(async move {
                     git::patch(&change, host.as_ref())
                         .map(DiffContent::new)
-                        .map_err(|error| format!("{error:#}"))
+                        .map_err(|error| crate::i18n::format_error(&error))
                 })
                 .await;
             let _ = view.update(cx, |this, cx| {
