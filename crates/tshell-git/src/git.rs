@@ -1,20 +1,20 @@
 //! Git output is shared by local and SSH workspaces. Paths stay NUL-delimited.
-use super::{HostDefinition, workbench};
+use tshell_host::SshConfig;
+const MAX_FILE_BYTES: u64 = tshell_host::files::MAX_FILE_BYTES;
 use anyhow::{Context, Result};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct Stats {
+pub struct Stats {
     pub added: usize,
     pub removed: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct GitChange {
+pub struct GitChange {
     pub status: String,
     pub path: PathBuf,
     pub original: Option<PathBuf>,
@@ -40,62 +40,33 @@ impl GitChange {
     }
 }
 
-fn remote_command(root: &Path, args: &[&str]) -> String {
-    let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
-    let words = args
-        .iter()
-        .map(|arg| quote(arg))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let command = format!(
-        "GIT_OPTIONAL_LOCKS=0 git --literal-pathspecs -C {} {words} </dev/null",
-        quote(&root.to_string_lossy())
+fn run(root: &Path, host: Option<&SshConfig>, args: &[&str]) -> Result<Vec<u8>> {
+    let mut request = tshell_host::CommandRequest::new(
+        "git",
+        ["--literal-pathspecs", "-C"]
+            .into_iter()
+            .chain(std::iter::once(
+                root.to_str().context(crate::t!("git.run_failed"))?,
+            ))
+            .chain(args.iter().copied()),
     );
+    request.output_limit = MAX_FILE_BYTES as usize;
+    request
+        .environment
+        .insert("GIT_OPTIONAL_LOCKS".into(), "0".into());
     if args.contains(&"--no-index") {
-        format!("( {command}; code=$?; [ \"$code\" -le 1 ] )")
-    } else {
-        command
+        request.allowed_status = vec![0, 1];
     }
+    tshell_host::Host::from_ssh(host).run(request)
 }
 
-fn run(root: &Path, host: Option<&HostDefinition>, args: &[&str]) -> Result<Vec<u8>> {
-    if let Some(host) = host {
-        return crate::ssh_pool::output(
-            &host.ssh,
-            remote_command(root, args),
-            workbench::MAX_FILE_BYTES as usize,
-        );
-    }
-    let output = Command::new("git")
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .arg("--literal-pathspecs")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .context(crate::t!("git.run_failed"))?;
-    anyhow::ensure!(
-        output.status.success()
-            || (args.contains(&"--no-index") && output.status.code() == Some(1)),
-        "{}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    );
-    anyhow::ensure!(
-        output.stdout.len() <= workbench::MAX_FILE_BYTES as usize,
-        "{}",
-        crate::t!("git.output_too_large")
-    );
-    Ok(output.stdout)
-}
-
-fn base(root: &Path, host: Option<&HostDefinition>) -> Result<String> {
+fn base(root: &Path, host: Option<&SshConfig>) -> Result<String> {
     let bytes = run(root, host, &["rev-parse", "--verify", "HEAD"])
         .or_else(|_| run(root, host, &["hash-object", "-t", "tree", "--stdin"]))?;
     Ok(String::from_utf8(bytes)?.trim().to_owned())
 }
 
-pub(super) fn changes(root: &Path, host: Option<&HostDefinition>) -> Result<Vec<GitChange>> {
+pub fn changes(root: &Path, host: Option<&SshConfig>) -> Result<Vec<GitChange>> {
     let directory = run(root, host, &["rev-parse", "--show-toplevel"])?;
     let root = PathBuf::from(String::from_utf8(directory)?.trim_end_matches(['\r', '\n']));
     let status = run(
@@ -103,7 +74,7 @@ pub(super) fn changes(root: &Path, host: Option<&HostDefinition>) -> Result<Vec<
         host,
         &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
     )?;
-    let mut changes = workbench::parse_git_status(&status);
+    let mut changes = parse_git_status(&status);
     for change in &mut changes {
         change.root = root.clone();
         change.path = change_path(&root, &change.path, host.is_some());
@@ -114,22 +85,13 @@ pub(super) fn changes(root: &Path, host: Option<&HostDefinition>) -> Result<Vec<
 
 // SFTP consumes the path verbatim, so remote paths must not use Windows joins.
 fn change_path(root: &Path, relative: &Path, remote: bool) -> PathBuf {
-    if remote {
-        PathBuf::from(format!(
-            "{}/{}",
-            root.to_string_lossy().trim_end_matches('/'),
-            relative.to_string_lossy()
-        ))
-    } else {
-        root.join(relative)
-    }
+    tshell_host::HostPath::for_host(root, remote)
+        .join(&relative.to_string_lossy())
+        .as_path_buf()
 }
 
 /// Only counts are returned here; patch text is reserved for `patch` on click.
-pub(super) fn tracked_counts(
-    changes: &mut [GitChange],
-    host: Option<&HostDefinition>,
-) -> Result<()> {
+pub fn tracked_counts(changes: &mut [GitChange], host: Option<&SshConfig>) -> Result<()> {
     let Some(first) = changes.first() else {
         return Ok(());
     };
@@ -149,28 +111,31 @@ pub(super) fn tracked_counts(
         ],
     )?);
     for change in changes.iter_mut().filter(|change| change.status != "??") {
-        let relative = change.path.strip_prefix(&root).unwrap_or(&change.path);
-        change.stats = stats.get(relative).copied().unwrap_or(Some(Stats {
-            added: 0,
-            removed: 0,
-        }));
+        let relative = relative_path(&change.path, &root, host.is_some());
+        change.stats = stats
+            .get(Path::new(&relative))
+            .copied()
+            .unwrap_or(Some(Stats {
+                added: 0,
+                removed: 0,
+            }));
     }
     Ok(())
 }
 
 /// One SSH round trip for a batch, instead of one round trip per file.
-pub(super) fn untracked_counts(
-    changes: &mut [GitChange],
-    host: Option<&HostDefinition>,
-) -> Result<()> {
+pub fn untracked_counts(changes: &mut [GitChange], host: Option<&SshConfig>) -> Result<()> {
     if let Some(host) = host {
         let commands = changes
             .iter()
             .map(|change| {
-                let path = change.path.to_string_lossy().replace('\\', "/");
-                remote_command(
-                    &change.root,
-                    &[
+                let path = change.path.to_string_lossy();
+                let mut request = tshell_host::CommandRequest::new(
+                    "git",
+                    [
+                        "--literal-pathspecs",
+                        "-C",
+                        &change.root.to_string_lossy(),
                         "diff",
                         "--no-ext-diff",
                         "--no-textconv",
@@ -181,17 +146,23 @@ pub(super) fn untracked_counts(
                         "/dev/null",
                         &path,
                     ],
-                )
+                );
+                request
+                    .environment
+                    .insert("GIT_OPTIONAL_LOCKS".into(), "0".into());
+                request
+                    .remote_command()
+                    .map(|command| format!("({command}; status=$?; test $status -le 1)"))
             })
-            .collect::<Vec<_>>()
+            .collect::<Result<Vec<_>>>()?
             .join(" && ");
         if commands.is_empty() {
             return Ok(());
         }
-        let stats = parse_stats(&crate::ssh_pool::output(
-            &host.ssh,
+        let stats = parse_stats(&tshell_host::ssh::output(
+            host,
             commands,
-            workbench::MAX_FILE_BYTES as usize,
+            MAX_FILE_BYTES as usize,
         )?);
         for change in changes {
             change.stats = stats.get(&change.path).copied().unwrap_or(Some(Stats {
@@ -213,13 +184,14 @@ pub(super) fn untracked_counts(
     Ok(())
 }
 
-fn file_diff(change: &GitChange, host: Option<&HostDefinition>, format: &str) -> Result<Vec<u8>> {
-    let path = change
-        .path
-        .strip_prefix(&change.root)
-        .unwrap_or(&change.path)
-        .to_string_lossy()
-        .replace('\\', "/");
+pub(crate) fn relative_path(path: &Path, root: &Path, remote: bool) -> String {
+    tshell_host::HostPath::for_host(path, remote)
+        .relative_to(&tshell_host::HostPath::for_host(root, remote))
+        .unwrap_or_else(|| path.to_string_lossy().into_owned())
+}
+
+fn file_diff(change: &GitChange, host: Option<&SshConfig>, format: &str) -> Result<Vec<u8>> {
+    let path = relative_path(&change.path, &change.root, host.is_some());
     let common = [
         "diff",
         "--no-ext-diff",
@@ -248,17 +220,20 @@ fn file_diff(change: &GitChange, host: Option<&HostDefinition>, format: &str) ->
         revision = base(&change.root, host)?;
         args.extend([&revision, "--", &path]);
     }
-    let original = change
-        .original
-        .as_ref()
-        .map(|path| path.to_string_lossy().replace('\\', "/"));
+    let original = change.original.as_ref().map(|path| {
+        if host.is_some() {
+            path.to_string_lossy().into_owned()
+        } else {
+            path.to_string_lossy().replace('\\', "/")
+        }
+    });
     if let Some(original) = &original {
         args.push(original);
     }
     run(&change.root, host, &args)
 }
 
-pub(super) fn patch(change: &GitChange, host: Option<&HostDefinition>) -> Result<Vec<DiffLine>> {
+pub fn patch(change: &GitChange, host: Option<&SshConfig>) -> Result<Vec<DiffLine>> {
     Ok(parse_patch(&String::from_utf8_lossy(&file_diff(
         change, host, "--patch",
     )?)))
@@ -296,21 +271,21 @@ fn parse_stats(bytes: &[u8]) -> BTreeMap<PathBuf, Option<Stats>> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum LineKind {
+pub enum LineKind {
     Context,
     Added,
     Removed,
     Header,
 }
 #[derive(Clone)]
-pub(super) struct DiffLine {
+pub struct DiffLine {
     pub old: Option<usize>,
     pub new: Option<usize>,
     pub kind: LineKind,
     pub text: String,
 }
 
-pub(super) fn parse_patch(patch: &str) -> Vec<DiffLine> {
+pub fn parse_patch(patch: &str) -> Vec<DiffLine> {
     let (mut old, mut new, mut in_hunk) = (0, 0, false);
     patch
         .lines()
@@ -365,8 +340,19 @@ pub(super) fn parse_patch(patch: &str) -> Vec<DiffLine> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn git_porcelain_status_handles_spaces_and_rename_source() {
+        let changes = parse_git_status(
+            b" M src/workspace.rs\0?? new file.txt\0R  new name.rs\0old name.rs\0",
+        );
+        assert_eq!(changes.len(), 3);
+        assert_eq!(changes[0].status, " M");
+        assert_eq!(changes[1].path, PathBuf::from("new file.txt"));
+        assert_eq!(changes[2].status, "R ");
+        assert_eq!(changes[2].path, PathBuf::from("new name.rs"));
+    }
     use super::*;
-    fn with_counts(root: &Path, host: Option<&HostDefinition>) -> Result<Vec<GitChange>> {
+    fn with_counts(root: &Path, host: Option<&SshConfig>) -> Result<Vec<GitChange>> {
         let mut changes = changes(root, host)?;
         assert!(changes.iter().all(|change| change.stats.is_none()));
         tracked_counts(&mut changes, host)?;
@@ -549,4 +535,41 @@ mod tests {
         assert_eq!((rows[5].old, rows[5].new), (Some(4), Some(8)));
         assert_eq!(rows[8].new, Some(25));
     }
+}
+
+pub fn parse_git_status(bytes: &[u8]) -> Vec<GitChange> {
+    let fields = bytes.split(|byte| *byte == 0).collect::<Vec<_>>();
+    let mut changes = Vec::new();
+    let mut index = 0;
+    while index < fields.len() {
+        let field = fields[index];
+        if field.is_empty() {
+            break;
+        }
+        if field.len() < 4 {
+            index += 1;
+            continue;
+        }
+        let status = String::from_utf8_lossy(&field[..2]).into_owned();
+        let path = PathBuf::from(String::from_utf8_lossy(&field[3..]).into_owned());
+        let original = if matches!(field[0], b'R' | b'C') || matches!(field[1], b'R' | b'C') {
+            fields
+                .get(index + 1)
+                .map(|value| PathBuf::from(String::from_utf8_lossy(value).into_owned()))
+        } else {
+            None
+        };
+        changes.push(GitChange {
+            status,
+            path,
+            original,
+            root: PathBuf::new(),
+            stats: None,
+        });
+        if matches!(field[0], b'R' | b'C') || matches!(field[1], b'R' | b'C') {
+            index += 1;
+        }
+        index += 1;
+    }
+    changes
 }

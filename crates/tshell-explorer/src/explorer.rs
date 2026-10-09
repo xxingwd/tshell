@@ -3,8 +3,8 @@ use file_ops::Operation;
 use gpui_kit::component::menu::PopupMenu;
 
 #[derive(Clone)]
-pub(super) struct FileClipboard {
-    host: Option<HostDefinition>,
+pub struct FileClipboard {
+    host: Option<SshConfig>,
     path: PathBuf,
     cut: bool,
 }
@@ -29,8 +29,8 @@ enum Command {
     Reveal,
 }
 
-impl AppView {
-    pub(super) fn explorer_menu(
+impl Explorer {
+    pub fn explorer_menu(
         &self,
         mut menu: PopupMenu,
         path: PathBuf,
@@ -42,7 +42,7 @@ impl AppView {
         if !directory {
             items.push((crate::t!("explorer.open").to_string(), Command::Open));
         }
-        if !root && self.hosts[self.active].config.is_some() {
+        if !root && self.host.is_some() {
             items.push((
                 crate::t!("explorer.download").to_string(),
                 Command::Download,
@@ -56,7 +56,7 @@ impl AppView {
                     Command::NewFolder,
                 ),
             ]);
-            if self.hosts[self.active].config.is_some() {
+            if self.host.is_some() {
                 items.extend([
                     (
                         crate::t!("explorer.upload_files").to_string(),
@@ -79,8 +79,9 @@ impl AppView {
         if directory
             && self
                 .file_clipboard
+                .borrow()
                 .as_ref()
-                .is_some_and(|clip| clip.host == self.hosts[self.active].config)
+                .is_some_and(|clip| clip.host == self.host)
         {
             items.push((crate::t!("explorer.paste").to_string(), Command::Paste));
         }
@@ -95,7 +96,7 @@ impl AppView {
                 Command::Terminal,
             ),
         ]);
-        if self.hosts[self.active].config.is_none() {
+        if self.host.is_none() {
             items.push((crate::t!("explorer.reveal").to_string(), Command::Reveal));
         }
         items.extend([
@@ -108,18 +109,15 @@ impl AppView {
         if !root {
             items.push((crate::t!("explorer.delete").to_string(), Command::Delete));
         }
-        let key = self.active_file_session.clone();
-        let host = self.active;
+
         for (label, command) in items {
             if matches!(command, Command::Path | Command::Refresh | Command::Delete) {
                 menu = menu.separator();
             }
-            let (owner, path, key) = (owner.clone(), path.clone(), key.clone());
+            let (owner, path) = (owner.clone(), path.clone());
             menu = menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
                 let _ = owner.update(cx, |app, cx| {
-                    if app.active == host && app.active_file_session == key {
-                        app.explorer_command(command, path.clone(), directory, window, cx);
-                    }
+                    app.explorer_command(command, path.clone(), directory, window, cx);
                 });
             }));
         }
@@ -137,7 +135,10 @@ impl AppView {
         let parent = if directory {
             path.clone()
         } else {
-            path.parent().unwrap_or(&self.cwd).to_owned()
+            tshell_host::HostPath::for_host(&path, self.host.is_some())
+                .parent()
+                .map(|path| path.as_path_buf())
+                .unwrap_or_else(|| self.cwd.clone())
         };
         match command {
             Command::Open => self.open_path(path, window, cx),
@@ -152,33 +153,36 @@ impl AppView {
                 self.explorer_name(command, path, window, cx)
             }
             Command::Copy | Command::Cut => {
-                self.file_clipboard = Some(FileClipboard {
-                    host: self.hosts[self.active].config.clone(),
+                *self.file_clipboard.borrow_mut() = Some(FileClipboard {
+                    host: self.host.clone(),
                     path,
                     cut: matches!(command, Command::Cut),
                 });
             }
             Command::Path | Command::Relative => {
+                let path = tshell_host::HostPath::for_host(&path, self.host.is_some());
                 let text = if matches!(command, Command::Relative) {
-                    path.strip_prefix(&self.cwd).unwrap_or(&path)
+                    path.relative_to(&tshell_host::HostPath::for_host(
+                        &self.cwd,
+                        self.host.is_some(),
+                    ))
+                    .unwrap_or_else(|| path.as_path_buf().to_string_lossy().into_owned())
                 } else {
-                    &path
+                    path.as_path_buf().to_string_lossy().into_owned()
                 };
-                let text = if text.as_os_str().is_empty() {
-                    ".".into()
-                } else {
-                    text.to_string_lossy().into_owned()
-                };
+                let text = if text.is_empty() { ".".into() } else { text };
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
             }
             Command::Paste => {
-                let Some(clip) = self.file_clipboard.clone() else {
+                let Some(clip) = self.file_clipboard.borrow().clone() else {
                     return;
                 };
-                let Some(name) = clip.path.file_name().and_then(|name| name.to_str()) else {
+                let source = tshell_host::HostPath::for_host(&clip.path, self.host.is_some());
+                let name = source.name();
+                if name.is_empty() {
                     return;
-                };
-                let to = match file_ops::child(&parent, name, clip.host.is_some()) {
+                }
+                let to = match file_ops::child(&parent, &name, clip.host.is_some()) {
                     Ok(path) => path,
                     Err(_) => return,
                 };
@@ -196,8 +200,6 @@ impl AppView {
                 self.explorer_run(operation, window, cx);
             }
             Command::Delete => {
-                let key = self.active_file_session.clone();
-                let host = self.active;
                 let title = crate::t!("explorer.delete_title").to_string();
                 let detail = crate::t!(
                     "explorer.delete_message",
@@ -221,9 +223,7 @@ impl AppView {
                 cx.spawn_in(window, async move |view, cx| {
                     if answer.await == Ok(1) {
                         let _ = view.update_in(cx, |app, window, cx| {
-                            if app.active == host && app.active_file_session == key {
-                                app.explorer_run(Operation::Delete(path), window, cx);
-                            }
+                            app.explorer_run(Operation::Delete(path), window, cx);
                         });
                     }
                 })
@@ -238,16 +238,7 @@ impl AppView {
                     .collect();
                 tree.set_items(items, cx);
             }),
-            Command::Terminal => {
-                self.act(
-                    Action::NewWindowAt {
-                        path: parent.to_string_lossy().into_owned(),
-                        name: String::new(),
-                    },
-                    cx,
-                );
-                self.show_terminal(cx);
-            }
+            Command::Terminal => cx.emit(Event::OpenTerminal(parent)),
             Command::Reveal => cx.reveal_path(&path),
         }
         cx.notify();
@@ -260,8 +251,6 @@ impl AppView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let key = self.active_file_session.clone();
-        let host = self.active;
         let download_directory = dirs::download_dir()
             .or_else(|| {
                 dirs::home_dir()
@@ -287,9 +276,6 @@ impl AppView {
                 return;
             };
             let _ = view.update_in(cx, |app, window, cx| {
-                if app.active != host || app.active_file_session != key {
-                    return;
-                }
                 app.explorer_download_to(source, destination, window, cx);
             });
         })
@@ -330,22 +316,19 @@ impl AppView {
                 .into(),
             ),
         });
-        let key = self.active_file_session.clone();
-        let host = self.active;
+
         cx.spawn_in(window, async move |view, cx| {
             let Ok(Ok(Some(paths))) = picker.await else {
                 return;
             };
             let _ = view.update_in(cx, |app, window, cx| {
-                if app.active == host && app.active_file_session == key {
-                    app.explorer_upload(paths, target, window, cx);
-                }
+                app.explorer_upload(paths, target, window, cx);
             });
         })
         .detach();
     }
 
-    pub(super) fn explorer_upload(
+    pub fn explorer_upload(
         &mut self,
         paths: Vec<PathBuf>,
         target: PathBuf,
@@ -363,8 +346,7 @@ impl AppView {
             window.push_notification(Notification::warning(crate::t!("explorer.busy")), cx);
             return;
         }
-        let key = self.active_file_session.clone();
-        let host = self.active;
+
         self.file_operation = true;
         cx.spawn_in(window, async move |view, cx| {
             let result = cx
@@ -394,9 +376,7 @@ impl AppView {
                             Notification::success(crate::t!("explorer.copied")),
                             cx,
                         );
-                        if app.active == host && app.active_file_session == key {
-                            app.load_files(cx);
-                        }
+                        app.load_files(cx);
                     }
                     Err(error) => window.push_notification(
                         Notification::error(crate::i18n::format_error(&error)),
@@ -428,7 +408,7 @@ impl AppView {
         input.update(cx, |input, cx| {
             if rename {
                 input.set_value(
-                    path.file_name().unwrap_or_default().to_string_lossy(),
+                    tshell_host::HostPath::for_host(&path, self.host.is_some()).name(),
                     window,
                     cx,
                 );
@@ -436,13 +416,11 @@ impl AppView {
             input.focus(window, cx);
         });
         let owner = cx.entity().downgrade();
-        let key = self.active_file_session.clone();
-        let host = self.active;
-        let remote = self.hosts[host].config.is_some();
+
+        let remote = self.host.is_some();
         let focus_input = input.clone();
         window.open_dialog(cx, move |dialog, _, cx| {
-            let (owner, input, path, key) =
-                (owner.clone(), input.clone(), path.clone(), key.clone());
+            let (owner, input, path) = (owner.clone(), input.clone(), path.clone());
             workspace_dialog(dialog, cx)
                 .button_props(
                     gpui_kit::component::dialog::DialogButtonProps::default()
@@ -455,12 +433,13 @@ impl AppView {
                 .child(Input::new(&input))
                 .on_ok(move |_, window, cx| {
                     let name = input.read(cx).value().to_string();
+                    let path_on_host = tshell_host::HostPath::for_host(&path, remote);
                     let parent = if rename {
-                        path.parent().unwrap_or(&path)
+                        path_on_host.parent().unwrap_or(path_on_host)
                     } else {
-                        &path
+                        path_on_host
                     };
-                    let to = match file_ops::child(parent, &name, remote) {
+                    let to = match file_ops::child(&parent.as_path_buf(), &name, remote) {
                         Ok(path) => path,
                         Err(error) => {
                             window.push_notification(
@@ -471,9 +450,6 @@ impl AppView {
                         }
                     };
                     let _ = owner.update(cx, |app, cx| {
-                        if app.active != host || app.active_file_session != key {
-                            return;
-                        }
                         let operation = if rename {
                             Operation::Rename {
                                 from: path.clone(),
@@ -493,49 +469,22 @@ impl AppView {
         focus_input.update(cx, |input, cx| input.focus(window, cx));
     }
 
-    fn explorer_run(&mut self, operation: Operation, window: &mut Window, cx: &mut Context<Self>) {
+    fn explorer_run(&mut self, operation: Operation, _window: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(Event::RequestOperation(operation));
+    }
+    pub fn perform_operation(
+        &mut self,
+        operation: Operation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.file_operation {
             window.push_notification(Notification::warning(crate::t!("explorer.busy")), cx);
             return;
         }
-        if matches!(&operation, Operation::Rename { from, to } if from == to) {
+        if matches!(&operation,Operation::Rename{from,to} if from==to) {
             return;
         }
-        let affected = match &operation {
-            Operation::Rename { from, .. } | Operation::Delete(from) => Some(from),
-            _ => None,
-        };
-        if let Some(path) = affected {
-            let dirty = self.editor_dirty
-                && self
-                    .open_file
-                    .as_ref()
-                    .is_some_and(|open| open.starts_with(path))
-                || self.pending_file_state.as_ref().is_some_and(|state| {
-                    state.dirty
-                        && state
-                            .path
-                            .as_ref()
-                            .is_some_and(|open| open.starts_with(path))
-                })
-                || self.file_states.iter().any(|((host, _), state)| {
-                    *host == self.active
-                        && state.dirty
-                        && state
-                            .path
-                            .as_ref()
-                            .is_some_and(|open| open.starts_with(path))
-                });
-            if dirty || self.file_saving {
-                window
-                    .push_notification(Notification::warning(crate::t!("explorer.save_first")), cx);
-                return;
-            }
-        }
-        let host_id = self.active;
-        let host = self.hosts[host_id].config.clone();
-        let key = self.active_file_session.clone();
-        let original_host = host.clone();
         let remote = self.remote_files();
         self.file_operation = true;
         cx.spawn_in(window, async move |view, cx| {
@@ -544,64 +493,15 @@ impl AppView {
                 .background_executor()
                 .spawn(async move { file_ops::execute(remote.as_ref(), &task) })
                 .await;
-            let _ = view.update_in(cx, |app, window, cx| {
-                app.file_operation = false;
-                if app
-                    .hosts
-                    .get(host_id)
-                    .is_none_or(|host| host.config != original_host)
-                {
-                    cx.notify();
-                    return;
-                }
+            let _ = view.update_in(cx, |this, window, cx| {
+                this.file_operation = false;
                 match result {
                     Ok(()) => {
-                        for ((owner, _), state) in &mut app.file_states {
-                            if *owner == host_id {
-                                update_file(state, &operation);
-                            }
-                        }
-                        if app.active == host_id {
-                            // Cancel stale file reads before updating paths or clearing an editor.
-                            app.file_request += 1;
-                            app.file_loading = None;
-                            let mut state = SessionFileState {
-                                path: app.open_file.clone(),
-                                text: app.file_editor.read(cx).value().to_string(),
-                                image: app.image_preview.clone(),
-                                preview: app.file_preview.clone(),
-                                preview_mode: app.preview_mode,
-                                saved_text: app.saved_file_text.clone(),
-                                language: app.editor_language.clone(),
-                                dirty: app.editor_dirty,
-                            };
-                            if update_file(&mut state, &operation) {
-                                app.pending_file_state = Some(state);
-                            } else if let Some(state) = &mut app.pending_file_state {
-                                update_file(state, &operation);
-                            }
-                            if app.active_file_session == key {
-                                app.load_files(cx);
-                            }
-                        }
-                        if let Operation::Rename { from, .. } = &operation {
-                            if app
-                                .file_clipboard
-                                .as_ref()
-                                .is_some_and(|clip| clip.cut && clip.path == *from)
-                            {
-                                app.file_clipboard = None;
-                            }
-                        }
+                        this.files_changed(&operation, cx);
+                        cx.emit(Event::FilesChanged(operation));
                     }
                     Err(error) => window.push_notification(
-                        Notification::error(
-                            crate::t!(
-                                "explorer.operation_failed",
-                                error = crate::i18n::format_error(&error)
-                            )
-                            .to_string(),
-                        ),
+                        Notification::error(crate::i18n::format_error(&error)),
                         cx,
                     ),
                 }
@@ -610,32 +510,72 @@ impl AppView {
         })
         .detach();
     }
+    pub fn files_changed(&mut self, operation: &Operation, cx: &mut Context<Self>) {
+        self.file_request += 1;
+        self.file_loading = None;
+        let pending = self.pending_file_state.take();
+        let was_pending = pending.is_some();
+        let mut state = pending.unwrap_or_else(|| SessionFileState {
+            path: self.open_file.clone(),
+            text: self.file_editor.read(cx).value().to_string(),
+            image: self.image_preview.clone(),
+            preview: self.file_preview.clone(),
+            preview_mode: self.preview_mode,
+            saved_text: self.saved_file_text.clone(),
+            language: self.editor_language.clone(),
+            dirty: self.editor_dirty,
+        });
+        if update_file(
+            &mut state,
+            operation,
+            self.host.is_some() && !self.document_local,
+        ) || was_pending
+        {
+            self.pending_file_state = Some(state);
+        }
+        if let Operation::Rename { from, .. } = operation {
+            if self
+                .file_clipboard
+                .borrow()
+                .as_ref()
+                .is_some_and(|clip| clip.cut && clip.path == *from)
+            {
+                *self.file_clipboard.borrow_mut() = None;
+            }
+        }
+        self.load_files(cx);
+        cx.notify();
+    }
 }
 
-fn update_file(state: &mut SessionFileState, operation: &Operation) -> bool {
+fn update_file(state: &mut SessionFileState, operation: &Operation, remote: bool) -> bool {
     let Some(path) = &state.path else {
         return false;
     };
+    let path = tshell_host::HostPath::for_host(path, remote);
     match operation {
-        Operation::Rename { from, to } if path.starts_with(from) => {
-            let rest = path.strip_prefix(from).unwrap();
-            state.path = Some(if rest.as_os_str().is_empty() {
-                to.clone()
+        Operation::Rename { from, to } => {
+            let Some(rest) = path.relative_to(&tshell_host::HostPath::for_host(from, remote))
+            else {
+                return false;
+            };
+            let destination = tshell_host::HostPath::for_host(to, remote);
+            let destination = if rest.is_empty() {
+                destination
             } else {
-                PathBuf::from(format!(
-                    "{}/{}",
-                    to.to_string_lossy().trim_end_matches(['/', '\\']),
-                    rest.to_string_lossy().replace('\\', "/")
-                ))
-            });
-            state.language = workbench::language_for_path(state.path.as_ref().unwrap()).to_owned();
+                destination.join(&rest)
+            };
+            state.path = Some(destination.as_path_buf());
+            state.language = workbench::language_for_path(&destination.as_path_buf()).to_owned();
             state.preview_mode = preview::can_preview(&state.language, &state.text);
             state.preview = state
                 .preview_mode
                 .then(|| preview::parse(&state.language, &state.text));
             true
         }
-        Operation::Delete(from) if path.starts_with(from) && !state.dirty => {
+        Operation::Delete(from)
+            if path.is_within(&tshell_host::HostPath::for_host(from, remote)) && !state.dirty =>
+        {
             *state = SessionFileState::default();
             true
         }
@@ -646,6 +586,27 @@ fn update_file(state: &mut SessionFileState, operation: &Operation) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{Operation, PathBuf, SessionFileState, update_file};
+    #[test]
+    fn remote_rename_keeps_literal_backslashes_and_component_boundaries() {
+        let mut state = SessionFileState {
+            path: Some(r"/srv/name\file.rs".into()),
+            ..Default::default()
+        };
+        assert!(!update_file(
+            &mut state,
+            &Operation::Delete("/srv/name".into()),
+            true
+        ));
+        assert!(update_file(
+            &mut state,
+            &Operation::Rename {
+                from: "/srv".into(),
+                to: "/new".into()
+            },
+            true
+        ));
+        assert_eq!(state.path.unwrap().to_string_lossy(), r"/new/name\file.rs");
+    }
     #[test]
     fn rename_tracks_open_descendants_and_delete_keeps_new_edits() {
         let mut state = SessionFileState {
@@ -659,7 +620,8 @@ mod tests {
             &Operation::Rename {
                 from: "/project/src".into(),
                 to: "/project/code".into()
-            }
+            },
+            true
         ));
         assert_eq!(
             state.path.as_ref().unwrap(),
@@ -667,13 +629,15 @@ mod tests {
         );
         assert!(!update_file(
             &mut state,
-            &Operation::Delete("/project/code".into())
+            &Operation::Delete("/project/code".into()),
+            true
         ));
         assert_eq!(state.text, "unsaved");
         state.dirty = false;
         assert!(update_file(
             &mut state,
-            &Operation::Delete("/project/code".into())
+            &Operation::Delete("/project/code".into()),
+            true
         ));
         assert!(state.path.is_none());
     }

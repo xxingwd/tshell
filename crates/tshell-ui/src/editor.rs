@@ -29,7 +29,7 @@ impl HighlightStyleResolver for Colors {
     }
 }
 
-pub(super) fn style(p: Palette) -> InputEditorStyle {
+pub fn style(p: Palette) -> InputEditorStyle {
     InputEditorStyle {
         foreground: rgb(p.text).into(),
         muted_foreground: rgb(p.ansi[8]).into(),
@@ -57,7 +57,7 @@ struct Highlighter {
     task: Option<Task<()>>,
 }
 
-pub(super) fn factory() -> InputHighlighterFactory {
+pub fn factory() -> InputHighlighterFactory {
     Rc::new(|language| {
         Some(Box::new(Highlighter {
             language: language.to_owned().into(),
@@ -112,27 +112,5 @@ impl InputHighlighter for Highlighter {
     }
     fn fold_ranges(&self, _: &Rope) -> Vec<FoldRange> {
         Vec::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::style;
-    use crate::terminal_theme::ThemeFile;
-    use gpui_kit::rgb;
-    #[test]
-    fn editor_colors_follow_every_terminal_theme() {
-        for theme in &ThemeFile::default().themes {
-            let p = theme.palette();
-            let style = style(p);
-            assert_eq!(style.background, rgb(p.terminal).into());
-            assert_eq!(style.foreground, rgb(p.text).into());
-            assert_eq!(style.caret, rgb(p.accent).into());
-            assert_eq!(style.selection, rgb(p.selection).into());
-            assert_eq!(
-                style.highlight_styles.style("string").unwrap().color,
-                Some(rgb(p.ansi[2]).into())
-            );
-        }
     }
 }

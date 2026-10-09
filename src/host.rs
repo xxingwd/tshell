@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HostDefinition {
+    #[serde(default)]
+    pub id: tshell_host::HostId,
     #[serde(flatten)]
     pub ssh: tshell_host::SshConfig,
     #[serde(default)]

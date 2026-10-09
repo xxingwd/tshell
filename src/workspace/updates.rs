@@ -123,20 +123,17 @@ impl AppView {
             .into_any_element()
     }
 
-    pub(super) fn update_has_unsaved_files(&self) -> bool {
-        self.editor_dirty
-            || self.file_saving
-            || self.file_operation
-            || self.transfer_queue.has_pending()
-            || self.file_states.values().any(|state| state.dirty)
+    pub(super) fn update_has_unsaved_files(&self, cx: &App) -> bool {
+        self.transfer_queue.has_pending()
             || self
-                .pending_file_state
-                .as_ref()
-                .is_some_and(|state| state.dirty)
+                .workspaces
+                .values()
+                .filter_map(|workspace| workspace.explorer.as_ref())
+                .any(|entity| entity.read(cx).busy())
     }
 
     fn confirm_update_restart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.update_has_unsaved_files() {
+        if self.update_has_unsaved_files(cx) {
             window.push_notification(
                 Notification::warning(crate::t!("updates.unsaved").into_owned()),
                 cx,
@@ -156,7 +153,7 @@ impl AppView {
         cx.spawn_in(window, async move |view, cx| {
             if receiver.await == Ok(1) {
                 let _ = view.update_in(cx, |app, window, cx| {
-                    if app.update_has_unsaved_files() {
+                    if app.update_has_unsaved_files(cx) {
                         window.push_notification(
                             Notification::warning(crate::t!("updates.unsaved").into_owned()),
                             cx,

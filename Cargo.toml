@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/tshell-host", "crates/tshell-ui"]
+members = [".", "crates/tshell-host", "crates/tshell-ui", "crates/tshell-git", "crates/tshell-explorer", "crates/tshell-docker"]
 resolver = "3"
 
 [workspace.package]
@@ -7,10 +7,29 @@ edition = "2024"
 license = "Apache-2.0"
 
 [workspace.dependencies]
+uuid = { version = "=1.26.1", features = ["v4", "serde"] }
 anyhow = "1"
 async-channel = "2"
 dirs = "6"
-gpui-kit = "=0.6.1"
+gpui-kit = { version = "=0.6.1", features = [
+    "profiler",
+    "tree-sitter-bash",
+    "tree-sitter-c",
+    "tree-sitter-cpp",
+    "tree-sitter-css",
+    "tree-sitter-go",
+    "tree-sitter-html",
+    "tree-sitter-java",
+    "tree-sitter-javascript",
+    "tree-sitter-markdown",
+    "tree-sitter-python",
+    "tree-sitter-rust",
+    "tree-sitter-toml",
+    "tree-sitter-tsx",
+    "tree-sitter-typescript",
+    "tree-sitter-yaml",
+    "tree-sitter-zig",
+] }
 parking_lot = "0.12"
 russh = { version = "=0.63.3", default-features = false, features = ["ring", "rsa"] }
 russh-sftp = "=3.0.0"
@@ -39,28 +58,13 @@ ui-check-screenshots = ["gpui-kit/test-support"]
 
 [dependencies]
 tshell-host = { path = "crates/tshell-host" }
+tshell-git = { path = "crates/tshell-git" }
+tshell-explorer = {path="crates/tshell-explorer"}
+tshell-docker = {path="crates/tshell-docker"}
 tshell-ui = { path = "crates/tshell-ui" }
 async-channel.workspace = true
 base64 = "=0.22.1"
-gpui-kit = { workspace = true, features = [
-    "profiler",
-    "tree-sitter-bash",
-    "tree-sitter-c",
-    "tree-sitter-cpp",
-    "tree-sitter-css",
-    "tree-sitter-go",
-    "tree-sitter-html",
-    "tree-sitter-java",
-    "tree-sitter-javascript",
-    "tree-sitter-markdown",
-    "tree-sitter-python",
-    "tree-sitter-rust",
-    "tree-sitter-toml",
-    "tree-sitter-tsx",
-    "tree-sitter-typescript",
-    "tree-sitter-yaml",
-    "tree-sitter-zig",
-] }
+gpui-kit.workspace = true
 alacritty_terminal = "0.26"
 portable-pty = "0.9"
 anyhow.workspace = true

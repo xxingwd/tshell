@@ -1,12 +1,12 @@
-use crate::appearance::Palette;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::text::TextView;
 use gpui_kit::{prelude::*, *};
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{Handle, NodeData, RcDom, SerializableHandle};
+use tshell_ui::appearance::Palette;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum Block {
+pub enum Block {
     Heading {
         level: u8,
         text: String,
@@ -23,8 +23,8 @@ pub(super) enum Block {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Document {
-    pub(super) blocks: Vec<Block>,
+pub struct Document {
+    pub blocks: Vec<Block>,
     content: Content,
 }
 
@@ -35,14 +35,14 @@ enum Content {
 }
 
 impl Document {
-    pub(super) fn markdown_source(&self) -> Option<&str> {
+    pub fn markdown_source(&self) -> Option<&str> {
         match &self.content {
             Content::Markdown(source) => Some(source),
             Content::Html(_) => None,
         }
     }
 
-    pub(super) fn web_html(&self) -> Option<&str> {
+    pub fn web_html(&self) -> Option<&str> {
         match &self.content {
             Content::Markdown(_) => None,
             Content::Html(html) => Some(html),
@@ -50,17 +50,17 @@ impl Document {
     }
 }
 
-pub(super) const MAX_PREVIEW_BYTES: usize = 256 * 1024;
+pub const MAX_PREVIEW_BYTES: usize = 256 * 1024;
 
-pub(super) fn is_previewable(language: &str) -> bool {
+pub fn is_previewable(language: &str) -> bool {
     matches!(language, "markdown" | "html")
 }
 
-pub(super) fn can_preview(language: &str, source: &str) -> bool {
+pub fn can_preview(language: &str, source: &str) -> bool {
     is_previewable(language) && source.len() <= MAX_PREVIEW_BYTES
 }
 
-pub(super) fn parse(language: &str, source: &str) -> Document {
+pub fn parse(language: &str, source: &str) -> Document {
     if language == "markdown" {
         return Document {
             blocks: Vec::new(),
@@ -73,7 +73,7 @@ pub(super) fn parse(language: &str, source: &str) -> Document {
     }
 }
 
-pub(super) fn render_markdown(document: &Document, palette: Palette) -> Option<AnyElement> {
+pub fn render_markdown(document: &Document, palette: Palette) -> Option<AnyElement> {
     let source = document.markdown_source()?;
     Some(
         div()
@@ -137,7 +137,7 @@ fn find_head(root: &Handle) -> Option<Handle> {
 }
 
 #[cfg(windows)]
-pub(super) struct WebPreview {
+pub struct WebPreview {
     webview: wry::WebView,
     html: String,
     bounds: Bounds<Pixels>,
@@ -146,7 +146,7 @@ pub(super) struct WebPreview {
 
 #[cfg(windows)]
 impl WebPreview {
-    pub(super) fn new(html: &str, bounds: Bounds<Pixels>, window: &Window) -> wry::Result<Self> {
+    pub fn new(html: &str, bounds: Bounds<Pixels>, window: &Window) -> wry::Result<Self> {
         let webview = wry::WebViewBuilder::new()
             .with_html(html)
             .with_incognito(true)
@@ -162,7 +162,7 @@ impl WebPreview {
         })
     }
 
-    pub(super) fn show(&mut self, html: &str, bounds: Bounds<Pixels>) -> wry::Result<()> {
+    pub fn show(&mut self, html: &str, bounds: Bounds<Pixels>) -> wry::Result<()> {
         if self.html != html {
             self.webview.load_html(html)?;
             self.html = html.to_owned();
@@ -178,17 +178,17 @@ impl WebPreview {
         Ok(())
     }
 
-    pub(super) fn hide(&mut self) {
+    pub fn hide(&mut self) {
         if self.visible && self.webview.set_visible(false).is_ok() {
             self.visible = false;
         }
     }
 
-    pub(super) fn is_visible(&self) -> bool {
+    pub fn is_visible(&self) -> bool {
         self.visible
     }
 
-    pub(super) fn html(&self) -> &str {
+    pub fn html(&self) -> &str {
         &self.html
     }
 }
@@ -209,7 +209,7 @@ fn web_bounds(bounds: Bounds<Pixels>) -> wry::Rect {
     }
 }
 
-pub(super) fn render(document: &Document, palette: Palette, font_family: &str) -> AnyElement {
+pub fn render(document: &Document, palette: Palette, font_family: &str) -> AnyElement {
     let mut content = div()
         .id("file-preview-content")
         .w_full()

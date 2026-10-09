@@ -1599,6 +1599,7 @@ mod tests {
             }
         }
         let config = HostDefinition {
+            id: Default::default(),
             ssh: tshell_host::SshConfig {
                 destination: std::env::var("TSHELL_SSH_TEST_HOST").unwrap(),
                 user: String::new(),
@@ -1762,6 +1763,7 @@ mod tests {
     #[ignore = "requires TSHELL_SSH_TEST_HOST; isolated tmux UTF-8 metadata under C locale"]
     fn remote_metadata_preserves_chinese_in_c_locale() -> Result<()> {
         let config = HostDefinition {
+            id: Default::default(),
             ssh: tshell_host::SshConfig {
                 destination: std::env::var("TSHELL_SSH_TEST_HOST")?,
                 user: String::new(),
@@ -2054,6 +2056,7 @@ mod tests {
         }
         let destination = std::env::var("TSHELL_SSH_TEST_HOST").expect("set test host");
         let config = HostDefinition {
+            id: Default::default(),
             ssh: tshell_host::SshConfig {
                 destination,
                 user: String::new(),
@@ -2195,6 +2198,7 @@ mod tests {
         }
         let destination = std::env::var("TSHELL_SSH_TEST_HOST").expect("set TSHELL_SSH_TEST_HOST");
         let config = HostDefinition {
+            id: Default::default(),
             ssh: tshell_host::SshConfig {
                 destination,
                 user: String::new(),

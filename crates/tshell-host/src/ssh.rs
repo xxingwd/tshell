@@ -9,6 +9,8 @@ use std::{
     time::{Duration, Instant},
 };
 mod blocking;
+mod stdio;
+pub use stdio::StdioStream;
 mod connection;
 pub mod forwarding;
 pub mod interactive;

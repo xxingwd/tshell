@@ -57,10 +57,19 @@ pub(super) async fn check(
     cx.background_executor()
         .timer(Duration::from_millis(30))
         .await;
+    cx.update_window(handle.into(), |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.switch_host(0, cx);
+            app.sync(cx);
+            app.check_initialize_tools(window, cx);
+        })
+    })?;
     let identity = app.update(cx, |app, cx| {
         app.switch_host(0, cx);
         app.sync(cx);
-        app.editor_dirty = false;
+        app.explorer_entity().unwrap().update(cx, |explorer, _cx| {
+            explorer.editor_dirty = false;
+        });
         let host = &app.hosts[0];
         host.backend
             .as_ref()
@@ -69,11 +78,11 @@ pub(super) async fn check(
             .unwrap()
             .identity
     });
-    let original = app.read_with(cx, |app, _| {
+    let original = app.read_with(cx, |app, _cx| {
         app.hosts[0].snapshot.window().unwrap().active_pane.clone()
     });
     app.update(cx, |app, cx| app.act(Action::NewWindow, cx));
-    let other_tab = app.read_with(cx, |app, _| {
+    let other_tab = app.read_with(cx, |app, _cx| {
         app.hosts[0]
             .snapshot
             .session()
@@ -86,13 +95,13 @@ pub(super) async fn check(
             app.focus_terminal_notice(Some(identity), window, cx)
         });
     })?;
-    app.read_with(cx, |app, _| {
+    app.read_with(cx, |app, _cx| {
         anyhow::ensure!(
             app.hosts[0].snapshot.window().unwrap().active_pane == original,
             "notification selected the wrong pane"
         );
         anyhow::ensure!(
-            app.workspace_mode == WorkspaceMode::Terminal,
+            app.page == Page::Terminal,
             "notification did not open terminal"
         );
         Ok::<_, anyhow::Error>(())
@@ -101,7 +110,7 @@ pub(super) async fn check(
         app.act(Action::SelectWindow(other_tab), cx);
         app.act(Action::CloseWindow, cx);
     });
-    let before_closed = app.read_with(cx, |app, _| {
+    let before_closed = app.read_with(cx, |app, _cx| {
         app.hosts[0].snapshot.window().unwrap().active_pane.clone()
     });
     cx.update_window(handle.into(), |_, window, cx| {
@@ -109,7 +118,7 @@ pub(super) async fn check(
             app.focus_terminal_notice(Some(u64::MAX), window, cx)
         });
     })?;
-    app.read_with(cx, |app, _| {
+    app.read_with(cx, |app, _cx| {
         anyhow::ensure!(
             app.hosts[0].snapshot.window().unwrap().active_pane == before_closed,
             "closed notification changed selection"
@@ -144,7 +153,9 @@ pub(super) async fn check(
         };
     open_link(&path, Some(2), Some(3), cx)?;
     let deadline = Instant::now() + Duration::from_secs(4);
-    while app.read_with(cx, |app, _| app.file_loading.is_some()) {
+    while app.read_with(cx, |app, cx| {
+        app.navigation_loading.is_some() || app.check_explorer(cx).file_loading.is_some()
+    }) {
         anyhow::ensure!(
             Instant::now() < deadline,
             "terminal file link did not finish opening"
@@ -156,11 +167,14 @@ pub(super) async fn check(
     draw(cx)?;
     app.read_with(cx, |app, cx| {
         anyhow::ensure!(
-            app.open_file.as_ref() == Some(&path) && app.workspace_mode == WorkspaceMode::Files,
+            app.check_explorer(cx).open_file.as_ref() == Some(&path) && app.page == Page::Explorer,
             "file link did not open the editor"
         );
         anyhow::ensure!(
-            app.file_editor.read(cx).cursor_position()
+            app.check_explorer(cx)
+                .file_editor
+                .read(cx)
+                .cursor_position()
                 == gpui_kit::component::input::Position::new(1, 2),
             "file link lost its line/column"
         );
@@ -168,24 +182,32 @@ pub(super) async fn check(
     })?;
     cx.update_window(handle.into(), |_, window, cx| {
         app.update(cx, |app, cx| {
-            app.file_editor.update(cx, |editor, cx| {
-                editor.set_value("unsaved link draft", window, cx)
+            app.check_explorer(cx)
+                .file_editor
+                .clone()
+                .update(cx, |editor, cx| {
+                    editor.set_value("unsaved link draft", window, cx)
+                });
+            app.explorer_entity().unwrap().update(cx, |explorer, _cx| {
+                explorer.editor_dirty = true;
             });
-            app.editor_dirty = true;
         });
     })?;
     open_link(&path, Some(1), Some(1), cx)?;
     draw(cx)?;
     app.read_with(cx, |app, cx| {
         anyhow::ensure!(
-            app.file_editor.read(cx).value().as_ref() == "unsaved link draft" && app.editor_dirty,
+            app.check_explorer(cx).file_editor.read(cx).value().as_ref() == "unsaved link draft"
+                && app.check_explorer(cx).editor_dirty,
             "same-file link replaced unsaved edits"
         );
         Ok::<_, anyhow::Error>(())
     })?;
     open_link(&directory, None, None, cx)?;
     let deadline = Instant::now() + Duration::from_secs(4);
-    while app.read_with(cx, |app, _| app.file_loading.is_some()) {
+    while app.read_with(cx, |app, cx| {
+        app.navigation_loading.is_some() || app.check_explorer(cx).file_loading.is_some()
+    }) {
         anyhow::ensure!(
             Instant::now() < deadline,
             "directory link did not finish opening"
@@ -197,56 +219,67 @@ pub(super) async fn check(
     app.read_with(cx, |app, cx| {
         anyhow::ensure!(
             app.cwd == directory
-                && app.file_editor.read(cx).value().as_ref() == "unsaved link draft",
+                && app.check_explorer(cx).file_editor.read(cx).value().as_ref()
+                    == "unsaved link draft",
             "directory link lost the root or file draft"
         );
         Ok::<_, anyhow::Error>(())
     })?;
-    app.update(cx, |app, _| app.editor_dirty = false);
+    app.update(cx, |app, cx| {
+        app.explorer_entity().unwrap().update(cx, |explorer, _| {
+            explorer.editor_dirty = false;
+        })
+    });
 
     for mode in [git_view::DiffMode::Inline, git_view::DiffMode::SideBySide] {
         app.update(cx, |app, cx| {
-            app.workspace_mode = WorkspaceMode::Git;
-            app.git_diff_mode = mode;
-            app.git_diff_compact = false;
-            app.git_diff = Some(git_view::DiffView {
-                change: git::GitChange {
-                    status: " M".into(),
-                    path: app.cwd.join("selection.rs"),
-                    original: None,
-                    root: app.cwd.clone(),
-                    stats: None,
-                },
-                content: Ok(git_view::DiffContent::new(
-                    (0..300)
-                        .flat_map(|index| {
-                            let tail = if index == 150 {
-                                " long-line".repeat(180)
-                            } else {
-                                String::new()
-                            };
-                            [
-                                git::DiffLine {
-                                    old: Some(index + 1),
-                                    new: None,
-                                    kind: git::LineKind::Removed,
-                                    text: format!("-\told 中文 {index}{tail}"),
-                                },
-                                git::DiffLine {
-                                    old: None,
-                                    new: Some(index + 1),
-                                    kind: git::LineKind::Added,
-                                    text: format!("+\tnew 中文 {index}{tail}"),
-                                },
-                            ]
-                        })
-                        .collect(),
-                )),
-                scroll: UniformListScrollHandle::new(),
-                horizontal: std::array::from_fn(|_| ScrollHandle::new()),
-                selection: std::array::from_fn(|_| git_selection::DiffSelection::new(cx)),
+            app.page = Page::Git;
+            app.git_entity().unwrap().update(cx, |git, _cx| {
+                git.git_diff_mode = mode;
             });
-            cx.notify();
+            app.git_entity().unwrap().update(cx, |git, _cx| {
+                git.git_diff_compact = false;
+            });
+            app.git_entity().unwrap().update(cx, |git, cx| {
+                git.git_diff = Some(git_view::DiffView {
+                    change: git::GitChange {
+                        status: " M".into(),
+                        path: app.cwd.join("selection.rs"),
+                        original: None,
+                        root: app.cwd.clone(),
+                        stats: None,
+                    },
+                    content: Ok(git_view::DiffContent::new(
+                        (0..300)
+                            .flat_map(|index| {
+                                let tail = if index == 150 {
+                                    " long-line".repeat(180)
+                                } else {
+                                    String::new()
+                                };
+                                [
+                                    git::DiffLine {
+                                        old: Some(index + 1),
+                                        new: None,
+                                        kind: git::LineKind::Removed,
+                                        text: format!("-\told 中文 {index}{tail}"),
+                                    },
+                                    git::DiffLine {
+                                        old: None,
+                                        new: Some(index + 1),
+                                        kind: git::LineKind::Added,
+                                        text: format!("+\tnew 中文 {index}{tail}"),
+                                    },
+                                ]
+                            })
+                            .collect(),
+                    )),
+                    scroll: UniformListScrollHandle::new(),
+                    horizontal: std::array::from_fn(|_| ScrollHandle::new()),
+                    selection: std::array::from_fn(|_| git_selection::DiffSelection::new(cx)),
+                });
+                cx.notify();
+            });
         });
         draw(cx)?;
         let panes = if mode == git_view::DiffMode::Inline {
@@ -256,7 +289,8 @@ pub(super) async fn check(
         };
         for pane in panes {
             app.update(cx, |app, cx| {
-                app.git_diff
+                app.check_git(cx)
+                    .git_diff
                     .as_ref()
                     .unwrap()
                     .scroll
@@ -266,7 +300,7 @@ pub(super) async fn check(
             draw(cx)?;
             let (start, end) = app
                 .read_with(cx, |app, cx| {
-                    app.git_diff.as_ref().unwrap().selection[pane]
+                    app.check_git(cx).git_diff.as_ref().unwrap().selection[pane]
                         .read(cx)
                         .check_points(0)
                 })
@@ -285,7 +319,12 @@ pub(super) async fn check(
                 TextSelection::selected_text(window, cx)
             })?;
             let debug = cx.update_window(handle.into(), |_, window, cx| {
-                app.read(cx).git_diff.as_ref().unwrap().selection[pane]
+                app.read(cx)
+                    .check_git(cx)
+                    .git_diff
+                    .as_ref()
+                    .unwrap()
+                    .selection[pane]
                     .read(cx)
                     .check_debug(window, cx)
             })?;
@@ -310,7 +349,7 @@ pub(super) async fn check(
             for source in [0, 1, 7] {
                 let position = app
                     .read_with(cx, |app, cx| {
-                        app.git_diff.as_ref().unwrap().selection[pane]
+                        app.check_git(cx).git_diff.as_ref().unwrap().selection[pane]
                             .read(cx)
                             .check_text_point(source, 5)
                     })
@@ -364,7 +403,8 @@ pub(super) async fn check(
             pointer(start, None, cx)?;
             button(start, true, cx)?;
             app.update(cx, |app, cx| {
-                app.git_diff
+                app.check_git(cx)
+                    .git_diff
                     .as_ref()
                     .unwrap()
                     .scroll
@@ -374,7 +414,7 @@ pub(super) async fn check(
             draw(cx)?;
             let (_, end) = app
                 .read_with(cx, |app, cx| {
-                    app.git_diff.as_ref().unwrap().selection[pane]
+                    app.check_git(cx).git_diff.as_ref().unwrap().selection[pane]
                         .read(cx)
                         .check_points(100)
                 })
@@ -413,17 +453,17 @@ pub(super) async fn check(
                 TextSelection::clear(window, cx)
             })?;
 
-            let font_size = app.read_with(cx, |app, _| app.font_size);
+            let font_size = app.read_with(cx, |app, _cx| app.font_size);
             app.update(cx, |app, cx| {
                 app.font_size = 17.;
-                let diff = app.git_diff.as_ref().unwrap();
+                let diff = app.check_git(cx).git_diff.as_ref().unwrap();
                 diff.horizontal[pane].set_offset(point(px(-24.), px(0.)));
                 diff.scroll.scroll_to_item_strict(100, ScrollStrategy::Top);
                 cx.notify();
             });
             draw(cx)?;
             let position = app.read_with(cx, |app, cx| {
-                let diff = app.git_diff.as_ref().unwrap();
+                let diff = app.check_git(cx).git_diff.as_ref().unwrap();
                 anyhow::ensure!(
                     diff.horizontal[pane].offset().x < px(0.),
                     "selection check did not scroll horizontally"
@@ -455,9 +495,9 @@ pub(super) async fn check(
             draw(cx)?;
             cx.update_window(handle.into(), |_, window, cx| {
                 let copied = TextSelection::selected_text(window, cx);
-                anyhow::ensure!(copied == "中", "scrolled diff word selection lost Unicode: pane={pane}, position={position:?}, copied={copied:?}; {}", app.read(cx).git_diff.as_ref().unwrap().selection[pane].read(cx).check_debug(window, cx));
+                anyhow::ensure!(copied == "中", "scrolled diff word selection lost Unicode: pane={pane}, position={position:?}, copied={copied:?}; {}", app.read(cx).check_git(cx).git_diff.as_ref().unwrap().selection[pane].read(cx).check_debug(window, cx));
                 anyhow::ensure!(
-                    app.read(cx).git_diff.as_ref().unwrap().selection[pane]
+                    app.read(cx).check_git(cx).git_diff.as_ref().unwrap().selection[pane]
                         .read(cx)
                         .focus
                         .is_focused(window),
@@ -466,7 +506,7 @@ pub(super) async fn check(
                 #[cfg(feature = "ui-check-screenshots")]
                 {
                     let image = window.render_to_image()?;
-                    let (start, _) = app.read(cx).git_diff.as_ref().unwrap().selection[pane]
+                    let (start, _) = app.read(cx).check_git(cx).git_diff.as_ref().unwrap().selection[pane]
                         .read(cx)
                         .check_points(107)
                         .unwrap();
@@ -491,7 +531,7 @@ pub(super) async fn check(
                 Ok::<_, anyhow::Error>(())
             })??;
             let end = app.read_with(cx, |app, cx| {
-                app.git_diff.as_ref().unwrap().selection[pane]
+                app.check_git(cx).git_diff.as_ref().unwrap().selection[pane]
                     .read(cx)
                     .check_text_point(107, 14)
                     .unwrap()
@@ -519,14 +559,16 @@ pub(super) async fn check(
             })??;
             app.update(cx, |app, cx| {
                 app.font_size = font_size;
-                app.git_diff.as_ref().unwrap().horizontal[pane].set_offset(point(px(0.), px(0.)));
+                app.check_git(cx).git_diff.as_ref().unwrap().horizontal[pane]
+                    .set_offset(point(px(0.), px(0.)));
                 cx.notify();
             });
         }
         #[cfg(feature = "ui-check-screenshots")]
         if let Some(directory) = std::env::var_os("TSHELL_UI_SCREENSHOT_DIR") {
             app.update(cx, |app, cx| {
-                app.git_diff
+                app.check_git(cx)
+                    .git_diff
                     .as_ref()
                     .unwrap()
                     .scroll
@@ -548,13 +590,9 @@ pub(super) async fn check(
             })??;
         }
     }
-    for mode in [
-        WorkspaceMode::Terminal,
-        WorkspaceMode::Files,
-        WorkspaceMode::Git,
-    ] {
+    for mode in [Page::Terminal, Page::Explorer, Page::Git] {
         app.update(cx, |app, cx| {
-            app.workspace_mode = mode;
+            app.page = mode;
             app.need_focus = true;
             cx.notify();
         });

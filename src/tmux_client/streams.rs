@@ -244,6 +244,7 @@ mod tests {
             .retry
             .insert("$1".into(), (failed_at, "closed".into()));
         let host = HostDefinition {
+            id: Default::default(),
             ssh: tshell_host::SshConfig {
                 destination: "unused".into(),
                 user: String::new(),

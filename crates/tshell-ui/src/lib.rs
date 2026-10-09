@@ -14,3 +14,5 @@ macro_rules! t {
         $crate::i18n::translate(&($key), None, &[$((stringify!($name), ($value).to_string())),*])
     };
 }
+
+pub mod editor;

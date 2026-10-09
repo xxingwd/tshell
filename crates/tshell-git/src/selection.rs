@@ -5,13 +5,13 @@ use gpui_kit::base::{
 use std::{ops::Range, sync::Arc};
 
 #[derive(Default)]
-pub(super) struct DiffDocument {
+pub struct DiffDocument {
     text: String,
     lines: Vec<Option<Range<usize>>>,
 }
 
 impl DiffDocument {
-    pub(super) fn new(lines: impl IntoIterator<Item = Option<String>>) -> Arc<Self> {
+    pub fn new(lines: impl IntoIterator<Item = Option<String>>) -> Arc<Self> {
         let mut document = Self::default();
         let mut first = true;
         for line in lines {
@@ -44,9 +44,9 @@ struct PaintedLine {
     layout: TextLayout,
 }
 
-pub(super) struct DiffSelection {
+pub struct DiffSelection {
     handle: TextSelectionHandle,
-    pub(super) focus: FocusHandle,
+    pub focus: FocusHandle,
     document: Arc<DiffDocument>,
     bounds: Bounds<Pixels>,
     painted: Vec<PaintedLine>,
@@ -56,7 +56,7 @@ pub(super) struct DiffSelection {
 }
 
 impl DiffSelection {
-    pub(super) fn new(cx: &mut App) -> Entity<Self> {
+    pub fn new(cx: &mut App) -> Entity<Self> {
         cx.new(|cx: &mut Context<Self>| {
             let handle = TextSelectionHandle::new("", cx);
             let focus = cx.focus_handle();
@@ -93,7 +93,7 @@ impl DiffSelection {
         })
     }
 
-    pub(super) fn set_document(&mut self, document: Arc<DiffDocument>) {
+    pub fn set_document(&mut self, document: Arc<DiffDocument>) {
         if !Arc::ptr_eq(&self.document, &document) {
             self.document = document;
             self.painted.clear();
@@ -152,7 +152,7 @@ impl DiffSelection {
     }
 
     #[cfg(debug_assertions)]
-    pub(super) fn check_points(&self, source: usize) -> Option<(Point<Pixels>, Point<Pixels>)> {
+    pub fn check_points(&self, source: usize) -> Option<(Point<Pixels>, Point<Pixels>)> {
         let line = self.painted.iter().find(|line| line.source == source)?;
         let end = line.layout.position_for_index(line.layout.len())?;
         Some((
@@ -162,14 +162,14 @@ impl DiffSelection {
     }
 
     #[cfg(debug_assertions)]
-    pub(super) fn check_text_point(&self, source: usize, index: usize) -> Option<Point<Pixels>> {
+    pub fn check_text_point(&self, source: usize, index: usize) -> Option<Point<Pixels>> {
         let line = self.painted.iter().find(|line| line.source == source)?;
         let position = line.layout.position_for_index(index)?;
         Some(point(position.x + px(1.), line.bounds.top() + px(12.)))
     }
 
     #[cfg(debug_assertions)]
-    pub(super) fn check_debug(&self, window: &Window, cx: &App) -> String {
+    pub fn check_debug(&self, window: &Window, cx: &App) -> String {
         format!(
             "bounds={:?} painted={} hover={} snapshot={:?}",
             self.bounds,
@@ -181,7 +181,7 @@ impl DiffSelection {
         )
     }
 
-    pub(super) fn surface(view: Entity<Self>) -> impl IntoElement {
+    pub fn surface(view: Entity<Self>) -> impl IntoElement {
         let prepare = view.clone();
         canvas(
             move |bounds, window, cx| {
@@ -216,7 +216,7 @@ impl DiffSelection {
         .size_full()
     }
 
-    pub(super) fn row(
+    pub fn row(
         view: Entity<Self>,
         source: usize,
         text: String,

@@ -5,56 +5,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub(super) const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024;
+pub const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024;
 
-pub(super) use super::git::GitChange;
-
-pub(super) fn parse_git_status(bytes: &[u8]) -> Vec<GitChange> {
-    let fields = bytes.split(|byte| *byte == 0).collect::<Vec<_>>();
-    let mut changes = Vec::new();
-    let mut index = 0;
-    while index < fields.len() {
-        let field = fields[index];
-        if field.is_empty() {
-            break;
-        }
-        if field.len() < 4 {
-            index += 1;
-            continue;
-        }
-        let status = String::from_utf8_lossy(&field[..2]).into_owned();
-        let path = PathBuf::from(String::from_utf8_lossy(&field[3..]).into_owned());
-        let original = if matches!(field[0], b'R' | b'C') || matches!(field[1], b'R' | b'C') {
-            fields
-                .get(index + 1)
-                .map(|value| PathBuf::from(String::from_utf8_lossy(value).into_owned()))
-        } else {
-            None
-        };
-        changes.push(GitChange {
-            status,
-            path,
-            original,
-            root: PathBuf::new(),
-            stats: None,
-        });
-        if matches!(field[0], b'R' | b'C') || matches!(field[1], b'R' | b'C') {
-            index += 1;
-        }
-        index += 1;
-    }
-    changes
-}
-
-pub(super) use tshell_host::files::Node;
-pub(super) trait NodeView {
-    fn item(self, root: bool) -> TreeItem;
+pub use tshell_host::files::Node;
+pub trait NodeView {
+    fn item(self, root: bool, remote: bool) -> TreeItem;
 }
 impl NodeView for Node {
-    fn item(self, root: bool) -> TreeItem {
+    fn item(self, root: bool, remote: bool) -> TreeItem {
         let label = self
             .path
-            .rsplit(if cfg!(windows) {
+            .rsplit(if cfg!(windows) && !remote {
                 &['/', '\\'][..]
             } else {
                 &['/'][..]
@@ -65,7 +26,7 @@ impl NodeView for Node {
         let mut children: Vec<_> = self
             .children
             .into_iter()
-            .map(|node| node.item(false))
+            .map(|node| node.item(false, remote))
             .collect();
         if self.directory && !self.loaded && children.is_empty() {
             children.push(TreeItem::new(format!("{}#pending", self.path), "…").disabled(true));
@@ -79,11 +40,13 @@ impl NodeView for Node {
 const MAX_TREE_ENTRIES: usize = 1_200;
 const IGNORED_DIRECTORIES: &[&str] = &[".git", "artifacts", "node_modules", "target"];
 
-pub(super) fn file_tree(root: &Path) -> Vec<TreeItem> {
-    file_nodes(root, &Default::default()).item(true).children
+pub fn file_tree(root: &Path) -> Vec<TreeItem> {
+    file_nodes(root, &Default::default())
+        .item(true, false)
+        .children
 }
 
-pub(super) fn file_paths(items: &[TreeItem], root: &Path) -> Vec<String> {
+pub fn file_paths(items: &[TreeItem], root: &Path) -> Vec<String> {
     fn collect(items: &[TreeItem], root: &Path, paths: &mut Vec<String>) {
         for item in items {
             let path = PathBuf::from(item.id.as_ref());
@@ -100,7 +63,7 @@ pub(super) fn file_paths(items: &[TreeItem], root: &Path) -> Vec<String> {
     paths
 }
 
-pub(super) fn file_nodes(root: &Path, expanded: &std::collections::BTreeSet<String>) -> Node {
+pub fn file_nodes(root: &Path, expanded: &std::collections::BTreeSet<String>) -> Node {
     let mut remaining = MAX_TREE_ENTRIES;
     build_tree_node(root, true, expanded, &mut remaining)
 }
@@ -146,11 +109,11 @@ fn build_tree_node(
     node
 }
 
-pub(super) fn path_id(path: &Path) -> String {
+pub fn path_id(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-pub(super) fn language_for_path(path: &Path) -> &'static str {
+pub fn language_for_path(path: &Path) -> &'static str {
     match path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -179,7 +142,7 @@ pub(super) fn language_for_path(path: &Path) -> &'static str {
     }
 }
 
-pub(super) fn read_file(path: &Path) -> Result<String> {
+pub fn read_file(path: &Path) -> Result<String> {
     let metadata = fs::metadata(path).with_context(|| {
         crate::t!("file.metadata_failed", path = path.display().to_string()).to_string()
     })?;
@@ -194,7 +157,7 @@ pub(super) fn read_file(path: &Path) -> Result<String> {
     })
 }
 
-pub(super) fn write_file(path: &Path, text: &str) -> Result<()> {
+pub fn write_file(path: &Path, text: &str) -> Result<()> {
     fs::write(path, text).with_context(|| {
         crate::t!("file.save_failed", path = path.display().to_string()).to_string()
     })
@@ -216,23 +179,24 @@ mod tests {
 
     #[test]
     fn workspace_tree_starts_with_root_children() {
-        let items = file_tree(Path::new(env!("CARGO_MANIFEST_DIR")));
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path();
+        fs::create_dir_all(root.join("src/nested")).unwrap();
+        fs::write(root.join("Cargo.toml"), "").unwrap();
+        fs::write(root.join("src/lib.rs"), "").unwrap();
+        fs::write(root.join("src/nested/deep.rs"), "").unwrap();
+        let items = file_tree(root);
         assert!(items.iter().any(|item| item.label == "src"));
-        assert!(items.iter().any(|item| item.label == "Cargo.toml"));
-        let paths = file_paths(&items, Path::new(env!("CARGO_MANIFEST_DIR")));
-        assert!(paths.iter().any(|path| path == "Cargo.toml"));
-        assert!(!paths.iter().any(|path| path == "src/workspace.rs"));
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let expanded = [path_id(&root.join("src"))].into_iter().collect();
-        let node = file_nodes(root, &expanded);
-        let items = node.item(true).children;
         let paths = file_paths(&items, root);
-        assert!(paths.iter().any(|path| path == "src/workspace.rs"));
-        assert!(
-            !paths
-                .iter()
-                .any(|path| path == "src/workspace/file_access.rs")
+        assert!(paths.iter().any(|path| path == "Cargo.toml"));
+        assert!(!paths.iter().any(|path| path == "src/lib.rs"));
+        let expanded = [path_id(&root.join("src"))].into_iter().collect();
+        let paths = file_paths(
+            &file_nodes(root, &expanded).item(true, false).children,
+            root,
         );
+        assert!(paths.iter().any(|path| path == "src/lib.rs"));
+        assert!(!paths.iter().any(|path| path == "src/nested/deep.rs"));
     }
 
     #[test]
@@ -250,17 +214,5 @@ mod tests {
     fn path_ids_round_trip_on_windows() {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
         assert_eq!(std::path::PathBuf::from(path_id(&path)), path);
-    }
-
-    #[test]
-    fn git_porcelain_status_handles_spaces_and_rename_source() {
-        let changes = parse_git_status(
-            b" M src/workspace.rs\0?? new file.txt\0R  new name.rs\0old name.rs\0",
-        );
-        assert_eq!(changes.len(), 3);
-        assert_eq!(changes[0].status, " M");
-        assert_eq!(changes[1].path, PathBuf::from("new file.txt"));
-        assert_eq!(changes[2].status, "R ");
-        assert_eq!(changes[2].path, PathBuf::from("new name.rs"));
     }
 }

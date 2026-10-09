@@ -5,27 +5,13 @@ enum OpenedFile {
     Png(std::sync::Arc<Image>),
 }
 
-impl AppView {
-    pub(super) fn remote_files(&mut self) -> Option<remote_files::Session> {
-        if self.hosts[self.active].backend.is_none() {
-            return None;
-        }
-        let host = self.hosts[self.active].config.clone()?;
-        let id = self.hosts[self.active]
-            .snapshot
-            .session()
-            .map(|session| session.id.clone())
-            .unwrap_or_default();
-        Some(
-            self.sftp_sessions
-                .entry((self.active, id))
-                .or_insert_with(|| remote_files::Session::new(host.ssh))
-                .clone(),
-        )
+impl Explorer {
+    pub fn remote_files(&mut self) -> Option<remote_files::Session> {
+        self.remote.clone()
     }
 
-    pub(super) fn load_files(&mut self, cx: &mut Context<Self>) {
-        if self.workspace_mode != WorkspaceMode::Files || self.active_file_session.is_none() {
+    pub fn load_files(&mut self, cx: &mut Context<Self>) {
+        if !self.visible {
             return;
         }
         self.tree_request += 1;
@@ -66,7 +52,7 @@ impl AppView {
                 match result {
                     Ok(node) => {
                         node.loaded_directories(&mut this.tree_loaded);
-                        let mut items = node.item(true).children;
+                        let mut items = node.item(true, this.host.is_some()).children;
                         restore_expansion(&mut items, &expanded);
                         this.set_file_items(items, cx);
                         this.file_loading = None;
@@ -88,7 +74,7 @@ impl AppView {
         .detach();
     }
 
-    pub(super) fn expand_directory(&mut self, id: String, cx: &mut Context<Self>) {
+    pub fn expand_directory(&mut self, id: String, cx: &mut Context<Self>) {
         if self.tree_loaded.contains(&id) || !self.tree_loading.insert(id.clone()) {
             return;
         }
@@ -113,7 +99,7 @@ impl AppView {
                 match result {
                     Ok(node) => {
                         node.loaded_directories(&mut this.tree_loaded);
-                        let children = node.item(true).children;
+                        let children = node.item(true, this.host.is_some()).children;
                         let tree = this.file_tree.read(cx);
                         let mut items: Vec<_> = (0..)
                             .map_while(|i| tree.entry(i))
@@ -144,14 +130,14 @@ impl AppView {
         items: Vec<gpui_kit::component::tree::TreeItem>,
         cx: &mut Context<Self>,
     ) {
-        self.pending_file_paths = Some(if self.hosts[self.active].config.is_some() {
+        self.pending_file_paths = Some(if self.host.is_some() {
             remote_paths(&items)
         } else {
             workbench::file_paths(&items, &self.cwd)
         });
         if let Some(paths) = &mut self.pending_file_paths {
             paths.retain(|path| {
-                let absolute = if self.hosts[self.active].config.is_some() {
+                let absolute = if self.host.is_some() {
                     PathBuf::from(path)
                 } else {
                     self.cwd.join(path)
@@ -168,36 +154,47 @@ impl AppView {
         });
     }
 
-    pub(super) fn refresh_files(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+    pub fn refresh_files(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         self.load_files(cx);
         cx.notify();
     }
 
-    pub(super) fn open_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.open_path_at(path, None, window, cx);
     }
 
-    pub(super) fn open_path_at(
+    pub fn open_path_at(
         &mut self,
         path: PathBuf,
         position: Option<(u32, u32)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.hosts[self.active].config.is_some() && self.hosts[self.active].backend.is_none() {
-            return;
-        }
-        if self.open_file.as_ref() == Some(&path) && self.pending_file_state.is_none() {
+        self.open_path_at_on(path, position, false, window, cx);
+    }
+
+    pub fn open_path_at_on(
+        &mut self,
+        path: PathBuf,
+        position: Option<(u32, u32)>,
+        local: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.open_file.as_ref() == Some(&path)
+            && self.document_local == local
+            && self.pending_file_state.is_none()
+        {
             self.file_request += 1;
             self.file_loading = None;
-            self.workspace_mode = WorkspaceMode::Files;
+            cx.emit(Event::Activated);
             self.file_link_position = position.map(|position| (path, position));
             self.need_focus = true;
             cx.notify();
             return;
         }
         if self.editor_dirty {
-            let key = self.active_file_session.clone();
+            let request = self.file_request;
             let title = crate::t!("file.unsaved_title").to_string();
             let detail = crate::t!("file.unsaved_message").to_string();
             let cancel = crate::t!("explorer.cancel").into_owned();
@@ -212,8 +209,8 @@ impl AppView {
             cx.spawn_in(window, async move |view, cx| {
                 if receiver.await == Ok(1) {
                     let _ = view.update_in(cx, |this, window, cx| {
-                        if this.active_file_session == key {
-                            this.start_open_file(path, position, window, cx);
+                        if this.file_request == request {
+                            this.start_open_file(path, position, local, window, cx);
                         }
                     });
                 }
@@ -221,24 +218,21 @@ impl AppView {
             .detach();
             return;
         }
-        self.start_open_file(path, position, window, cx);
+        self.start_open_file(path, position, local, window, cx);
     }
 
     fn start_open_file(
         &mut self,
         path: PathBuf,
         position: Option<(u32, u32)>,
+        local: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let original_text = self.file_editor.read(cx).value().to_string();
         self.file_request += 1;
         let request = self.file_request;
-        let host = if path == Self::theme_path() {
-            None
-        } else {
-            self.remote_files()
-        };
+        let host = if local { None } else { self.remote_files() };
         self.file_loading = Some(crate::t!("file.reading_file").to_string());
         cx.spawn_in(window, async move |view, cx| {
             let read_path = path.clone();
@@ -285,6 +279,7 @@ impl AppView {
                 this.file_loading = None;
                 match result {
                     Ok(opened) if this.file_editor.read(cx).value().as_ref() == original_text => {
+                        this.document_local = local;
                         let (text, image) = match opened {
                             OpenedFile::Text(text) => (text, None),
                             OpenedFile::Png(image) => (String::new(), Some(image)),
@@ -303,7 +298,7 @@ impl AppView {
                             dirty: false,
                         });
                         this.file_link_position = position.map(|position| (path, position));
-                        this.workspace_mode = WorkspaceMode::Files;
+                        cx.emit(Event::Activated);
                         this.need_focus = true;
                     }
                     Ok(_) => window.push_notification(
@@ -322,7 +317,7 @@ impl AppView {
         cx.notify();
     }
 
-    pub(super) fn save_open_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn save_open_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.image_preview.is_some() {
             return;
         }
@@ -333,12 +328,12 @@ impl AppView {
             return;
         }
         self.file_saving = true;
-        let host = if path == Self::theme_path() {
+        let host = if self.document_local {
             None
         } else {
             self.remote_files()
         };
-        let key = self.active_file_session.clone();
+        let request = self.file_request;
         let text = self.file_editor.read(cx).value().to_string();
         let expected = self.saved_file_text.clone();
         cx.spawn_in(window, async move |view, cx| {
@@ -359,10 +354,8 @@ impl AppView {
                 this.file_saving = false;
                 match result {
                     Ok(()) => {
-                        if path == Self::theme_path() {
-                            this.reload_theme_file(window, cx);
-                        }
-                        if this.active_file_session == key {
+                        cx.emit(Event::Saved(path.clone()));
+                        if this.file_request == request {
                             if let Some(state) = this
                                 .pending_file_state
                                 .as_mut()
@@ -375,13 +368,6 @@ impl AppView {
                                 this.editor_dirty =
                                     this.file_editor.read(cx).value().as_ref() != text;
                             }
-                        } else if let Some(state) = key
-                            .as_ref()
-                            .and_then(|key| this.file_states.get_mut(key))
-                            .filter(|state| state.path.as_ref() == Some(&path))
-                        {
-                            state.saved_text = text.clone();
-                            state.dirty = state.text != text;
                         }
                         window.push_notification(
                             Notification::success(

@@ -14,9 +14,16 @@ host names and tmux preferences live in `src/host.rs`, separate from `SshConfig`
 the saved host JSON retains its existing flat fields. Host errors preserve typed
 messages and their original causes until the UI formats them in the selected language.
 
-Explorer and Git still live in `src/workspace/` in this first migration. Session
-workspace ownership, stable host IDs and Docker integration are subsequent tasks
-recorded in [the implementation plan](../todo.md).
+`tshell-explorer`, `tshell-git` and `tshell-docker` own their native GPUI entities,
+business state and IO. The root uses `Page::{Terminal, Explorer, Git, Docker}` and
+one `SessionWorkspace` per stable host/session identity; Explorer/Git are created
+lazily and preserve documents and diffs in their owning entities. Host IDs migrate
+old endpoint-based session/forwarding keys without requiring manual config edits.
+
+All four entries stay in the left sidebar. Docker replaces host/session navigation
+with its own Engine picker and container list. Its Engine does not follow terminal
+session selection and remains usable with no terminal sessions. See
+[Docker workspace](docker-workspace.md) and [the implementation plan](../todo.md).
 
 ## Shared Layout
 

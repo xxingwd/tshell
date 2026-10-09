@@ -254,6 +254,7 @@ fn pane_dividers_join_across_local_and_tmux_gaps() {
 #[test]
 fn session_storage_excludes_tmux_and_ignores_display_names() {
     let mut host = crate::host::HostDefinition {
+        id: Default::default(),
         ssh: tshell_host::SshConfig {
             destination: "host".into(),
             user: String::new(),
@@ -268,7 +269,7 @@ fn session_storage_excludes_tmux_and_ignores_display_names() {
     host.name = "renamed".into();
     assert_eq!(super::session_storage_key(Some(&host)), key);
     host.ssh.user = "other".into();
-    assert_ne!(super::session_storage_key(Some(&host)), key);
+    assert_eq!(super::session_storage_key(Some(&host)), key);
     host.tmux = true;
     assert_eq!(super::session_storage_key(Some(&host)), None);
     assert_eq!(super::session_storage_key(None).as_deref(), Some("local"));
@@ -361,4 +362,28 @@ fn forward_rules_round_trip_across_hosts_and_modes() {
     let encoded = serde_json::to_string(&preferences).unwrap();
     let restored: super::Preferences = serde_json::from_str(&encoded).unwrap();
     assert_eq!(restored.forwards, preferences.forwards);
+}
+
+#[test]
+fn legacy_host_identity_migrates_sessions_and_forwards_once() {
+    let preferences = serde_json::from_str::<Preferences>(r#"{"hosts":[{"destination":"server","user":"deploy","tmux":false}],"sessions":{"ssh:22:server:deploy":[{"name":"work","path":"/srv"}]},"forwards":{"server:deploy:22":[]}}"#).unwrap().migrated();
+    let id = preferences.hosts[0].id.clone();
+    assert!(preferences.sessions.contains_key(&id.to_string()));
+    assert!(preferences.forwards.contains_key(&id.to_string()));
+    let restored =
+        serde_json::from_str::<Preferences>(&serde_json::to_string(&preferences).unwrap())
+            .unwrap()
+            .migrated();
+    assert_eq!(restored.hosts[0].id, id);
+    assert_eq!(restored.sessions, preferences.sessions);
+}
+
+#[test]
+fn duplicate_legacy_endpoints_receive_separate_ids_and_preserve_profiles() {
+    let preferences = serde_json::from_str::<Preferences>(r#"{"hosts":[{"destination":"server","user":"deploy"},{"destination":"server","user":"deploy"}],"sessions":{"ssh:22:server:deploy":[{"name":"work","path":"/srv"}]}}"#).unwrap().migrated();
+    assert_ne!(preferences.hosts[0].id, preferences.hosts[1].id);
+    for host in &preferences.hosts {
+        assert_eq!(preferences.sessions[&host.id.to_string()][0].path, "/srv");
+    }
+    assert!(!preferences.sessions.contains_key("ssh:22:server:deploy"));
 }

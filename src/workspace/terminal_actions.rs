@@ -102,6 +102,7 @@ impl AppView {
                     );
                     return;
                 };
+                if self.hosts[location.host].backend.as_ref().is_some_and(|backend|matches!(backend,Backend::Local(backend) if backend.is_external_session(&location.session))){window.push_notification(Notification::warning(crate::t!("docker.file_tools_unavailable")),cx);return;}
                 let remote = self.hosts[location.host].config.is_some();
                 let directory = link
                     .directory
@@ -130,11 +131,11 @@ impl AppView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.file_request += 1;
-        let request = self.file_request;
-        let key = self.active_file_session.clone();
+        self.navigation_request += 1;
+        let request = self.navigation_request;
+        let key = self.active_workspace.clone();
         let remote = self.remote_files();
-        self.file_loading = Some(crate::t!("file.reading_file").to_string());
+        self.navigation_loading = Some(crate::t!("file.reading_file").to_string());
         cx.spawn_in(window, async move |view, cx| {
             let result = cx
                 .background_executor()
@@ -148,15 +149,24 @@ impl AppView {
                 })
                 .await;
             let _ = view.update_in(cx, |this, window, cx| {
-                if this.file_request != request || this.active_file_session != key {
+                if this.navigation_request != request || this.active_workspace != key {
                     return;
                 }
-                this.file_loading = None;
+                this.navigation_loading = None;
                 match result {
                     Ok((path, false)) => this.open_path_at(path, position, window, cx),
                     Ok((path, true)) => {
                         if let Some(key) = key {
-                            this.tool_roots.insert(key, path.clone());
+                            if let Some(workspace) = this.workspaces.get_mut(&key) {
+                                workspace.cwd = Some(path.clone());
+                                workspace.refresh = true;
+                                if let Some(entity) = &workspace.explorer {
+                                    entity.update(cx, |explorer, _| explorer.cwd = path.clone());
+                                }
+                                if let Some(entity) = &workspace.git {
+                                    entity.update(cx, |git, _| git.cwd = path.clone());
+                                }
+                            }
                         }
                         this.cwd = path;
                         this.tool_request += 1;

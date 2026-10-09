@@ -18,7 +18,8 @@ pub fn child(parent: &Path, name: &str, remote: bool) -> Result<PathBuf> {
         !name.trim().is_empty()
             && name != "."
             && name != ".."
-            && !name.contains(['/', '\\'])
+            && !name.contains('/')
+            && (remote || !name.contains('\\'))
             && !name.chars().any(char::is_control),
         crate::diagnostic!("file.name_required")
     );
@@ -123,6 +124,17 @@ fn copy(from: &Path, to: &Path, depth: usize) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn remote_child_preserves_posix_backslashes_without_allowing_directory_escape() {
+        assert_eq!(
+            child(Path::new("/srv"), r"name\file", true)
+                .unwrap()
+                .to_string_lossy(),
+            r"/srv/name\file"
+        );
+        assert!(child(Path::new("/srv"), "../escape", true).is_err());
+        assert!(child(Path::new("/srv"), "/absolute", true).is_err());
+    }
     #[test]
     fn operations_preserve_existing_files_and_copy_binary_trees() {
         let root = std::env::temp_dir().join(format!("tshell-file-ops-{}", std::process::id()));

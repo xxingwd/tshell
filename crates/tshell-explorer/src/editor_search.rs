@@ -1,7 +1,7 @@
 use super::*;
 
-impl AppView {
-    pub(super) fn subscribe_editor_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+impl Explorer {
+    pub fn subscribe_editor_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.observe(&self.file_editor, |_, _, cx| cx.notify())
             .detach();
         cx.subscribe_in(&self.editor_search, window, |this, _, event, _, cx| {
@@ -37,9 +37,9 @@ impl AppView {
         });
     }
 
-    pub(super) fn sync_editor_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn sync_editor_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let editor = self.file_editor.read(cx);
-        if self.workspace_mode != WorkspaceMode::Files
+        if !self.visible
             || !editor.search_session().open
             || self.editor_search_revision == editor.search_activation_revision()
         {
@@ -53,7 +53,7 @@ impl AppView {
         });
     }
 
-    pub(super) fn editor_search_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub fn editor_search_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let search = self.file_editor.read(cx).search_session();
         if !search.open {
             return None;

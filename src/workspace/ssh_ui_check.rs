@@ -13,6 +13,7 @@ pub(super) async fn check(
                 ("Database", "database.invalid"),
             ] {
                 let config = HostDefinition {
+                    id: Default::default(),
                     ssh: tshell_host::SshConfig {
                         destination: destination.into(),
                         user: "deploy".into(),

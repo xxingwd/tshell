@@ -26,7 +26,7 @@ Keep the repository shallow and put code beside the subsystem it owns:
 - `src/terminal.rs`, `src/terminal/`, `src/terminal_view/`, and terminal
   rendering/protocol modules contain PTY input/output, parsing, snapshots,
   selection, glyphs, decorations, metrics, and notifications.
-- `crates/tshell-host/` owns transport-only SSH configuration, runtime,
+- `crates/tshell-host/` owns stable host IDs, local/POSIX paths, command execution, SSH configuration, runtime,
   connection pooling, authentication prompts, forwarding, SFTP and file IO.
   It must not depend on GPUI, terminal state, tmux, or application host preferences.
 - `crates/tshell-ui/` owns shared semantic palettes, controls and localisation.
@@ -37,7 +37,11 @@ Keep the repository shallow and put code beside the subsystem it owns:
 - `src/tmux.rs`, `src/tmux_client.rs`, `src/tmux_client/`, and `src/tmux_titles.rs`
   contain the tmux control protocol and title/layout synchronization.
 - `src/workspace.rs` and `src/workspace/` contain hosts, sessions, settings,
-  Explorer, Git, metrics, editor state, updates, and UI checks.
+  tool composition, metrics, global transfers, updates, and native UI checks.
+- `crates/tshell-explorer/`, `crates/tshell-git/` and `crates/tshell-docker/` own
+  their tool entities, business state, IO and views. They share host/UI crates
+  without depending on one another or the application. Docker uses Bollard directly.
+  Its Engine target is independent of terminal session selection.
 - `src/terminal_theme.rs` and `src/terminal_theme/` contain terminal palettes,
   custom theme persistence, and theme defaults.
 - `src/update.rs` and `src/update/` contain Windows update discovery,
@@ -62,7 +66,7 @@ function or empty directory layers.
   Local and ordinary SSH sessions are managed by TShell; tmux sessions remain
   owned by the remote tmux server.
 - The collapsible sidebar is the navigation surface. The main pane owns the
-  terminal, Explorer, or Git view and its status bar. Shared window controls
+  terminal, Explorer, Git, or Docker view and its status bar. Shared window controls
   and drag regions remain available even when the sidebar or title text is
   hidden.
 - Compute split geometry from the available pixel rectangle first, then derive

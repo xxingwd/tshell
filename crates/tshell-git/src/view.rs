@@ -1,18 +1,18 @@
 use super::git::{DiffLine, GitChange, LineKind};
-use super::git_selection::{DiffDocument, DiffSelection};
+use super::selection::{DiffDocument, DiffSelection};
 use super::*;
 use std::{ops::Range, sync::Arc};
 
-pub(super) struct DiffView {
-    pub(super) change: GitChange,
-    pub(super) content: Result<DiffContent, String>,
-    pub(super) scroll: UniformListScrollHandle,
-    pub(super) horizontal: [ScrollHandle; 3],
-    pub(super) selection: [Entity<DiffSelection>; 3],
+pub struct DiffView {
+    pub change: GitChange,
+    pub content: Result<DiffContent, String>,
+    pub scroll: UniformListScrollHandle,
+    pub horizontal: [ScrollHandle; 3],
+    pub selection: [Entity<DiffSelection>; 3],
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum DiffMode {
+pub enum DiffMode {
     Inline,
     SideBySide,
 }
@@ -65,7 +65,7 @@ fn compact_rows(changed: impl IntoIterator<Item = bool>) -> Vec<VisibleRow> {
     rows
 }
 
-pub(super) struct DiffContent {
+pub struct DiffContent {
     rows: Vec<DiffRow>,
     inline: Vec<DiffLine>,
     columns: [usize; 2],
@@ -75,7 +75,7 @@ pub(super) struct DiffContent {
     inline_emphasis: Vec<Vec<Range<usize>>>,
 }
 impl DiffContent {
-    pub(super) fn new(lines: Vec<DiffLine>) -> Self {
+    pub fn new(lines: Vec<DiffLine>) -> Self {
         let binary = lines
             .iter()
             .any(|line| line.kind == LineKind::Header && line.text.starts_with("Binary files "));
@@ -213,7 +213,7 @@ impl DiffContent {
 #[cfg(test)]
 mod tests {
     use super::{DiffContent, DiffRow, VisibleRow, compact_rows};
-    use crate::workspace::git;
+    use crate::git;
 
     #[test]
     fn compact_context_merges_nearby_changes_and_keeps_three_lines() {
@@ -382,11 +382,16 @@ impl CodeLine {
     }
 }
 
-impl AppView {
-    fn open_git_diff(&mut self, change: GitChange, window: &mut Window, cx: &mut Context<Self>) {
+impl GitView {
+    pub fn open_git_diff(
+        &mut self,
+        change: GitChange,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.git_diff_request += 1;
         let request = self.git_diff_request;
-        let host = self.hosts[self.active].config.clone();
+        let host = self.host.clone();
         self.git_diff = Some(DiffView {
             change: change.clone(),
             scroll: UniformListScrollHandle::new(),
@@ -424,18 +429,15 @@ impl AppView {
             .git_diff
             .as_ref()
             .is_some_and(|diff| diff.change.path == change.path);
-        let relative_path = change
-            .path
-            .strip_prefix(&change.root)
-            .unwrap_or(&change.path);
-        let name = relative_path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
+        let relative_path = git::relative_path(&change.path, &change.root, self.host.is_some());
+        let relative_path = tshell_host::HostPath::for_host(
+            std::path::Path::new(&relative_path),
+            self.host.is_some(),
+        );
+        let name = relative_path.name();
         let directory = relative_path
             .parent()
-            .map(|p| p.to_string_lossy().into_owned())
+            .map(|path| path.as_path_buf().to_string_lossy().into_owned())
             .unwrap_or_default();
         let status = change.label();
         let color = match status {
@@ -524,7 +526,7 @@ impl AppView {
             }))
     }
 
-    pub(super) fn git_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub fn git_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = self.palette;
         let changes = uniform_list(
             ("git-files", self.git_request),
@@ -568,7 +570,7 @@ impl AppView {
             .into_any_element()
     }
 
-    pub(super) fn set_diff_mode(&mut self, mode: DiffMode, cx: &mut Context<Self>) {
+    pub fn set_diff_mode(&mut self, mode: DiffMode, cx: &mut Context<Self>) {
         if self.git_diff_mode == mode {
             return;
         }
@@ -580,7 +582,7 @@ impl AppView {
         cx.notify();
     }
 
-    fn set_diff_compact(&mut self, compact: bool, cx: &mut Context<Self>) {
+    pub fn set_diff_compact(&mut self, compact: bool, cx: &mut Context<Self>) {
         if self.git_diff_compact == compact {
             return;
         }
@@ -865,7 +867,7 @@ impl AppView {
             .into_any_element()
     }
 
-    pub(super) fn git_surface(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub fn git_surface(&self, cx: &mut Context<Self>) -> AnyElement {
         let owner = cx.entity().downgrade();
         container_query(move |size, _, cx| {
             owner
@@ -888,11 +890,7 @@ impl AppView {
             .into_any_element();
         };
         let path = diff.change.path.clone();
-        let title = path
-            .strip_prefix(&diff.change.root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .into_owned();
+        let title = git::relative_path(&path, &diff.change.root, self.host.is_some());
         let content = match &diff.content {
             Err(message) => style::notice(IconName::CircleAlert, message.clone(), p.error)
                 .p_3()
@@ -1032,22 +1030,15 @@ impl AppView {
                             Button::new("diff-open-file")
                                 .ghost()
                                 .small()
-                                .disabled(self.file_loading.is_some())
                                 .when(narrow, |button| {
                                     button
                                         .w(px(style::CONTROL_HEIGHT))
                                         .icon(IconName::FileCode)
                                         .tooltip(crate::t!("git.open_file"))
                                 })
-                                .when(!narrow, |button| {
-                                    button.label(if self.file_loading.is_some() {
-                                        crate::t!("git.opening")
-                                    } else {
-                                        crate::t!("git.open_file")
-                                    })
-                                })
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.open_path(path.clone(), window, cx)
+                                .when(!narrow, |button| button.label(crate::t!("git.open_file")))
+                                .on_click(cx.listener(move |_this, _, _window, cx| {
+                                    cx.emit(Event::OpenFile(path.clone()))
                                 })),
                         )
                     }),

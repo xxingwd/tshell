@@ -28,6 +28,10 @@ xterm.js or OpenSSH feature parity.
   Remote files use SFTP and remote Git commands; no remote Python or mount is
   required. Inline and side-by-side diffs support text selection/copy and
   character-level change highlighting. See [Git workspace](docs/git-workspace.md).
+- An independent Docker workspace for local and saved SSH Engines, with container
+  search/Compose grouping, inspect, logs, start/stop/restart/removal and attached
+  container terminals. Engine selection is independent of terminal sessions. See
+  [Docker workspace](docs/docker-workspace.md).
 - A built-in editor for UTF-8 text files, background syntax highlighting,
   search, and conflict-aware remote saves.
 - A global SFTP transfer queue with concurrent uploads/downloads, directory
@@ -76,6 +80,11 @@ For Windows development, install:
 The repository includes the pinned Windows GPUI patch and ConPTY runtime used
 by the release build. A remote tmux host must have tmux installed. Remote
 Explorer and Git require SFTP and Git on the target host respectively.
+
+
+Docker requires a running local Engine with pipe/socket permission. SSH Docker
+requires the Docker CLI on the remote host and permission to access its Engine;
+a local Docker CLI is unnecessary. Custom local pipe/socket paths are supported.
 
 ## Build and Run
 

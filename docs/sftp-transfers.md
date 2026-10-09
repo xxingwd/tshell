@@ -4,6 +4,11 @@ SFTP connections, protocol operations and transfer IO live in `tshell-host`.
 The application owns the transfer queue and its UI; transport code receives only
 `SshConfig`, independently of host display names and tmux settings.
 
+`tshell-explorer` owns the file tree, editor, preview and file-operation state.
+Its typed transfer events are subscribed with the original stable host/session ID;
+queued transfers keep their source when another host is selected or removed.
+File clipboard operations can be shared between Explorer entities on the same host.
+
 Remote Explorer uploads and downloads use a workspace-wide in-memory queue. The queue
 survives host, session, tab, and view changes while TShell remains open. Two
 transfers may run concurrently; additional transfers wait in FIFO order.

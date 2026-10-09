@@ -65,7 +65,7 @@ impl AppView {
         ]
     }
 
-    fn palette_shortcut_item(&self, action: Shortcut) -> CommandItem {
+    fn palette_shortcut_item(&self, action: Shortcut, cx: &App) -> CommandItem {
         let Some(binding) = shortcuts::BINDINGS
             .iter()
             .find(|binding| binding.action == action)
@@ -74,7 +74,9 @@ impl AppView {
         };
         let snapshot = &self.hosts[self.active].snapshot;
         let disabled = match action {
-            Shortcut::SaveFile => self.open_file.is_none(),
+            Shortcut::SaveFile => self
+                .explorer_entity()
+                .is_none_or(|entity| entity.read(cx).open_file.is_none()),
             Shortcut::RemoveHost => self.active == 0,
             Shortcut::PreviousHost | Shortcut::NextHost => self.hosts.len() < 2,
             Shortcut::TerminalSearch
@@ -111,13 +113,13 @@ impl AppView {
             })
     }
 
-    fn palette_target_item(&self, target: &PaletteTarget) -> CommandItem {
+    fn palette_target_item(&self, target: &PaletteTarget, cx: &App) -> CommandItem {
         match target {
             PaletteTarget::NewSession => CommandItem::new()
                 .label(crate::t!("ws.new_session"))
                 .icon(IconName::Plus)
                 .keywords(["new_session"]),
-            PaletteTarget::Shortcut(action) => self.palette_shortcut_item(*action),
+            PaletteTarget::Shortcut(action) => self.palette_shortcut_item(*action, cx),
             PaletteTarget::Host(index) => {
                 let host = &self.hosts[*index];
                 let destination = host
@@ -174,7 +176,7 @@ impl AppView {
                         group
                             .targets
                             .iter()
-                            .map(|target| self.palette_target_item(target)),
+                            .map(|target| self.palette_target_item(target, cx)),
                     ),
             );
         }

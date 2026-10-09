@@ -4,6 +4,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use tshell_explorer::SessionFileState;
 
 fn check_equal_split_bounds(app: &AppView) -> anyhow::Result<()> {
     let host = &app.hosts[0];
@@ -59,7 +60,7 @@ fn check_session_switch_layout(
                 .collect::<Vec<_>>()
         })
     };
-    let original = app.read_with(cx, |app, _| app.hosts[0].snapshot.active_session.clone());
+    let original = app.read_with(cx, |app, _cx| app.hosts[0].snapshot.active_session.clone());
     let baseline = draw_bounds(None, cx)?;
     let first = draw_bounds(
         Some(Action::NewNamedSession {
@@ -72,16 +73,16 @@ fn check_session_switch_layout(
         first == baseline,
         "new session shifted on its first frame: {first:?} != {baseline:?}"
     );
-    let other = app.read_with(cx, |app, _| app.hosts[0].snapshot.active_session.clone());
+    let other = app.read_with(cx, |app, _cx| app.hosts[0].snapshot.active_session.clone());
     draw_bounds(Some(Action::Split(SplitAxis::Horizontal)), cx)?;
     draw_bounds(Some(Action::Split(SplitAxis::Vertical)), cx)?;
     let grouped = draw_bounds(None, cx)?;
-    let first_tab = app.read_with(cx, |app, _| {
+    let first_tab = app.read_with(cx, |app, _cx| {
         app.hosts[0].snapshot.window().unwrap().id.clone()
     });
     let first = draw_bounds(Some(Action::NewWindow), cx)?;
     anyhow::ensure!(first == baseline, "new tab shifted on its first frame");
-    let second_tab = app.read_with(cx, |app, _| {
+    let second_tab = app.read_with(cx, |app, _cx| {
         app.hosts[0].snapshot.window().unwrap().id.clone()
     });
     for reset_viewport in [false, true] {
@@ -92,7 +93,7 @@ fn check_session_switch_layout(
             (Action::SelectWindow(second_tab.clone()), &baseline),
         ] {
             if reset_viewport {
-                app.update(cx, |app, _| app.hosts[0].viewport = None);
+                app.update(cx, |app, _cx| app.hosts[0].viewport = None);
             }
             let first = draw_bounds(Some(action), cx)?;
             let settled = draw_bounds(None, cx)?;
@@ -134,7 +135,7 @@ pub(crate) fn run_ui_check(output: PathBuf) -> bool {
             "language selector", "session deletion persists and preserves other sessions", "host disconnect preserves configuration and other hosts",
             "new tab has no dialog", "session file state", "Markdown and HTML preview", "session directory and optional name", "session groups with compact tab separators", "named session creation and previous tab restoration",
             "SSH forwarding dialog dark and narrow light layout", "forwarding dialog X closes after cancelling or saving Add", "transfer panel dark and light layout", "transfer header drag and viewport constraints", "transfer launcher collapse and expansion", "individual transfer cancellation and clearing", "transfer hover retention and automatic collapse",
-            "Git raw Unicode/tab selection in both layouts", "Git word and line selection", "Git off-screen selection anchor", "terminal search focus, navigation and live output", "terminal search dark and narrow light layouts", "Ctrl-click links and unchanged ordinary TUI mouse reports", "terminal file link line/column and draft preservation", "terminal directory link Explorer root", "notification pane targeting and closed identity"
+            "Git raw Unicode/tab selection in both layouts", "Git word and line selection", "Git off-screen selection anchor", "terminal search focus, navigation and live output", "terminal search dark and narrow light layouts", "Ctrl-click links and unchanged ordinary TUI mouse reports", "terminal file link line/column and draft preservation", "terminal directory link Explorer root", "notification pane targeting and closed identity", "Docker 10k container list and bounded logs in dark/light narrow layouts", "Docker target independence with no terminal sessions and late response rejection"
                         ]})
                     }
                     Err(error) => {
@@ -181,14 +182,14 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         root.view().clone().downcast::<AppView>().unwrap()
     })?;
     anyhow::ensure!(
-        app.read_with(cx, |app, _| app.sidebar_opacity) == 1.,
+        app.read_with(cx, |app, _cx| app.sidebar_opacity) == 1.,
         "sidebar did not default to opaque"
     );
     anyhow::ensure!(
-        app.read_with(cx, |app, _| app.settings_ui.page) == 0,
+        app.read_with(cx, |app, _cx| app.settings_ui.page) == 0,
         "appearance is not the initial settings page"
     );
-    app.read_with(cx, |app, _| {
+    app.read_with(cx, |app, _cx| {
         anyhow::ensure!(
             app.background_appearance() == WindowBackgroundAppearance::Opaque,
             "opaque sidebar enabled the glass backdrop"
@@ -203,34 +204,37 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         Ok(())
     };
     draw(cx)?;
+    cx.update_window(handle.into(), |_, window, cx| {
+        app.update(cx, |app, cx| app.check_initialize_tools(window, cx))
+    })?;
     app.update(cx, |app, cx| {
         let session = app.hosts[app.active].snapshot.session().unwrap().clone();
-        let key = (app.active, session.id.clone());
         let before = app.hosts[app.active].snapshot.clone();
-        app.file_states.insert(
-            key.clone(),
-            SessionFileState {
-                dirty: true,
-                ..Default::default()
-            },
+        app.explorer_entity()
+            .unwrap()
+            .update(cx, |explorer, _| explorer.editor_dirty = true);
+        assert!(
+            app.closes_session_with_unsaved_files(&Action::RemoveSession(session.id.clone()), cx)
         );
-        assert!(app.closes_session_with_unsaved_files(&Action::RemoveSession(session.id.clone())));
         if session.windows.len() == 1 {
-            assert!(app.closes_session_with_unsaved_files(&Action::CloseWindow));
+            assert!(app.closes_session_with_unsaved_files(&Action::CloseWindow, cx));
             app.act(Action::CloseWindow, cx);
             assert_eq!(app.hosts[app.active].snapshot, before);
             if session.windows[0].panes.len() == 1 {
-                assert!(app.closes_session_with_unsaved_files(&Action::ClosePane));
+                assert!(app.closes_session_with_unsaved_files(&Action::ClosePane, cx));
                 app.act(Action::ClosePane, cx);
                 assert_eq!(app.hosts[app.active].snapshot, before);
             }
         }
         app.act(Action::RemoveSession(session.id), cx);
         assert_eq!(app.hosts[app.active].snapshot, before);
-        app.file_states.remove(&key);
+        app.explorer_entity()
+            .unwrap()
+            .update(cx, |explorer, _| explorer.editor_dirty = false);
         app.message = None;
         let index = app.hosts.len();
         let config = HostDefinition {
+            id: Default::default(),
             ssh: tshell_host::SshConfig {
                 destination: "guard.test".into(),
                 user: "test".into(),
@@ -252,11 +256,13 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             collapsed_sessions: BTreeSet::new(),
             viewport: None,
         });
-        let file_key = (index, "session".to_string());
-        app.file_states.insert(
+        let file_key = (app.hosts[index].identity(), "session".to_string());
+        let explorer = app.explorer_entity().unwrap();
+        explorer.update(cx, |explorer, _| explorer.editor_dirty = true);
+        app.workspaces.insert(
             file_key.clone(),
-            SessionFileState {
-                dirty: true,
+            SessionWorkspace {
+                explorer: Some(explorer.clone()),
                 ..Default::default()
             },
         );
@@ -265,17 +271,17 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             app.hosts.len() == index + 1,
             "unsaved host files were discarded"
         );
-        app.file_states.get_mut(&file_key).unwrap().dirty = false;
-        let generation = app.file_request;
+        explorer.update(cx, |explorer, _| explorer.editor_dirty = false);
+        let generation = app.navigation_request;
         anyhow::ensure!(app.prepare_host_connection_change(index, cx));
         anyhow::ensure!(
-            !app.file_states.contains_key(&file_key) && app.file_request == generation,
+            !app.workspaces.contains_key(&file_key) && app.navigation_request == generation,
             "inactive host change cancelled active file requests"
         );
         app.remove_host(index, cx);
         anyhow::ensure!(app.hosts.len() == index, "saved host was not removed");
         anyhow::ensure!(
-            app.file_request == generation,
+            app.navigation_request == generation,
             "inactive host removal cancelled active file requests"
         );
         app.message = None;
@@ -309,7 +315,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     })?;
     draw(cx)?;
     // Exercise the async wake path without calling AppView::sync manually.
-    let screen = app.read_with(cx, |app, _| {
+    let screen = app.read_with(cx, |app, _cx| {
         let host = &app.hosts[0];
         host.backend
             .as_ref()
@@ -324,7 +330,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     screen.remote_output(b"\x1b]2;Event-driven title\x07");
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
-        let ready = app.read_with(cx, |app, _| {
+        let ready = app.read_with(cx, |app, _cx| {
             app.hosts[0]
                 .snapshot
                 .window()
@@ -381,11 +387,11 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         );
         Ok::<_, anyhow::Error>(())
     })??;
-    let viewport = app.read_with(cx, |app, _| app.hosts[0].viewport.clone());
+    let viewport = app.read_with(cx, |app, _cx| app.hosts[0].viewport.clone());
     for collapsed in [true, false] {
         cx.update_window(handle.into(), |_, window, cx| {
             window.dispatch_keystroke(Keystroke::parse("ctrl-b").unwrap(), cx);
-            app.read_with(cx, |app, _| {
+            app.read_with(cx, |app, _cx| {
                 anyhow::ensure!(
                     app.sidebar_collapsed == collapsed,
                     "Ctrl+B did not toggle sidebar"
@@ -422,7 +428,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             for _ in 0..2 {
                 window.dispatch_keystroke(Keystroke::parse("ctrl-shift-z").unwrap(), cx);
             }
-            app.read_with(cx, |app, _| {
+            app.read_with(cx, |app, _cx| {
                 anyhow::ensure!(
                     !app.zen && app.sidebar_collapsed == collapsed,
                     "Zen changed sidebar preference"
@@ -439,7 +445,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         });
     })?;
     draw(cx)?;
-    app.read_with(cx, |app, _| {
+    app.read_with(cx, |app, _cx| {
         anyhow::ensure!(
             app.hosts[0].snapshot.window().unwrap().panes.len() == 2,
             "split terminal did not enter grouped sidebar state"
@@ -451,9 +457,9 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             window.dispatch_keystroke(Keystroke::parse(key).unwrap(), cx);
         })?;
         draw(cx)?;
-        app.read_with(cx, |app, _| check_equal_split_bounds(app))?;
+        app.read_with(cx, |app, _cx| check_equal_split_bounds(app))?;
     }
-    app.read_with(cx, |app, _| {
+    app.read_with(cx, |app, _cx| {
         let window = app.hosts[0].snapshot.window().unwrap();
         anyhow::ensure!(window.panes.len() == 5, "split shortcuts lost a pane");
         let columns: BTreeSet<_> = window.panes.iter().map(|pane| pane.x).collect();
@@ -465,9 +471,9 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             app.update(cx, |app, cx| app.act(Action::ClosePane, cx));
         })?;
         draw(cx)?;
-        app.read_with(cx, |app, _| check_equal_split_bounds(app))?;
+        app.read_with(cx, |app, _cx| check_equal_split_bounds(app))?;
     }
-    app.read_with(cx, |app, _| {
+    app.read_with(cx, |app, _cx| {
         anyhow::ensure!(
             app.hosts[0].snapshot.window().unwrap().panes.len() == 1,
             "closing split terminal did not restore flat sidebar state"
@@ -486,38 +492,44 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
                 removed: 200,
             }),
         };
-        app.workspace_mode = WorkspaceMode::Git;
-        app.git_error = None;
-        app.git_changes = (0..10_000)
-            .map(|index| {
-                let mut entry = change.clone();
-                entry.path = app.cwd.join(format!("src/file-{index:05}.rs"));
-                entry
-            })
-            .collect();
-        app.git_diff = Some(git_view::DiffView {
-            change,
-            scroll: UniformListScrollHandle::new(),
-            horizontal: std::array::from_fn(|_| ScrollHandle::new()),
-            selection: std::array::from_fn(|_| git_selection::DiffSelection::new(cx)),
-            content: Ok(git_view::DiffContent::new(
-                (0..10_000)
-                    .map(|index| git::DiffLine {
-                        old: (index % 2 == 0).then_some(index + 1),
-                        new: (index % 2 != 0).then_some(index + 1),
-                        kind: if index % 2 == 0 {
-                            git::LineKind::Removed
-                        } else {
-                            git::LineKind::Added
-                        },
-                        text: format!(
-                            "{}{}",
-                            if index % 2 == 0 { '-' } else { '+' },
-                            "content ".repeat(40)
-                        ),
-                    })
-                    .collect(),
-            )),
+        app.page = Page::Git;
+        app.git_entity().unwrap().update(cx, |git, _cx| {
+            git.git_error = None;
+        });
+        app.git_entity().unwrap().update(cx, |git, _cx| {
+            git.git_changes = (0..10_000)
+                .map(|index| {
+                    let mut entry = change.clone();
+                    entry.path = app.cwd.join(format!("src/file-{index:05}.rs"));
+                    entry
+                })
+                .collect();
+        });
+        app.git_entity().unwrap().update(cx, |git, cx| {
+            git.git_diff = Some(git_view::DiffView {
+                change,
+                scroll: UniformListScrollHandle::new(),
+                horizontal: std::array::from_fn(|_| ScrollHandle::new()),
+                selection: std::array::from_fn(|_| git_selection::DiffSelection::new(cx)),
+                content: Ok(git_view::DiffContent::new(
+                    (0..10_000)
+                        .map(|index| git::DiffLine {
+                            old: (index % 2 == 0).then_some(index + 1),
+                            new: (index % 2 != 0).then_some(index + 1),
+                            kind: if index % 2 == 0 {
+                                git::LineKind::Removed
+                            } else {
+                                git::LineKind::Added
+                            },
+                            text: format!(
+                                "{}{}",
+                                if index % 2 == 0 { '-' } else { '+' },
+                                "content ".repeat(40)
+                            ),
+                        })
+                        .collect(),
+                )),
+            });
         });
         cx.notify();
     });
@@ -535,7 +547,8 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         )?,
     )?;
     app.update(cx, |app, cx| {
-        app.git_diff
+        app.check_git(cx)
+            .git_diff
             .as_ref()
             .unwrap()
             .scroll
@@ -543,9 +556,10 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         cx.notify();
     });
     draw(cx)?;
-    app.read_with(cx, |app, _| {
+    app.read_with(cx, |app, cx| {
         anyhow::ensure!(
-            app.git_diff
+            app.check_git(cx)
+                .git_diff
                 .as_ref()
                 .unwrap()
                 .scroll
@@ -580,8 +594,8 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         for pane in pane_indices {
             let viewport =
                 cx.update_window(handle.into(), |_, window, _| window.viewport_size())?;
-            let position = app.read_with(cx, |app, _| {
-                app.git_diff.as_ref().unwrap().horizontal[pane]
+            let position = app.read_with(cx, |app, cx| {
+                app.check_git(cx).git_diff.as_ref().unwrap().horizontal[pane]
                     .bounds()
                     .center()
             });
@@ -608,8 +622,8 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
                 })?;
                 draw(cx)?;
             }
-            let vertical = app.read_with(cx, |app, _| {
-                let diff = app.git_diff.as_ref().unwrap();
+            let vertical = app.read_with(cx, |app, cx| {
+                let diff = app.check_git(cx).git_diff.as_ref().unwrap();
                 anyhow::ensure!(diff.horizontal[pane].offset().x == px(0.), "vertical wheel caused horizontal drift");
                 let vertical = diff.scroll.0.borrow().base_handle.offset().y;
                 anyhow::ensure!(vertical < px(0.), "vertical wheel did not scroll diff: viewport={viewport:?}, pane={pane}, position={position:?}, bounds={:?}, list={:?}, size={:?}", diff.horizontal[pane].bounds(), diff.scroll.0.borrow().base_handle.bounds(), diff.scroll.0.borrow().last_item_size);
@@ -626,8 +640,8 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
                 );
             })?;
             draw(cx)?;
-            app.read_with(cx, |app, _| {
-                let diff = app.git_diff.as_ref().unwrap();
+            app.read_with(cx, |app, cx| {
+                let diff = app.check_git(cx).git_diff.as_ref().unwrap();
                 anyhow::ensure!(
                     diff.horizontal[pane].offset().x < px(0.),
                     "horizontal wheel did not scroll diff"
@@ -648,7 +662,9 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         });
     })?;
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while app.read_with(cx, |app, _| app.file_loading.is_some()) {
+    while app.read_with(cx, |app, cx| {
+        app.navigation_loading.is_some() || app.check_explorer(cx).file_loading.is_some()
+    }) {
         anyhow::ensure!(
             std::time::Instant::now() < deadline,
             "opening file from Git timed out"
@@ -661,32 +677,43 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     cx.update_window(handle.into(), |_, window, cx| {
         app.update(cx, |app, cx| {
             anyhow::ensure!(
-                app.workspace_mode == WorkspaceMode::Files
-                    && app.open_file.as_ref() == Some(&opened_from_git),
+                app.page == Page::Explorer
+                    && app.check_explorer(cx).open_file.as_ref() == Some(&opened_from_git),
                 "opening file from Git did not switch to editor"
             );
-            app.file_editor.update(cx, |editor, cx| {
-                editor.set_value("unsaved edit", window, cx)
+            app.check_explorer(cx)
+                .file_editor
+                .clone()
+                .update(cx, |editor, cx| {
+                    editor.set_value("unsaved edit", window, cx)
+                });
+            app.explorer_entity().unwrap().update(cx, |explorer, _cx| {
+                explorer.editor_dirty = true;
             });
-            app.editor_dirty = true;
-            app.workspace_mode = WorkspaceMode::Git;
+            app.page = Page::Git;
             app.open_path(opened_from_git.clone(), window, cx);
             anyhow::ensure!(
-                app.workspace_mode == WorkspaceMode::Files && app.editor_dirty,
+                app.page == Page::Explorer && app.check_explorer(cx).editor_dirty,
                 "returning to the same file lost unsaved changes"
             );
             anyhow::ensure!(
-                app.file_editor.read(cx).value().as_ref() == "unsaved edit",
+                app.check_explorer(cx).file_editor.read(cx).value().as_ref() == "unsaved edit",
                 "open file reloaded the dirty editor"
             );
-            app.pending_file_state = Some(SessionFileState::default());
+            app.explorer_entity().unwrap().update(cx, |explorer, _cx| {
+                explorer.pending_file_state = Some(SessionFileState::default());
+            });
             Ok::<_, anyhow::Error>(())
         })
     })??;
     app.update(cx, |app, cx| {
-        app.git_diff = None;
-        app.git_changes.clear();
-        app.workspace_mode = WorkspaceMode::Terminal;
+        app.git_entity().unwrap().update(cx, |git, _cx| {
+            git.git_diff = None;
+        });
+        app.git_entity()
+            .unwrap()
+            .update(cx, |git, _| git.git_changes.clear());
+        app.page = Page::Terminal;
         cx.notify();
     });
     cx.update_window(handle.into(), |_, window, cx| {
@@ -710,7 +737,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
                 cx,
             );
             anyhow::ensure!(
-                app.workspace_mode == WorkspaceMode::Files,
+                app.page == Page::Explorer,
                 "file explorer command did not switch workspace"
             );
             Ok::<_, anyhow::Error>(())
@@ -723,7 +750,9 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     })??;
     draw(cx)?;
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while app.read_with(cx, |app, _| app.file_loading.is_some()) {
+    while app.read_with(cx, |app, cx| {
+        app.navigation_loading.is_some() || app.check_explorer(cx).file_loading.is_some()
+    }) {
         anyhow::ensure!(
             std::time::Instant::now() < deadline,
             "tool root lookup timed out"
@@ -735,16 +764,20 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     // Use the tree's expansion event, including the same path used by keyboard reveal.
     app.update(cx, |app, cx| {
         let directory = workbench::path_id(&app.cwd.join("src"));
-        assert!(!app.tree_loaded.contains(&directory));
-        app.file_tree.update(cx, |tree, cx| {
-            let index = tree.index_of(&directory.into()).expect("src directory");
-            let child = tree.entry(index).unwrap().item().children[0].id.clone();
-            tree.reveal_item(&child, gpui::ScrollStrategy::Top, cx);
-        });
+        assert!(!app.check_explorer(cx).tree_loaded.contains(&directory));
+        app.check_explorer(cx)
+            .file_tree
+            .clone()
+            .update(cx, |tree, cx| {
+                let index = tree.index_of(&directory.into()).expect("src directory");
+                let child = tree.entry(index).unwrap().item().children[0].id.clone();
+                tree.reveal_item(&child, gpui::ScrollStrategy::Top, cx);
+            });
     });
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while !app.read_with(cx, |app, _| {
-        app.tree_loaded
+    while !app.read_with(cx, |app, cx| {
+        app.check_explorer(cx)
+            .tree_loaded
             .contains(&workbench::path_id(&app.cwd.join("src")))
     }) {
         anyhow::ensure!(
@@ -757,9 +790,16 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     }
     app.read_with(cx, |app, cx| {
         let child = workbench::path_id(&app.cwd.join("src").join("workspace.rs"));
-        assert!(app.file_tree.read(cx).index_of(&child.into()).is_some());
         assert!(
-            !app.tree_loaded
+            app.check_explorer(cx)
+                .file_tree
+                .read(cx)
+                .index_of(&child.into())
+                .is_some()
+        );
+        assert!(
+            !app.check_explorer(cx)
+                .tree_loaded
                 .contains(&workbench::path_id(&app.cwd.join("src").join("workspace")))
         );
     });
@@ -770,7 +810,9 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         });
     })?;
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
-    while app.read_with(cx, |app, _| app.file_loading.is_some()) {
+    while app.read_with(cx, |app, cx| {
+        app.navigation_loading.is_some() || app.check_explorer(cx).file_loading.is_some()
+    }) {
         anyhow::ensure!(std::time::Instant::now() < deadline, "file read timed out");
         cx.background_executor()
             .timer(Duration::from_millis(25))
@@ -781,16 +823,25 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         app.update(cx, |app, cx| {
             let cargo_toml = app.cwd.join("Cargo.toml");
             anyhow::ensure!(
-                app.open_file.as_ref() == Some(&cargo_toml),
+                app.check_explorer(cx).open_file.as_ref() == Some(&cargo_toml),
                 "file did not open"
             );
-            anyhow::ensure!(app.editor_language == "toml", "file language not detected");
             anyhow::ensure!(
-                app.file_editor.read(cx).value().contains("[package]"),
+                app.check_explorer(cx).editor_language == "toml",
+                "file language not detected"
+            );
+            anyhow::ensure!(
+                app.check_explorer(cx)
+                    .file_editor
+                    .read(cx)
+                    .value()
+                    .contains("[package]"),
                 "editor did not receive file contents"
             );
             window.push_notification(Notification::success("UI check"), cx);
-            app.file_editor
+            app.check_explorer(cx)
+                .file_editor
+                .clone()
                 .update(cx, |editor, cx| editor.open_search(false, cx));
             Ok::<_, anyhow::Error>(())
         })
@@ -799,17 +850,21 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     cx.update_window(handle.into(), |_, window, cx| {
         app.update(cx, |app, cx| {
             anyhow::ensure!(
-                app.editor_search
+                app.check_explorer(cx)
+                    .editor_search
                     .read(cx)
                     .focus_handle(cx)
                     .is_focused(window),
                 "editor search focus missing"
             );
-            app.file_editor.update(cx, |editor, cx| {
-                editor.set_search_query("package", true, cx);
-                assert!(!editor.search_session().matcher.is_empty());
-                editor.close_search(cx);
-            });
+            app.check_explorer(cx)
+                .file_editor
+                .clone()
+                .update(cx, |editor, cx| {
+                    editor.set_search_query("package", true, cx);
+                    assert!(!editor.search_session().matcher.is_empty());
+                    editor.close_search(cx);
+                });
             Ok::<_, anyhow::Error>(())
         })
     })??;
@@ -820,16 +875,24 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         });
     })?;
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
-    while app.read_with(cx, |app, _| app.file_loading.is_some()) {
+    while app.read_with(cx, |app, cx| {
+        app.navigation_loading.is_some() || app.check_explorer(cx).file_loading.is_some()
+    }) {
         anyhow::ensure!(std::time::Instant::now() < deadline, "PNG read timed out");
         cx.background_executor()
             .timer(Duration::from_millis(25))
             .await;
     }
     draw(cx)?;
-    app.read_with(cx, |app, _| {
-        anyhow::ensure!(app.image_preview.is_some(), "PNG preview did not open");
-        anyhow::ensure!(!app.editor_dirty, "PNG preview marked the editor dirty");
+    app.read_with(cx, |app, cx| {
+        anyhow::ensure!(
+            app.check_explorer(cx).image_preview.is_some(),
+            "PNG preview did not open"
+        );
+        anyhow::ensure!(
+            !app.check_explorer(cx).editor_dirty,
+            "PNG preview marked the editor dirty"
+        );
         Ok::<_, anyhow::Error>(())
     })?;
     cx.update_window(handle.into(), |_, window, cx| {
@@ -838,7 +901,9 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         });
     })?;
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
-    while app.read_with(cx, |app, _| app.file_loading.is_some()) {
+    while app.read_with(cx, |app, cx| {
+        app.navigation_loading.is_some() || app.check_explorer(cx).file_loading.is_some()
+    }) {
         anyhow::ensure!(
             std::time::Instant::now() < deadline,
             "Markdown read timed out"
@@ -848,24 +913,28 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             .await;
     }
     draw(cx)?;
-    app.read_with(cx, |app, _| {
-        anyhow::ensure!(app.preview_mode, "Markdown preview did not open");
+    app.read_with(cx, |app, cx| {
         anyhow::ensure!(
-            app.file_preview
+            app.check_explorer(cx).preview_mode,
+            "Markdown preview did not open"
+        );
+        anyhow::ensure!(
+            app.check_explorer(cx)
+                .file_preview
                 .as_ref()
                 .and_then(|document| document.markdown_source())
                 .is_some_and(|source| source.starts_with("# TShell")),
             "Markdown preview did not retain the source"
         );
         anyhow::ensure!(
-            !app.editor_dirty,
+            !app.check_explorer(cx).editor_dirty,
             "Markdown preview marked the editor dirty"
         );
         Ok::<_, anyhow::Error>(())
     })?;
     #[cfg(windows)]
-    app.read_with(cx, |app, _| {
-        if let Some(web) = &app.web_preview {
+    app.read_with(cx, |app, cx| {
+        if let Some(web) = &app.check_explorer(cx).web_preview {
             anyhow::ensure!(!web.is_visible(), "WebView opened for Markdown");
         }
         Ok::<_, anyhow::Error>(())
@@ -888,32 +957,43 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         "HTML fallback preview did not filter active content"
     );
     app.update(cx, |app, cx| {
-        app.file_preview = Some(html);
-        app.editor_language = "html".into();
+        app.explorer_entity().unwrap().update(cx, |explorer, _cx| {
+            explorer.file_preview = Some(html);
+        });
+        app.explorer_entity().unwrap().update(cx, |explorer, _cx| {
+            explorer.editor_language = "html".into();
+        });
         cx.notify();
     });
     draw(cx)?;
     #[cfg(windows)]
-    app.read_with(cx, |app, _| {
+    app.read_with(cx, |app, cx| {
         if wry::webview_version().is_ok() {
             anyhow::ensure!(
-                app.web_preview.as_ref().is_some_and(|web| {
-                    web.is_visible() && web.html().contains("<h1>Safe</h1>")
-                }),
+                app.check_explorer(cx)
+                    .web_preview
+                    .as_ref()
+                    .is_some_and(|web| {
+                        web.is_visible() && web.html().contains("<h1>Safe</h1>")
+                    }),
                 "WebView did not load the HTML preview"
             );
         }
         Ok::<_, anyhow::Error>(())
     })?;
     app.update(cx, |app, cx| {
-        app.file_preview = Some(preview::parse("markdown", "# Back to Markdown"));
-        app.editor_language = "markdown".into();
+        app.explorer_entity().unwrap().update(cx, |explorer, _cx| {
+            explorer.file_preview = Some(preview::parse("markdown", "# Back to Markdown"));
+        });
+        app.explorer_entity().unwrap().update(cx, |explorer, _cx| {
+            explorer.editor_language = "markdown".into();
+        });
         cx.notify();
     });
     draw(cx)?;
     #[cfg(windows)]
-    app.read_with(cx, |app, _| {
-        if let Some(web) = &app.web_preview {
+    app.read_with(cx, |app, cx| {
+        if let Some(web) = &app.check_explorer(cx).web_preview {
             anyhow::ensure!(!web.is_visible(), "WebView stayed visible over Markdown");
         }
         Ok::<_, anyhow::Error>(())
@@ -921,8 +1001,8 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     app.update(cx, |app, cx| app.show_terminal(cx));
     draw(cx)?;
     #[cfg(windows)]
-    app.read_with(cx, |app, _| {
-        if let Some(web) = &app.web_preview {
+    app.read_with(cx, |app, cx| {
+        if let Some(web) = &app.check_explorer(cx).web_preview {
             anyhow::ensure!(
                 !web.is_visible(),
                 "WebView stayed visible over the terminal"
@@ -1054,7 +1134,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         cx.notify();
     });
     draw(cx)?;
-    app.read_with(cx, |app, _| {
+    app.read_with(cx, |app, _cx| {
         anyhow::ensure!(
             app.settings && app.settings_ui.page == 6,
             "key settings missing"
@@ -1068,19 +1148,19 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             cx.notify();
         });
         draw(cx)?;
-        app.read_with(cx, |app, _| {
+        app.read_with(cx, |app, cx| {
             anyhow::ensure!(
                 matches!(app.updater.state, crate::update::State::Disabled),
                 "debug builds must not check for updates"
             );
             anyhow::ensure!(
-                !app.update_has_unsaved_files(),
+                !app.update_has_unsaved_files(cx),
                 "clean workspace should allow update restart"
             );
             Ok::<_, anyhow::Error>(())
         })?;
     }
-    app.read_with(cx, |app, _| {
+    app.read_with(cx, |app, _cx| {
         anyhow::ensure!(
             app.hosts[0].viewport == viewport,
             "settings changed terminal viewport"
@@ -1116,7 +1196,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         "SSH dialog did not cancel over settings"
     );
     anyhow::ensure!(
-        app.read_with(cx, |app, _| app.settings),
+        app.read_with(cx, |app, _cx| app.settings),
         "SSH dialog closed settings"
     );
     cx.update_window(handle.into(), |_, window, cx| {
@@ -1179,7 +1259,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             }
             app.show_settings(window, cx);
             anyhow::ensure!(
-                app.settings && app.workspace_mode == WorkspaceMode::Terminal,
+                app.settings && app.page == Page::Terminal,
                 "settings changed the workspace mode"
             );
             Ok::<_, anyhow::Error>(())
@@ -1439,7 +1519,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         });
     })?;
     draw(cx)?;
-    let theme_ids = app.read_with(cx, |app, _| {
+    let theme_ids = app.read_with(cx, |app, _cx| {
         app.themes
             .themes
             .iter()
@@ -1447,7 +1527,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             .collect::<Vec<_>>()
     });
     for id in theme_ids {
-        let expected = app.read_with(cx, |app, _| app.themes.selected(&id).unwrap().colors());
+        let expected = app.read_with(cx, |app, _cx| app.themes.selected(&id).unwrap().colors());
         cx.update_window(handle.into(), |_, window, cx| {
             app.update(cx, |app, cx| {
                 app.set_appearance(
@@ -1623,7 +1703,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     draw(cx)?;
     let theme_path = AppView::theme_path();
     let original = std::fs::read(&theme_path)?;
-    let first_id = app.read_with(cx, |app, _| app.themes.themes[0].id.clone());
+    let first_id = app.read_with(cx, |app, _cx| app.themes.themes[0].id.clone());
     let mut edited_file: serde_json::Value = serde_json::from_slice(&original)?;
     edited_file["themes"][0]["ink"] = "#123456".into();
     edited_file["themes"][0]["interface"]["hover"] = "#E0E0E0".into();
@@ -1651,7 +1731,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         })
     })??;
     draw(cx)?;
-    let active_text = app.read_with(cx, |app, _| app.terminal_palette.text);
+    let active_text = app.read_with(cx, |app, _cx| app.terminal_palette.text);
     std::fs::write(&theme_path, b"{invalid")?;
     cx.update_window(handle.into(), |_, window, cx| {
         app.update(cx, |app, cx| {
@@ -1785,10 +1865,10 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         anyhow::ensure!(
             !window.has_active_dialog(cx)
                 && !app.read(cx).settings
-                && app.read(cx).workspace_mode == WorkspaceMode::Terminal,
+                && app.read(cx).page == Page::Terminal,
             "Escape did not return to the workspace"
         );
-        app.read_with(cx, |app, _| {
+        app.read_with(cx, |app, _cx| {
             let prefs = Preferences::load();
             anyhow::ensure!(prefs.font_family == app.font_family, "font not saved");
             anyhow::ensure!(prefs.ligatures, "ligature preference not saved");
@@ -1911,6 +1991,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         std::env::var("TSHELL_REMOTE_UI_ROOT"),
     ) {
         let host = HostDefinition {
+            id: Default::default(),
             ssh: tshell_host::SshConfig {
                 destination,
                 user: String::new(),
@@ -1961,7 +2042,9 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             });
         })?;
         let deadline = std::time::Instant::now() + Duration::from_secs(25);
-        while app.read_with(cx, |app, _| app.file_loading.is_some()) {
+        while app.read_with(cx, |app, cx| {
+            app.navigation_loading.is_some() || app.check_explorer(cx).file_loading.is_some()
+        }) {
             anyhow::ensure!(
                 std::time::Instant::now() < deadline,
                 "remote tree timed out"
@@ -1975,7 +2058,9 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             app.update(cx, |app, cx| app.open_path(path.clone(), window, cx));
         })?;
         let deadline = std::time::Instant::now() + Duration::from_secs(25);
-        while app.read_with(cx, |app, _| app.file_loading.is_some()) {
+        while app.read_with(cx, |app, cx| {
+            app.navigation_loading.is_some() || app.check_explorer(cx).file_loading.is_some()
+        }) {
             anyhow::ensure!(
                 std::time::Instant::now() < deadline,
                 "remote read timed out"
@@ -1988,22 +2073,29 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         cx.update_window(handle.into(), |_, window, cx| {
             app.update(cx, |app, cx| {
                 anyhow::ensure!(
-                    app.open_file.as_ref() == Some(&path),
+                    app.check_explorer(cx).open_file.as_ref() == Some(&path),
                     "remote file not opened"
                 );
                 anyhow::ensure!(
-                    app.file_editor.read(cx).value().contains("fn main"),
+                    app.check_explorer(cx)
+                        .file_editor
+                        .read(cx)
+                        .value()
+                        .contains("fn main"),
                     "remote contents missing"
                 );
-                app.file_editor.update(cx, |editor, cx| {
-                    editor.set_value("fn main() { /* remote UI saved */ }", window, cx)
-                });
+                app.check_explorer(cx)
+                    .file_editor
+                    .clone()
+                    .update(cx, |editor, cx| {
+                        editor.set_value("fn main() { /* remote UI saved */ }", window, cx)
+                    });
                 app.save_open_file(window, cx);
                 Ok::<_, anyhow::Error>(())
             })
         })??;
         let deadline = std::time::Instant::now() + Duration::from_secs(25);
-        while app.read_with(cx, |app, _| app.file_saving) {
+        while app.read_with(cx, |app, cx| app.check_explorer(cx).file_saving) {
             anyhow::ensure!(
                 std::time::Instant::now() < deadline,
                 "remote save timed out"
@@ -2025,22 +2117,25 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         );
         app.update(cx, |app, cx| app.show_git(cx));
         let deadline = std::time::Instant::now() + Duration::from_secs(15);
-        while app.read_with(cx, |app, _| {
-            app.git_error.as_deref() == Some(crate::t!("git.loading").as_ref())
+        while app.read_with(cx, |app, cx| {
+            app.check_git(cx).git_error.as_deref() == Some(crate::t!("git.loading").as_ref())
         }) {
             anyhow::ensure!(std::time::Instant::now() < deadline, "remote Git timed out");
             cx.background_executor()
                 .timer(Duration::from_millis(25))
                 .await;
         }
-        app.read_with(cx, |app, _| {
+        app.read_with(cx, |app, cx| {
             anyhow::ensure!(
-                app.git_error.is_none(),
+                app.check_git(cx).git_error.is_none(),
                 "remote Git failed: {:?}",
-                app.git_error
+                app.check_git(cx).git_error
             );
             anyhow::ensure!(
-                app.git_changes.iter().any(|change| change.path == path),
+                app.check_git(cx)
+                    .git_changes
+                    .iter()
+                    .any(|change| change.path == path),
                 "remote Git path did not resolve to the file"
             );
             Ok::<_, anyhow::Error>(())
@@ -2058,7 +2153,8 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             .await;
         draw(cx)?;
         anyhow::ensure!(
-            app.read_with(cx, |app, _| app
+            app.read_with(cx, |app, cx| app
+                .check_explorer(cx)
                 .open_file
                 .as_ref()
                 .is_some_and(|path| path.ends_with("Cargo.toml"))),
@@ -2069,6 +2165,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         app.update(cx, |app, cx| {
             app.active = 0;
             app.hosts[0].config = Some(HostDefinition {
+                id: Default::default(),
                 ssh: tshell_host::SshConfig {
                     destination,
                     user: String::new(),
@@ -2084,7 +2181,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             app.sync_metrics(cx);
         });
         let deadline = std::time::Instant::now() + Duration::from_secs(20);
-        while app.read_with(cx, |app, _| app.metrics.is_none()) {
+        while app.read_with(cx, |app, _cx| app.metrics.is_none()) {
             anyhow::ensure!(
                 std::time::Instant::now() < deadline,
                 "host metrics timed out"
@@ -2093,7 +2190,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
                 .timer(Duration::from_millis(25))
                 .await;
         }
-        app.read_with(cx, |app, _| -> anyhow::Result<()> {
+        app.read_with(cx, |app, _cx| -> anyhow::Result<()> {
             anyhow::ensure!(
                 matches!(&app.metrics, Some(Ok(_))),
                 "host metrics unavailable"
@@ -2157,9 +2254,9 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         .timer(Duration::from_millis(25))
         .await;
     draw(cx)?;
-    app.read_with(cx, |app, _| {
+    app.read_with(cx, |app, _cx| {
         anyhow::ensure!(
-            !app.command_palette && app.workspace_mode == WorkspaceMode::Files,
+            !app.command_palette && app.page == Page::Explorer,
             "filtered arrow/Enter command selected the wrong original target"
         );
         Ok::<_, anyhow::Error>(())
@@ -2195,7 +2292,8 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     })??;
     let launcher_dir = Preferences::path().with_file_name("launcher-search-directory");
     std::fs::create_dir_all(&launcher_dir)?;
-    let original_session = app.read_with(cx, |app, _| app.hosts[0].snapshot.active_session.clone());
+    let original_session =
+        app.read_with(cx, |app, _cx| app.hosts[0].snapshot.active_session.clone());
     app.update(cx, |app, cx| {
         app.switch_host(0, cx);
         app.act(
@@ -2207,7 +2305,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         );
         app.act(Action::SelectSession(original_session), cx);
     });
-    let session_targets = app.read_with(cx, |app, _| {
+    let session_targets = app.read_with(cx, |app, _cx| {
         app.hosts[0]
             .snapshot
             .sessions
@@ -2219,12 +2317,12 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     });
     for (index, session_id) in &session_targets {
         let key = format!("alt-{}", index + 1);
-        let sessions_before = app.read_with(cx, |app, _| app.hosts[0].snapshot.sessions.len());
+        let sessions_before = app.read_with(cx, |app, _cx| app.hosts[0].snapshot.sessions.len());
         cx.update_window(handle.into(), |_, window, cx| {
             window.dispatch_keystroke(Keystroke::parse(&key).unwrap(), cx);
         })?;
         draw(cx)?;
-        app.read_with(cx, |app, _| {
+        app.read_with(cx, |app, _cx| {
             anyhow::ensure!(
                 app.active == 0 && app.hosts[0].snapshot.active_session == *session_id,
                 "number shortcut selected the wrong host/session: {key}"
@@ -2234,25 +2332,25 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
                 "number shortcut created a session"
             );
             anyhow::ensure!(
-                app.workspace_mode == WorkspaceMode::Terminal,
+                app.page == Page::Terminal,
                 "number shortcut did not show the selected terminal"
             );
             Ok::<_, anyhow::Error>(())
         })?;
     }
-    let active_session = app.read_with(cx, |app, _| app.hosts[0].snapshot.active_session.clone());
+    let active_session = app.read_with(cx, |app, _cx| app.hosts[0].snapshot.active_session.clone());
     cx.update_window(handle.into(), |_, window, cx| {
         window.dispatch_keystroke(Keystroke::parse("alt-9").unwrap(), cx);
     })?;
     draw(cx)?;
-    app.read_with(cx, |app, _| {
+    app.read_with(cx, |app, _cx| {
         anyhow::ensure!(
             app.active == 0 && app.hosts[0].snapshot.active_session == active_session,
             "unavailable session shortcut changed the selection"
         );
         Ok::<_, anyhow::Error>(())
     })?;
-    app.update(cx, |app, _| {
+    app.update(cx, |app, _cx| {
         let mut snapshot = app.hosts[0].snapshot.clone();
         for session in &mut snapshot.sessions {
             session.name = "palette-other-host-session".into();
@@ -2287,7 +2385,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             Ok::<_, anyhow::Error>(())
         })?;
     }
-    app.update(cx, |app, _| {
+    app.update(cx, |app, _cx| {
         app.hosts.pop();
     });
     for (query, section) in [
@@ -2320,7 +2418,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             .timer(Duration::from_millis(25))
             .await;
         draw(cx)?;
-        app.read_with(cx, |app, _| {
+        app.read_with(cx, |app, _cx| {
             anyhow::ensure!(
                 !app.command_palette && app.active == 0,
                 "launcher did not navigate and close"
@@ -2334,7 +2432,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
                     "filtered launcher result selected the wrong session"
                 );
                 anyhow::ensure!(
-                    app.workspace_mode == WorkspaceMode::Terminal,
+                    app.page == Page::Terminal,
                     "session launcher did not show terminal"
                 );
             }
@@ -2376,6 +2474,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         );
         let local = app.hosts[0].snapshot.clone();
         let config = HostDefinition {
+            id: Default::default(),
             ssh: tshell_host::SshConfig {
                 destination: "example.invalid".into(),
                 user: "test".into(),
@@ -2407,11 +2506,13 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         let index = app.hosts.len() - 1;
         let saved = app.session_profiles.clone();
         let active = app.active;
-        let file_key = (index, "session".to_string());
-        app.file_states.insert(
+        let file_key = (app.hosts[index].identity(), "session".to_string());
+        let explorer = app.explorer_entity().unwrap();
+        explorer.update(cx, |explorer, _| explorer.editor_dirty = true);
+        app.workspaces.insert(
             file_key.clone(),
-            SessionFileState {
-                dirty: true,
+            SessionWorkspace {
+                explorer: Some(explorer.clone()),
                 ..Default::default()
             },
         );
@@ -2421,19 +2522,17 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             "remote backend remained connected"
         );
         anyhow::ensure!(
-            app.file_states
-                .get(&file_key)
-                .is_some_and(|state| state.dirty),
+            app.workspaces.contains_key(&file_key),
             "disconnect discarded unsaved host files"
         );
-        app.file_states.get_mut(&file_key).unwrap().dirty = false;
-        let request = app.file_request;
+        explorer.update(cx, |explorer, _| explorer.editor_dirty = false);
+        let request = app.navigation_request;
         anyhow::ensure!(
             app.prepare_host_connection_change(index, cx),
             "saved host files prevented connection change"
         );
         anyhow::ensure!(
-            !app.file_states.contains_key(&file_key) && app.file_request == request,
+            !app.workspaces.contains_key(&file_key) && app.navigation_request == request,
             "inactive connection change cancelled active file requests"
         );
         app.message = None;
@@ -2466,14 +2565,15 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         app.sync(cx);
         app.show_files(cx);
         anyhow::ensure!(
-            app.workspace_mode == WorkspaceMode::Terminal && app.remote_files().is_none(),
+            app.page == Page::Terminal && app.remote_files().is_none(),
             "disconnected host reopened Explorer or SFTP"
         );
-        let git_request = app.git_request;
+        let git_request = app.git_entity().map(|entity| entity.read(cx).git_request);
         app.show_git(cx);
         app.refresh_git(cx);
         anyhow::ensure!(
-            app.workspace_mode == WorkspaceMode::Terminal && app.git_request == git_request,
+            app.page == Page::Terminal
+                && app.git_entity().map(|entity| entity.read(cx).git_request) == git_request,
             "disconnected host started Git access"
         );
         anyhow::ensure!(
@@ -2489,7 +2589,8 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     transfer_queue::check_transfer_panel(handle, app.clone(), cx).await?;
     #[cfg(feature = "ui-check-screenshots")]
     check_workspace_styles(handle, app.clone(), cx).await?;
-    feature_check::check(handle, app, cx).await?;
+    feature_check::check(handle, app.clone(), cx).await?;
+    check_docker_workspace(handle, app, cx).await?;
     Ok(())
 }
 
@@ -2504,7 +2605,7 @@ async fn check_command_palette_styles(
     };
     let directory = PathBuf::from(directory);
     std::fs::create_dir_all(&directory)?;
-    let original = app.read_with(cx, |app, _| (app.active, app.appearance));
+    let original = app.read_with(cx, |app, _cx| (app.active, app.appearance));
     for (name, appearance, viewport) in [
         ("dark", Appearance::Dark, size(px(1320.), px(840.))),
         ("light-small", Appearance::Light, size(px(860.), px(520.))),
@@ -2603,7 +2704,7 @@ async fn check_workspace_styles(
                 app.sidebar_collapsed = false;
                 app.sidebar_width = SIDEBAR_WIDTH;
                 app.show_status_bar = true;
-                app.workspace_mode = WorkspaceMode::Terminal;
+                app.page = Page::Terminal;
                 app.hosts[0].collapsed_sessions.clear();
                 app.sync(cx);
                 app.select_theme(ThemeMode::Light, "vscode-light", window, cx);
@@ -2634,7 +2735,7 @@ async fn check_workspace_styles(
         cx.background_executor()
             .timer(Duration::from_millis(500))
             .await;
-        app.read_with(cx, |app, _| {
+        app.read_with(cx, |app, _cx| {
             let host = &app.hosts[0];
             let window = host.snapshot.window().unwrap();
             for (pane, label) in window.panes.iter().zip(["Build", "Logs", "Tests", "Git", "Shell"]) {
@@ -2649,7 +2750,7 @@ async fn check_workspace_styles(
             .timer(Duration::from_millis(100))
             .await;
         capture(&format!("{name}-splits"), cx)?;
-        app.read_with(cx, |app, _| check_equal_split_bounds(app))?;
+        app.read_with(cx, |app, _cx| check_equal_split_bounds(app))?;
         cx.update_window(handle.into(), |_, _, cx| {
             app.update(cx, |app, cx| app.act(Action::CloseWindow, cx));
         })?;
@@ -2694,7 +2795,7 @@ async fn check_workspace_styles(
                 app.update(cx, |app, cx| app.close_modal(window, cx));
             })?;
         }
-        let language = app.read_with(cx, |app, _| app.language);
+        let language = app.read_with(cx, |app, _cx| app.language);
         for page in [0, 2] {
             cx.update_window(handle.into(), |_, window, cx| {
                 app.update(cx, |app, cx| {
@@ -2728,7 +2829,7 @@ async fn check_workspace_styles(
         cx.update_window(handle.into(), |_, window, cx| {
             app.update(cx, |app, cx| {
                 app.close_modal(window, cx);
-                app.workspace_mode = WorkspaceMode::Git;
+                app.page = Page::Git;
                 let change = git::GitChange {
                     status: " M".into(),
                     path: app.cwd.join("src/workspace.rs"),
@@ -2739,41 +2840,51 @@ async fn check_workspace_styles(
                         removed: 1,
                     }),
                 };
-                app.git_changes = vec![change.clone()];
-                app.git_error = None;
-                app.git_diff_mode = git_view::DiffMode::SideBySide;
-                app.git_diff_compact = true;
-                app.git_diff = Some(git_view::DiffView {
-                    change,
-                    scroll: UniformListScrollHandle::new(),
-                    horizontal: std::array::from_fn(|_| ScrollHandle::new()),
-                    selection: std::array::from_fn(|_| git_selection::DiffSelection::new(cx)),
-                    content: Ok(git_view::DiffContent::new(vec![
-                        git::DiffLine {
-                            old: Some(1),
-                            new: Some(1),
-                            kind: git::LineKind::Context,
-                            text: " use gpui_kit::component::*;".into(),
-                        },
-                        git::DiffLine {
-                            old: Some(2),
-                            new: None,
-                            kind: git::LineKind::Removed,
-                            text: "-const ROW_HEIGHT: f32 = 26.;".into(),
-                        },
-                        git::DiffLine {
-                            old: None,
-                            new: Some(2),
-                            kind: git::LineKind::Added,
-                            text: "+const ROW_HEIGHT: f32 = 30.;".into(),
-                        },
-                        git::DiffLine {
-                            old: None,
-                            new: Some(3),
-                            kind: git::LineKind::Added,
-                            text: "+const CONTROL_HEIGHT: f32 = 28.;".into(),
-                        },
-                    ])),
+                app.git_entity().unwrap().update(cx, |git, _cx| {
+                    git.git_changes = vec![change.clone()];
+                });
+                app.git_entity().unwrap().update(cx, |git, _cx| {
+                    git.git_error = None;
+                });
+                app.git_entity().unwrap().update(cx, |git, _cx| {
+                    git.git_diff_mode = git_view::DiffMode::SideBySide;
+                });
+                app.git_entity().unwrap().update(cx, |git, _cx| {
+                    git.git_diff_compact = true;
+                });
+                app.git_entity().unwrap().update(cx, |git, cx| {
+                    git.git_diff = Some(git_view::DiffView {
+                        change,
+                        scroll: UniformListScrollHandle::new(),
+                        horizontal: std::array::from_fn(|_| ScrollHandle::new()),
+                        selection: std::array::from_fn(|_| git_selection::DiffSelection::new(cx)),
+                        content: Ok(git_view::DiffContent::new(vec![
+                            git::DiffLine {
+                                old: Some(1),
+                                new: Some(1),
+                                kind: git::LineKind::Context,
+                                text: " use gpui_kit::component::*;".into(),
+                            },
+                            git::DiffLine {
+                                old: Some(2),
+                                new: None,
+                                kind: git::LineKind::Removed,
+                                text: "-const ROW_HEIGHT: f32 = 26.;".into(),
+                            },
+                            git::DiffLine {
+                                old: None,
+                                new: Some(2),
+                                kind: git::LineKind::Added,
+                                text: "+const ROW_HEIGHT: f32 = 30.;".into(),
+                            },
+                            git::DiffLine {
+                                old: None,
+                                new: Some(3),
+                                kind: git::LineKind::Added,
+                                text: "+const CONTROL_HEIGHT: f32 = 28.;".into(),
+                            },
+                        ])),
+                    });
                 });
                 cx.notify();
             });
@@ -2781,13 +2892,13 @@ async fn check_workspace_styles(
         capture(&format!("{name}-git"), cx)?;
         cx.update_window(handle.into(), |_, window, cx| {
             app.update(cx, |app, cx| {
-                app.workspace_mode = WorkspaceMode::Files;
-                app.open_file = Some(app.cwd.join("src/workspace.rs"));
-                app.editor_language = "rust".into();
-                app.image_preview = None;
-                app.file_preview = None;
-                app.preview_mode = false;
-                app.file_editor.update(cx, |editor, cx| {
+                app.page = Page::Explorer;
+                app.explorer_entity().unwrap().update(cx,|explorer,_cx|{explorer.open_file = Some(app.cwd.join("src/workspace.rs"));});
+                app.explorer_entity().unwrap().update(cx,|explorer,_cx|{explorer.editor_language = "rust".into();});
+                app.explorer_entity().unwrap().update(cx,|explorer,_cx|{explorer.image_preview = None;});
+                app.explorer_entity().unwrap().update(cx,|explorer,_cx|{explorer.file_preview = None;});
+                app.explorer_entity().unwrap().update(cx,|explorer,_cx|{explorer.preview_mode = false;});
+                app.check_explorer(cx).file_editor.clone().update(cx, |editor, cx| {
                     editor.set_value("use gpui_kit::component::*;\n\nconst ROW_HEIGHT: f32 = 30.;\nconst CONTROL_HEIGHT: f32 = 28.;\n", window, cx);
                     editor.open_search(true, cx);
                 });
@@ -2795,6 +2906,76 @@ async fn check_workspace_styles(
             });
         })?;
         capture(&format!("{name}-editor"), cx)?;
+    }
+    Ok(())
+}
+
+async fn check_docker_workspace(
+    handle: WindowHandle<Root>,
+    app: Entity<AppView>,
+    cx: &mut AsyncApp,
+) -> anyhow::Result<()> {
+    for (name, appearance, viewport) in [
+        ("dark", Appearance::Dark, size(px(1320.), px(840.))),
+        ("light-small", Appearance::Light, size(px(860.), px(520.))),
+    ] {
+        handle.update(cx, |root, window, _| {
+            root.style().size.width = Some(viewport.width.into());
+            root.style().size.height = Some(viewport.height.into());
+            window.resize(viewport);
+        })?;
+        for tab in 0..3 {
+            cx.update_window(handle.into(), |_, window, cx| {
+                app.update(cx, |app, cx| {
+                    app.close_modal(window, cx);
+                    app.set_appearance(appearance, window, cx);
+                    app.page = Page::Docker;
+                    app.sidebar_collapsed = false;
+                    app.docker
+                        .update(cx, |docker, cx| docker.check_fixture(tab, window, cx));
+                    let target = app.docker.read(cx).selected_target();
+                    let previous = app.active;
+                    app.active = 0;
+                    app.sync(cx);
+                    assert_eq!(app.page, Page::Docker);
+                    assert_eq!(app.docker.read(cx).selected_target(), target);
+                    let backend = app.hosts[0].backend.take();
+                    app.hosts[0].snapshot = Snapshot::default();
+                    app.sync(cx);
+                    assert!(app.hosts[0].snapshot.sessions.is_empty());
+                    assert_eq!(app.page, Page::Docker);
+                    assert_eq!(app.docker.read(cx).selected_target(), target);
+                    app.hosts[0].backend = backend;
+                    app.active = previous;
+                    app.sync(cx);
+                });
+                window.dispatch_event(
+                    PlatformInput::MouseMove(MouseMoveEvent {
+                        position: point(px(1.), px(1.)),
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+                window.refresh();
+                let _ = window.draw(cx);
+                app.read(cx).docker.read(cx).check_layout(cx);
+                #[cfg(feature = "ui-check-screenshots")]
+                if let Some(directory) = std::env::var_os("TSHELL_UI_SCREENSHOT_DIR") {
+                    window
+                        .render_to_image()?
+                        .save(PathBuf::from(directory).join(format!("docker-{name}-{tab}.png")))?;
+                }
+                Ok::<_, anyhow::Error>(())
+            })??;
+        }
+        cx.update_window(handle.into(), |_, window, cx| {
+            app.update(cx, |app, cx| {
+                app.sidebar_collapsed = true;
+                cx.notify();
+            });
+            window.refresh();
+            let _ = window.draw(cx);
+        })?;
     }
     Ok(())
 }

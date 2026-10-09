@@ -42,3 +42,43 @@ pub fn notice(icon: IconName, message: impl Into<SharedString>, color: u32) -> D
         .child(Icon::new(icon).size(px(16.)).mt(px(2.)).flex_shrink_0())
         .child(div().min_w_0().flex_1().child(message.into()))
 }
+
+use gpui_kit::component::Sizable;
+use gpui_kit::component::button::{Button, ButtonVariants};
+pub fn button(id: impl Into<ElementId>, icon: IconName, label: impl Into<SharedString>) -> Button {
+    Button::new(id)
+        .ghost()
+        .small()
+        .h(px(CONTROL_HEIGHT))
+        .rounded(px(4.))
+        .text_size(px(12.))
+        .line_height(relative(1.))
+        .icon(icon)
+        .label(label)
+}
+pub fn icon_button(
+    id: impl Into<ElementId>,
+    icon: IconName,
+    label: impl Into<SharedString>,
+) -> Button {
+    Button::new(id)
+        .ghost()
+        .small()
+        .size(px(CONTROL_HEIGHT))
+        .rounded(px(4.))
+        .text_size(px(12.))
+        .line_height(relative(1.))
+        .icon(icon)
+        .tooltip(label)
+}
+
+pub fn workspace_dialog(
+    dialog: gpui_kit::component::dialog::Dialog,
+    cx: &App,
+) -> gpui_kit::component::dialog::Dialog {
+    use gpui_kit::component::ActiveTheme;
+    dialog
+        .bg(cx.theme().popover)
+        .border_color(cx.theme().border)
+        .text_color(cx.theme().popover_foreground)
+}

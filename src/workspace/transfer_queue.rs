@@ -52,7 +52,7 @@ impl TransferState {
 struct TransferJob {
     id: u64,
     host: String,
-    session: Option<(usize, String)>,
+    session: Option<WorkspaceKey>,
     name: String,
     request: TransferRequest,
     control: remote_files::TransferControl,
@@ -181,8 +181,9 @@ impl Drop for TransferQueue {
 }
 
 impl AppView {
-    pub(super) fn queue_download(
+    pub(super) fn queue_download_for(
         &mut self,
+        workspace: Option<WorkspaceKey>,
         remote: remote_files::Session,
         source: PathBuf,
         destination: PathBuf,
@@ -194,6 +195,7 @@ impl AppView {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| source.display().to_string());
         self.enqueue_transfer(
+            workspace,
             TransferRequest::Download {
                 remote,
                 source,
@@ -205,8 +207,9 @@ impl AppView {
         );
     }
 
-    pub(super) fn queue_upload(
+    pub(super) fn queue_upload_for(
         &mut self,
+        workspace: Option<WorkspaceKey>,
         remote: remote_files::Session,
         sources: Vec<PathBuf>,
         target: PathBuf,
@@ -222,6 +225,7 @@ impl AppView {
             crate::t!("transfer.files", count = sources.len()).to_string()
         };
         self.enqueue_transfer(
+            workspace,
             TransferRequest::Upload {
                 remote,
                 sources,
@@ -235,6 +239,7 @@ impl AppView {
 
     fn enqueue_transfer(
         &mut self,
+        session: Option<WorkspaceKey>,
         request: TransferRequest,
         name: String,
         window: &mut Window,
@@ -256,8 +261,12 @@ impl AppView {
         queue.next_id += 1;
         queue.jobs.push(TransferJob {
             id: queue.next_id,
-            host: self.hosts[self.active].name.clone(),
-            session: self.active_file_session.clone(),
+            host: session
+                .as_ref()
+                .and_then(|(id, _)| self.hosts.iter().find(|host| host.identity() == *id))
+                .map(|host| host.name.clone())
+                .unwrap_or_else(|| self.hosts[self.active].name.clone()),
+            session,
             name,
             request,
             control: remote_files::TransferControl::new(),
@@ -400,8 +409,8 @@ impl AppView {
         };
         let failed = job.state == TransferState::Failed;
         if job.state == TransferState::Done
-            && self.active_file_session == job.session
-            && self.workspace_mode == WorkspaceMode::Files
+            && self.active_workspace == job.session
+            && self.page == Page::Explorer
         {
             self.load_files(cx);
         }

@@ -1,6 +1,6 @@
 # TShell 架构重构与 Docker 实施计划
 
-更新日期：2026-10-09。状态：执行中，共享基础已迁入独立 crate；稳定主机身份及工具 Entity 重构尚未完成。
+更新日期：2026-10-09。状态：实施完成；workspace 自动化回归、Windows 原生界面检查、release 构建及打包通过。真实 Docker/SSH 环境验收单独保留。
 
 本计划替换上一版。目标是直接建立清晰的最终结构，允许重写当前内部架构；继续保留用户配置、未保存文件、运行中的终端和已有功能行为。所有工具仍放在左侧，Docker 独立于终端会话。
 
@@ -182,64 +182,71 @@ connector 放在 Docker crate 的一个聚焦模块中：复用 host 的认证�
 
 - [x] 记录当前工作树和已有功能测试基线，保留全部未提交工作与用户运行实例。
 - [x] 建立 root workspace、共享依赖与内部 crate；保留入口、vendor patch、锁文件和发行构建。
-- [ ] 建立 tshell-host：拆开应用主机定义与 SSH 配置，迁移稳定身份、runtime、SSH 连接/认证、通道与 SFTP。
-- [ ] 为现有终端、tmux、转发和指标调用更新 host 类型/路径，验证原有连接行为。
+- [x] 建立 tshell-host：拆开应用主机定义与 SSH 配置，迁移稳定身份、runtime、SSH 连接/认证、通道与 SFTP。
+- [x] 为现有终端、tmux、转发和指标调用更新 host 类型/路径，验证原有连接行为。
 - [x] 建立 tshell-ui：共享控件、语义 token 与本地化；根 locales 保持唯一来源，语言/主题即时生效。
-- [ ] 完成旧配置迁移和新 API；移除重复 HostConfig/身份/翻译初始化。
+- [x] 完成旧配置迁移和新 API；移除重复 HostConfig/身份/翻译初始化。
 
 当前落地：
 
-- 基线提交 `775ca51`，随后在 `codex/workspace-modules` 执行。基线 205 项通过、20 项忽略。
-- Cargo workspace 已包含主应用、`tshell-host` 与 `tshell-ui`，共用锁文件和 GPUI vendor patch。
-- `SshConfig` 只含连接字段；主应用 `src/host.rs` 的 `HostDefinition` 持有显示名与 tmux 选项。原配置继续按扁平字段读取/保存，无需用户手工修改。
-- host 已拥有 SSH runtime、连接池、认证请求、转发、SFTP 会话/传输和本地文件操作；根目录旧实现已移除。现有终端、tmux、指标和文件工具已接入。
-- UI 已拥有 Palette、共享控件与唯一翻译初始化；host 错误保留诊断类型和原始原因，在 UI 显示时翻译。UI build script 跟踪根 locales 的改动。
-- 本批验证：`cargo fmt --all -- --check`、`cargo test --workspace --locked`（207 通过、20 忽略）、`cargo check --workspace --locked --all-targets` 均通过。通过 `cargo build --locked --bin tshell --target-dir target/module-check` 构建独立程序，原生 `--workspace-ui-check` 报告通过。
-- 验证报告位于本地 `artifacts/module-refactor-tests.log`、`artifacts/module-refactor-check.log`、`artifacts/module-refactor-ui.json`。UI 使用隔离配置目录，并跳过剪贴板以保留用户内容；未配置真实 SSH 测试主机，远端验收仍待执行。本批未运行 release 打包或 Docker 验收。
-- 下一批先完成稳定 `HostId` 与配置迁移、具体本地/远端访问值和路径类型，再进入阶段二；目前仍保留旧会话恢复映射，不能视为工作区重构完成。
+- 基线提交 `775ca51`，共享层提交 `d7ea914`；后续实现沿同一 `codex/workspace-modules` 分支完成。
+- workspace 已包含根应用与五个内部 crate，共用 Cargo.lock、GPUI 依赖和 vendor patch。
+- `HostDefinition` 持有稳定 `HostId` 与显示/tmux 偏好，`SshConfig` 仅包含连接字段。旧扁平 JSON 和按 endpoint 保存的会话/转发自动迁移；重复旧 endpoint 获取独立 ID 并保留原会话资料。
+- host 拥有本地/SSH 命令、有界输出和超时、Local/POSIX 路径、runtime、连接/认证/转发/SFTP，以及不含 PTY、隔离 stderr、支持取消的 stdio stream。
+- UI 拥有真实共享控件、语义 palette、编辑器高亮与唯一翻译初始化。host 诊断保留类型和源错误，在 UI 显示时翻译。
+- 原终端、tmux、转发、指标与传输边界保持原所有权；工具代码已移至各自 crate，根目录旧实现已删除。
 
 验收：host 不依赖 GPUI/tmux；主应用与既有终端/SSH 工作流可用，配置兼容，真实连接实现只有一份。
 
 ### 阶段二：重写工作区组合并提取 Explorer/Git
 
-- [ ] 用 Page、SessionWorkspace 和具体 Entity 替代当前分散状态与恢复映射。
-- [ ] Git 迁入独立 crate：命令、status/numstat/patch、Diff 投影、高亮、文本选择和虚拟列表。
-- [ ] Explorer 迁入独立 crate：树、文件操作、文档、搜索、冲突保存与预览；接入具体 host API。
-- [ ] 移除 git 与 workbench 的交叉依赖和工具对 AppView 的直接访问。
-- [ ] 用模块事件接通 Git 打开文件、目录终端、文件选择和全局传输队列。
-- [ ] 左侧统一接入三个已有页面；实现激活/失活、焦点、快捷键、未保存关闭和预览子窗口生命周期。
-- [ ] 清理旧 impl AppView 工具方法、工具状态字段和临时桥接；保留既有用户功能。
+- [x] 用 Page、SessionWorkspace 和具体 Entity 替代当前分散状态与恢复映射。
+- [x] Git 迁入独立 crate：命令、status/numstat/patch、Diff 投影、高亮、文本选择和虚拟列表。
+- [x] Explorer 迁入独立 crate：树、文件操作、文档、搜索、冲突保存与预览；接入具体 host API。
+- [x] 移除 git 与 workbench 的交叉依赖和工具对 AppView 的直接访问。
+- [x] 用模块事件接通 Git 打开文件、目录终端、文件选择和全局传输队列。
+- [x] 左侧统一接入三个已有页面；实现激活/失活、焦点、快捷键、未保存关闭和预览子窗口生命周期。
+- [x] 清理旧 impl AppView 工具方法、工具状态字段和临时桥接；保留既有用户功能。
 
 验收：两个工具拥有各自状态，宿主只组合；Git/Explorer 测试、原生选择/复制/滚动、未保存恢复与 SFTP 流程通过。
 
 ### 阶段三：直接完成 Docker 连接与基础页面
 
-- [ ] 锁定 Bollard 发布版本；直接接通本地默认/显式 endpoint、版本协商与容器列表。
-- [ ] 实现小型 russh connector；真实验证 Windows 上的 SSH 目标、日志取消、HTTP upgrade、exec 和 resize。
-- [ ] 接入独立 DockerTarget、Engine 选择和左侧 Docker 页面；不要求存在终端会话。
-- [ ] 完成容器列表、分组、概览和按 Engine 保存的选择/过滤状态。
-- [ ] 完成主机配置变更/删除、Engine 切换、旧请求失效和显式重连。
+- [x] 锁定 Bollard 发布版本；直接接通本地默认/显式 endpoint、版本协商与容器列表。
+- [x] 实现小型 russh connector；协议 fixture 验证版本协商、HTTP upgrade、exec 输入/resize/关闭、响应前取消，以及真实 loopback russh stderr 隔离与通道关闭。
+- [ ] 真实 Engine 验收：Windows 本地及 SSH 目标上的日志/exec/resize、权限与断线。当前机器没有 Docker，未配置测试 SSH 主机。
+- [x] 接入独立 DockerTarget、Engine 选择和左侧 Docker 页面；不要求存在终端会话。
+- [x] 完成容器列表、分组、概览和按 Engine 保存的选择/过滤状态。
+- [x] 完成主机配置变更/删除、Engine 切换、旧请求失效和显式重连。
 
 验收：本地与 SSH 使用同一套 Bollard 业务调用；独立 Docker 目标不随终端会话或主机选择变化。
 
 ### 阶段四：完成 Docker 日常操作与容器终端
 
-- [ ] 完成启停/重启/删除、原目标确认、busy/错误反馈与实际状态刷新。
-- [ ] 完成日志阅读、follow、暂停/恢复、搜索、复制、有界缓存和事件合并刷新。
-- [ ] 接入 ContainerTerminal 的 IO 与 resize 到现有终端契约，创建具有明确来源的标签页。
-- [ ] 验证面板切换、关闭容器终端、外部容器删除、缺失 shell、权限不足与断线结果。
-- [ ] 完成深浅主题、左栏折叠、窄窗口和大量资源/日志的原生 UI 检查。
+- [x] 完成启停/重启/删除、原目标确认、busy/错误反馈与实际状态刷新。
+- [x] 完成日志阅读、follow、暂停/恢复、搜索、复制、有界缓存和事件合并刷新。
+- [x] 接入 ContainerTerminal 的 IO 与 resize 到现有终端契约，创建具有明确来源的标签页。
+- [x] 实现面板目标隔离、终端取消、已停止容器 exec 拒绝与原目标结果反馈，覆盖自动化 fixture。
+- [ ] 在真实隔离容器上验证外部删除、缺失 shell、权限不足、Windows 容器及断线后的结果。
+- [x] 完成深浅主题、左栏折叠、窄窗口和大量资源/日志的原生 UI 检查。
 
 验收：本地与 SSH 都完成“查看 -> 日志 -> 启停 -> 容器终端”；任务可取消、目标不串线、隐藏工具不破坏既有终端。
 
 ### 阶段五：清理、回归与文档
 
-- [ ] 删除冗余模块和旧恢复映射，检查无反向依赖、重复实现或无调用方的公共抽象。
-- [ ] CI 从仅测根 bin 改为覆盖 workspace，透传原生 UI 截图 feature，验证 Windows 发行打包。
-- [ ] 更新 AGENTS.md 的目录与所有权、workspace/Git/SFTP 文档，新增 Docker 实际使用与限制文档。
-- [ ] 同步 README.md、README.zh-CN.md 与 locales，记录真实验证平台、Engine/CLI 版本和未验证边界。
+- [x] 删除冗余模块和旧恢复映射，检查无反向依赖、重复实现或无调用方的公共抽象。
+- [x] CI 从仅测根 bin 改为覆盖 workspace，透传原生 UI 截图 feature，检查 Windows 发行构建与独立目录打包。
+- [x] 更新 AGENTS.md 的目录与所有权、workspace/Git/SFTP 文档，新增 Docker 实际使用与限制文档。
+- [x] 同步 README.md、README.zh-CN.md 与 locales，记录真实验证平台、Engine/CLI 版本和未验证边界。
 
 验收：最终结构简洁且只有一套执行路径；独立 crate 可测试，当前功能、配置与用户内容都得到保留。
+
+实施取舍：
+
+- 容器 exec 挂到现有 local backend 中具有明确来源的临时会话；同一 Engine endpoint/容器复用会话增加标签。不同来源不合并，不恢复为普通 Shell，也不向现有 Shell 注入命令。容器会话不开放普通 Shell 标签/分屏或主机 Explorer/Git；新增容器终端从 Docker 页面打开。
+- 日志使用 Bollard tail/follow，暂停取消、恢复重新读取 tail 1000；保留最多 2 MiB 与 10,000 个换行。输入和 resize 复用终端契约，最新 resize 不因输入队列拥塞丢失。
+- 没有引入 Tool trait、动态插件注册器或 Docker DTO/SDK 包装；Bollard 提供的 API/模型直接使用。
+- 详细行为、要求与真实环境验证缺口见 [Docker workspace](docs/docker-workspace.md)。
 
 ## 7. 验证与完成标准
 
@@ -253,6 +260,16 @@ cargo build --locked --release --bin tshell
 ```
 
 原生 `--workspace-ui-check` 使用隔离 TSHELL_DATA_DIR；截图和报告放在 artifacts/。不覆盖锁定的运行程序；需要时使用独立构建目录。
+
+本次验证记录（Windows x64，2026-10-09）：
+
+- `cargo fmt --all -- --check` 与 `cargo check --workspace --locked --all-targets --features ui-check-screenshots` 通过。
+- `cargo test --workspace --locked`：221 通过，20 忽略；忽略项需要显式远端环境。
+- 原生 `--workspace-ui-check` 通过；深/浅主题、860 x 520 窄窗口、万容器列表、日志/配置 editor 的真实主区高度、侧栏折叠和无终端会话时的 Engine 独立性均已检查。使用隔离 `TSHELL_DATA_DIR`；跳过系统剪贴板以保留用户内容。
+- `cargo build --locked --release --bin tshell --target-dir target/module-check` 通过；未覆盖用户运行中的 debug/release 可执行文件。
+- 使用 `tools/package-windows.ps1 -Executable target/module-check/release/tshell.exe -OutputDirectory artifacts/module-release-package` 完成独立 Windows 发行打包；EXE、ZIP 内 EXE、更新 JSON 和 SHA256SUMS 哈希一致。
+- 详细本地报告：`tmp/modularization/final-tests.log`、`tmp/modularization/final-check.log`、`tmp/modularization/release-verified.log`、`artifacts/module-complete-ui.json`；画面在 `artifacts/module-complete-screenshots/`。这些生成产物不提交。
+- 当前机器没有 Docker Desktop/Engine，也未配置 `TSHELL_SSH_TEST_HOST`。已完成协议与 loopback SSH fixture，未将其冒充真实 Engine/SFTP/tmux 环境验收。
 
 | 必须验证 | 场景 |
 | --- | --- |

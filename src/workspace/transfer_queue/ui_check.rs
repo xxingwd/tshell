@@ -126,7 +126,7 @@ pub(in crate::workspace) async fn check_transfer_panel(
     cx.update_window(handle.into(), |_, window, cx| {
         app.update(cx, |app, cx| {
             app.active = 0;
-            app.workspace_mode = WorkspaceMode::Terminal;
+            app.page = Page::Terminal;
             app.transfer_queue = TransferQueue::default();
             app.transfer_queue.jobs = sample_jobs();
             app.transfer_queue.panel_open = true;

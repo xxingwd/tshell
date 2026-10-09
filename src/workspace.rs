@@ -14,21 +14,17 @@ use crate::{
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    ActiveTheme, Disableable, Icon, Root, Selectable, Sizable, Theme, ThemeMode, WindowExt,
-    breadcrumb::{Breadcrumb, BreadcrumbItem},
-    button::{Button, ButtonGroup, ButtonVariants},
+    Disableable, Icon, Root, Sizable, Theme, ThemeMode, WindowExt,
+    button::{Button, ButtonVariants},
     checkbox::Checkbox,
     command::{Command, CommandGroup, CommandItem, CommandState},
     form::{Field, Form},
     input::{EditorState, Input, InputEvent, InputState},
     kbd::Kbd,
-    list::ListItem,
     menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
     notification::Notification,
     scroll::ScrollableElement,
-    select::{SearchableVec, SelectEvent, SelectState},
     status_bar::StatusBar,
-    tree::{Tree, TreeEvent, TreeState},
 };
 use gpui_kit::{prelude::*, *};
 use serde::{Deserialize, Serialize};
@@ -39,33 +35,29 @@ use std::{
 };
 mod directories;
 mod settings;
+#[cfg(test)]
+mod theme_tests;
 use settings::SettingsUi;
-mod editor_search;
-mod editor_theme;
-mod explorer;
-mod file_access;
-use tshell_host::files as file_ops;
-mod git;
-mod git_selection;
-mod git_view;
+use tshell_explorer::{self as explorer, Explorer};
+use tshell_git::{GitView, git, selection as git_selection, view as git_view};
 mod host_metrics;
 mod launcher;
 mod metrics_config;
 mod metrics_transport;
 #[cfg(test)]
 mod preferences_tests;
-mod preview;
+use tshell_explorer::preview;
 use tshell_host::sftp as remote_files;
-use workbench::NodeView;
 mod sessions;
 mod ssh_auth;
-use tshell_ui::controls as style;
+use tshell_ui::controls::{self as style, workspace_dialog};
+mod docker;
 mod terminal_actions;
 mod tools;
 mod transfer_queue;
 #[cfg(windows)]
 mod updates;
-mod workbench;
+use tshell_explorer::workbench;
 
 const SIDEBAR_WIDTH: f32 = 212.;
 const WINDOW_CONTROL_WIDTH: f32 = 38.;
@@ -107,6 +99,8 @@ struct Preferences {
     #[serde(default)]
     forwards: BTreeMap<String, Vec<crate::ssh_forward::LocalForward>>,
     sessions: BTreeMap<String, Vec<crate::backend::SessionProfile>>,
+    docker_endpoint: Option<String>,
+    docker_target: Option<tshell_host::HostId>,
     last_host: String,
     appearance: Appearance,
     sidebar_collapsed: bool,
@@ -137,11 +131,56 @@ impl Preferences {
             .join("workspace.json")
     }
     fn load() -> Self {
-        let preferences: Self = std::fs::read(Self::path())
+        let Some(mut original) = std::fs::read(Self::path())
             .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
-        preferences.migrated()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        else {
+            return Self::default();
+        };
+        let Some(preferences) = serde_json::from_value::<Self>(original.clone()).ok() else {
+            return Self::default();
+        };
+        let migrated = preferences.migrated();
+        let mut changed = false;
+        if let Some(hosts) = original
+            .get_mut("hosts")
+            .and_then(|hosts| hosts.as_array_mut())
+        {
+            for (value, host) in hosts.iter_mut().zip(&migrated.hosts) {
+                if value.get("id").and_then(|id| id.as_str()) != Some(host.id.to_string().as_str())
+                {
+                    if let Some(value) = value.as_object_mut() {
+                        value.insert("id".into(), serde_json::Value::String(host.id.to_string()));
+                        changed = true;
+                    }
+                }
+            }
+        }
+        for (key, value) in [
+            ("sessions", serde_json::to_value(&migrated.sessions)),
+            ("forwards", serde_json::to_value(&migrated.forwards)),
+        ] {
+            if let Ok(value) = value
+                && original.get(key).is_some_and(|old| old != &value)
+            {
+                original[key] = value;
+                changed = true;
+            }
+        }
+        if changed {
+            if let Ok(bytes) = serde_json::to_vec_pretty(&original) {
+                let path = Self::path();
+                let temporary =
+                    path.with_extension(format!("migration.{}.tmp", std::process::id()));
+                if std::fs::write(&temporary, bytes).is_ok() {
+                    if let Err(error) = std::fs::rename(&temporary, &path) {
+                        tracing::warn!(%error,"host identity migration could not be saved");
+                        let _ = std::fs::remove_file(temporary);
+                    }
+                }
+            }
+        }
+        migrated
     }
     fn migrated(mut self) -> Self {
         if self.selected_theme.is_none() {
@@ -150,6 +189,44 @@ impl Preferences {
                 .clone()
                 .or_else(|| self.legacy_terminal_theme.clone())
                 .or_else(|| self.legacy_custom_theme_active.then(|| "custom-1".into()));
+        }
+        let mut identities = BTreeSet::new();
+        let legacy_sessions_map = self.sessions.clone();
+        let legacy_forwards_map = self.forwards.clone();
+        let mut migrated_session_keys = BTreeSet::new();
+        let mut migrated_forward_keys = BTreeSet::new();
+        for host in &mut self.hosts {
+            if !host.id.is_remote() || !identities.insert(host.id.clone()) {
+                host.id = Default::default();
+                identities.insert(host.id.clone());
+            }
+            let legacy_sessions = format!(
+                "ssh:{}:{}:{}",
+                host.ssh.port.unwrap_or(22),
+                host.ssh.destination,
+                host.ssh.user
+            );
+            let legacy_forwards = format!(
+                "{}:{}:{}",
+                host.ssh.destination,
+                host.ssh.user,
+                host.ssh.port.unwrap_or(22)
+            );
+            let key = host.id.to_string();
+            if let Some(profiles) = legacy_sessions_map.get(&legacy_sessions).cloned() {
+                self.sessions.entry(key.clone()).or_insert(profiles);
+                migrated_session_keys.insert(legacy_sessions);
+            }
+            if let Some(rules) = legacy_forwards_map.get(&legacy_forwards).cloned() {
+                self.forwards.entry(key).or_insert(rules);
+                migrated_forward_keys.insert(legacy_forwards);
+            }
+        }
+        for key in migrated_session_keys {
+            self.sessions.remove(&key);
+        }
+        for key in migrated_forward_keys {
+            self.forwards.remove(&key);
         }
         self
     }
@@ -233,27 +310,15 @@ fn theme_slots(themes: &ThemeFile, prefs: &Preferences) -> (String, String) {
         slot(prefs.dark_theme.as_ref(), false),
     )
 }
-// Name changes do not move saved sessions; tmux has no client-side session storage.
 fn session_storage_key(config: Option<&HostDefinition>) -> Option<String> {
     match config {
         None => Some("local".into()),
-        Some(host) if !host.tmux => Some(format!(
-            "ssh:{}:{}:{}",
-            host.ssh.port.unwrap_or(22),
-            host.ssh.destination,
-            host.ssh.user
-        )),
+        Some(host) if !host.tmux => Some(host.id.to_string()),
         Some(_) => None,
     }
 }
-
 fn forward_storage_key(config: &HostDefinition) -> String {
-    format!(
-        "{}:{}:{}",
-        config.ssh.destination,
-        config.ssh.user,
-        config.ssh.port.unwrap_or(22)
-    )
+    config.id.to_string()
 }
 
 struct Host {
@@ -268,6 +333,13 @@ struct Host {
     viewport: Option<(String, PixelViewport)>,
 }
 impl Host {
+    fn identity(&self) -> tshell_host::HostId {
+        self.config
+            .as_ref()
+            .map(|host| host.id.clone())
+            .unwrap_or_else(tshell_host::HostId::local)
+    }
+
     fn connection(&self) -> Connection {
         if self.backend.is_some() {
             self.snapshot.connection
@@ -325,6 +397,7 @@ mod host_tests {
     #[test]
     fn disconnect_preserves_remote_configuration_and_clears_live_state() {
         let config = HostDefinition {
+            id: Default::default(),
             ssh: tshell_host::SshConfig {
                 destination: "example.invalid".into(),
                 user: "test".into(),
@@ -367,23 +440,33 @@ mod host_tests {
         assert_eq!(host.connection(), Connection::Closed);
     }
 }
-#[derive(Default)]
-struct SessionFileState {
-    path: Option<PathBuf>,
-    text: String,
-    image: Option<std::sync::Arc<Image>>,
-    preview: Option<preview::Document>,
-    preview_mode: bool,
-    dirty: bool,
-    language: String,
-    saved_text: String,
+type WorkspaceKey = (tshell_host::HostId, String);
+struct SessionWorkspace {
+    cwd: Option<PathBuf>,
+    page: Page,
+    explorer: Option<Entity<Explorer>>,
+    git: Option<Entity<GitView>>,
+    refresh: bool,
+    subscriptions: Vec<Subscription>,
 }
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum WorkspaceMode {
+impl Default for SessionWorkspace {
+    fn default() -> Self {
+        Self {
+            cwd: None,
+            page: Page::Terminal,
+            explorer: None,
+            git: None,
+            refresh: false,
+            subscriptions: Vec::new(),
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Page {
     Terminal,
-    Files,
+    Explorer,
     Git,
+    Docker,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -409,16 +492,6 @@ enum HostField {
     User,
     Port,
     IdentityFile,
-}
-
-fn workspace_dialog(
-    dialog: gpui_kit::component::dialog::Dialog,
-    cx: &App,
-) -> gpui_kit::component::dialog::Dialog {
-    dialog
-        .bg(cx.theme().popover)
-        .border_color(cx.theme().border)
-        .text_color(cx.theme().popover_foreground)
 }
 
 fn command_icon(action: Shortcut) -> IconName {
@@ -487,7 +560,7 @@ pub struct AppView {
     use_tmux: bool,
     settings: bool,
     command_palette: bool,
-    workspace_mode: WorkspaceMode,
+    page: Page,
     sidebar_collapsed: bool,
     sidebar_width: f32,
     sidebar_drag: Option<(Pixels, f32)>,
@@ -525,48 +598,14 @@ pub struct AppView {
     forward_error: Option<String>,
     forwards: BTreeMap<String, Vec<crate::ssh_forward::LocalForward>>,
     forward_processes: BTreeMap<(String, usize), crate::ssh_forward::Tunnel>,
-    file_tree: Entity<TreeState>,
-    file_clipboard: Option<explorer::FileClipboard>,
-    sftp_sessions: BTreeMap<(usize, String), remote_files::Session>,
-    file_operation: bool,
+    docker: Entity<tshell_docker::DockerView>,
+    docker_endpoint: Option<String>,
+    workspaces: BTreeMap<WorkspaceKey, SessionWorkspace>,
+    active_workspace: Option<WorkspaceKey>,
     transfer_queue: transfer_queue::TransferQueue,
-    file_picker: Entity<SelectState<SearchableVec<String>>>,
-    file_editor: Entity<EditorState>,
-    file_states: BTreeMap<(usize, String), SessionFileState>,
-    tool_roots: BTreeMap<(usize, String), PathBuf>,
-    tool_modes: BTreeMap<(usize, String), WorkspaceMode>,
     tool_request: u64,
-    git_request: u64,
-    git_diff_request: u64,
-    git_diff: Option<git_view::DiffView>,
-    git_diff_mode: git_view::DiffMode,
-    git_diff_compact: bool,
-    active_file_session: Option<(usize, String)>,
-    pending_file_state: Option<SessionFileState>,
-    file_link_position: Option<(PathBuf, (u32, u32))>,
-    open_file: Option<PathBuf>,
-    image_preview: Option<std::sync::Arc<Image>>,
-    file_preview: Option<preview::Document>,
-    #[cfg(windows)]
-    web_preview: Option<preview::WebPreview>,
-    #[cfg(windows)]
-    web_preview_failed: bool,
-    preview_mode: bool,
-    editor_dirty: bool,
-    editor_language: String,
-    saved_file_text: String,
-    editor_search: Entity<InputState>,
-    editor_replace: Entity<InputState>,
-    editor_search_revision: u64,
-    file_request: u64,
-    tree_request: u64,
-    tree_loading: BTreeSet<String>,
-    tree_loaded: BTreeSet<String>,
-    file_loading: Option<String>,
-    file_saving: bool,
-    pending_file_paths: Option<Vec<String>>,
-    git_changes: Vec<workbench::GitChange>,
-    git_error: Option<String>,
+    navigation_request: u64,
+    navigation_loading: Option<String>,
     message: Option<String>,
     root_focus: FocusHandle,
     keyboard_focus: bool,
@@ -598,28 +637,7 @@ impl Render for ModalContent {
     }
 }
 
-fn button(id: impl Into<ElementId>, icon: IconName, label: impl Into<SharedString>) -> Button {
-    Button::new(id)
-        .ghost()
-        .small()
-        .h(px(style::CONTROL_HEIGHT))
-        .rounded(px(4.))
-        .text_size(px(12.))
-        .line_height(relative(1.))
-        .icon(icon)
-        .label(label)
-}
-fn icon_button(id: impl Into<ElementId>, icon: IconName, label: impl Into<SharedString>) -> Button {
-    Button::new(id)
-        .ghost()
-        .small()
-        .size(px(style::CONTROL_HEIGHT))
-        .rounded(px(4.))
-        .text_size(px(12.))
-        .line_height(relative(1.))
-        .icon(icon)
-        .tooltip(label)
-}
+use tshell_ui::controls::{button, icon_button};
 
 const PANE_STROKE: f32 = 1.;
 
@@ -762,20 +780,7 @@ impl AppView {
             .clamp(0.2, 1.);
         let sidebar_opacity = prefs.resolved_sidebar_opacity();
         let cwd = std::env::current_dir().unwrap_or_default();
-        let git_changes = Vec::new();
-        let git_error = None;
         let command_state = cx.new(|cx| CommandState::new(window, cx));
-        let tree_items = workbench::file_tree(&cwd);
-        let file_paths = workbench::file_paths(&tree_items, &cwd);
-        let file_tree = cx.new(|cx| TreeState::new(cx).items(tree_items));
-        let file_picker = cx.new(|cx| {
-            SelectState::new(SearchableVec::new(file_paths), None, window, cx).searchable(true)
-        });
-        let file_editor = cx.new(|cx| {
-            let mut editor = EditorState::new(window, cx).language("plaintext");
-            editor.set_highlighter_factory(editor_theme::factory(), cx);
-            editor
-        });
         let (backend, message) =
             match LocalBackend::restore(cwd.clone(), None, prefs.sessions.get("local").cloned()) {
                 Ok(b) => (Some(Backend::Local(b)), None),
@@ -821,6 +826,24 @@ impl AppView {
                 pending: Vec::new(),
             });
         }
+        let docker_targets = docker::targets(&hosts, prefs.docker_endpoint.clone());
+        let docker = cx.new(|cx| {
+            let mut view = tshell_docker::DockerView::new(
+                docker_targets,
+                palette,
+                terminal_palette,
+                font_family.clone(),
+                if prefs.font_size >= 10. {
+                    prefs.font_size.min(24.)
+                } else {
+                    14.
+                },
+                window,
+                cx,
+            );
+            view.restore_target(prefs.docker_target.clone());
+            view
+        });
         let (workspace_updates, updates) = async_channel::bounded(1);
         let initial_window_size =
             valid_window_size(prefs.window_size).unwrap_or(DEFAULT_WINDOW_SIZE);
@@ -851,8 +874,7 @@ impl AppView {
             }
             let _ = owner.update(cx, |app, cx| {
                 if app.settings_ui.recording.is_none()
-                    && (window.has_active_dialog(cx)
-                        || app.workspace_mode != WorkspaceMode::Terminal)
+                    && (window.has_active_dialog(cx) || app.page != Page::Terminal)
                 {
                     app.set_keyboard_focus(true, cx);
                 }
@@ -901,7 +923,7 @@ impl AppView {
             use_tmux: true,
             settings: false,
             command_palette: false,
-            workspace_mode: WorkspaceMode::Terminal,
+            page: Page::Terminal,
             sidebar_collapsed: prefs.sidebar_collapsed,
             sidebar_width: prefs
                 .sidebar_width
@@ -962,52 +984,14 @@ impl AppView {
             forward_error: None,
             forwards: prefs.forwards,
             forward_processes: BTreeMap::new(),
-            file_tree,
-            file_clipboard: None,
-            sftp_sessions: BTreeMap::new(),
-            file_operation: false,
+            docker,
+            docker_endpoint: prefs.docker_endpoint.clone(),
+            workspaces: BTreeMap::new(),
+            active_workspace: None,
             transfer_queue: Default::default(),
-            file_picker,
-            file_editor,
-            file_states: BTreeMap::new(),
-            tool_roots: BTreeMap::new(),
-            tool_modes: BTreeMap::new(),
             tool_request: 0,
-            git_request: 0,
-            git_diff_request: 0,
-            git_diff: None,
-            git_diff_mode: git_view::DiffMode::SideBySide,
-            git_diff_compact: true,
-            active_file_session: None,
-            pending_file_state: None,
-            file_link_position: None,
-            open_file: None,
-            image_preview: None,
-            file_preview: None,
-            #[cfg(windows)]
-            web_preview: None,
-            #[cfg(windows)]
-            web_preview_failed: false,
-            preview_mode: false,
-            editor_dirty: false,
-            editor_language: "plaintext".into(),
-            saved_file_text: String::new(),
-            editor_search: cx.new(|cx| {
-                InputState::new(window, cx).placeholder(crate::t!("ws.placeholder_search"))
-            }),
-            editor_replace: cx.new(|cx| {
-                InputState::new(window, cx).placeholder(crate::t!("ws.placeholder_replace"))
-            }),
-            editor_search_revision: 0,
-            file_request: 0,
-            tree_request: 0,
-            tree_loading: BTreeSet::new(),
-            tree_loaded: BTreeSet::new(),
-            file_loading: None,
-            file_saving: false,
-            pending_file_paths: None,
-            git_changes,
-            git_error,
+            navigation_request: 0,
+            navigation_loading: None,
             message,
             root_focus: cx.focus_handle(),
             keyboard_focus: false,
@@ -1048,38 +1032,11 @@ impl AppView {
             }
         })
         .detach();
-        cx.subscribe_in(&this.file_editor, window, |this, _, event, _, cx| {
-            if matches!(event, InputEvent::Change) && this.open_file.is_some() {
-                this.editor_dirty = true;
-                if this.preview_mode {
-                    let text = this.file_editor.read(cx).value().to_string();
-                    this.preview_mode = preview::can_preview(&this.editor_language, &text);
-                    this.file_preview = this
-                        .preview_mode
-                        .then(|| preview::parse(&this.editor_language, &text));
-                }
-                cx.notify();
-            }
+        cx.subscribe_in(&this.docker, window, |this, _, event, window, cx| {
+            this.docker_event(event.clone(), window, cx)
         })
         .detach();
-        cx.subscribe_in(&this.file_picker, window, |this, _, event, window, cx| {
-            if let SelectEvent::Confirm(Some(path)) = event {
-                let path = if this.hosts[this.active].config.is_some() {
-                    PathBuf::from(path)
-                } else {
-                    this.cwd.join(path)
-                };
-                this.open_path(path, window, cx);
-            }
-        })
-        .detach();
-        cx.subscribe(&this.file_tree, |this, _, event, cx| {
-            if let TreeEvent::Expanded(id) = event {
-                this.expand_directory(id.to_string(), cx);
-            }
-        })
-        .detach();
-        this.subscribe_editor_search(window, cx);
+        cx.observe(&this.docker, |_, _, cx| cx.notify()).detach();
         this.apply_appearance(window, cx);
         this.subscribe_settings(window, cx);
         this.apply_opacity(window, cx);
@@ -1204,6 +1161,8 @@ impl AppView {
             acrylic_background: self.acrylic_background,
             keybindings: self.keybindings.clone(),
             forwards: self.forwards.clone(),
+            docker_endpoint: self.docker_endpoint.clone(),
+            docker_target: self.docker.read(cx).selected_target(),
             hosts: self.hosts.iter().filter_map(|h| h.config.clone()).collect(),
             sessions: self
                 .hosts
@@ -1313,67 +1272,52 @@ impl AppView {
         if profiles_changed {
             self.save(cx);
         }
-        self.sftp_sessions.retain(|(index, id), session| {
-            self.hosts.get(*index).is_some_and(|host| {
-                host.config
-                    .as_ref()
-                    .is_some_and(|config| config.ssh == session.host)
-                    && host.backend.is_some()
-                    && (!host.snapshot.connected()
-                        || id.is_empty()
-                        || host.snapshot.sessions.iter().any(|s| s.id == *id))
-            })
+        self.workspaces.retain(|(id, session), _| {
+            self.hosts
+                .iter()
+                .find(|host| host.identity() == *id)
+                .is_some_and(|host| {
+                    host.backend.is_none()
+                        || !host.snapshot.connected()
+                        || host
+                            .snapshot
+                            .sessions
+                            .iter()
+                            .any(|live| live.id == *session)
+                })
         });
         let host = &self.hosts[self.active];
-        let file_key = host
+        let key = host
             .snapshot
             .session()
-            .map(|session| (self.active, session.id.clone()));
-        let file_session_changed = self.active_file_session != file_key;
-        if file_session_changed {
-            self.file_request += 1;
-            self.file_loading = None;
-            self.tool_request += 1;
-            self.git_request += 1;
-            if let Some(old_key) = self.active_file_session.take() {
-                self.tool_modes.insert(old_key.clone(), self.workspace_mode);
-                let state = self
-                    .pending_file_state
-                    .take()
-                    .unwrap_or_else(|| SessionFileState {
-                        path: self.open_file.clone(),
-                        text: self.file_editor.read(cx).value().to_string(),
-                        image: self.image_preview.clone(),
-                        preview: self.file_preview.clone(),
-                        preview_mode: self.preview_mode,
-                        dirty: self.editor_dirty,
-                        language: self.editor_language.clone(),
-                        saved_text: self.saved_file_text.clone(),
-                    });
-                self.file_states.insert(old_key, state);
-            }
-            self.pending_file_state = Some(
-                file_key
-                    .as_ref()
-                    .and_then(|key| self.file_states.remove(key))
-                    .unwrap_or_default(),
-            );
-            self.workspace_mode = file_key
+            .map(|session| (host.identity(), session.id.clone()));
+        if self.active_workspace != key {
+            if let Some(old) = self
+                .active_workspace
                 .as_ref()
-                .and_then(|key| self.tool_modes.get(key))
-                .copied()
-                .unwrap_or(WorkspaceMode::Terminal);
-            self.active_file_session = file_key;
-            self.open_file = None;
-            self.editor_dirty = false;
-            self.file_preview = None;
-            self.preview_mode = false;
+                .and_then(|key| self.workspaces.get_mut(key))
+                && self.page != Page::Docker
+            {
+                old.page = self.page;
+            }
+            if self.page != Page::Docker {
+                self.page = key
+                    .as_ref()
+                    .and_then(|key| self.workspaces.get(key))
+                    .map(|workspace| workspace.page)
+                    .unwrap_or(Page::Terminal);
+            }
+            self.active_workspace = key.clone();
+            self.need_focus = true;
         }
-        let root = self
-            .active_file_session
+        if let Some(key) = key {
+            self.workspaces.entry(key).or_default();
+        }
+        self.cwd = self
+            .active_workspace
             .as_ref()
-            .and_then(|key| self.tool_roots.get(key))
-            .cloned()
+            .and_then(|key| self.workspaces.get(key))
+            .and_then(|workspace| workspace.cwd.clone())
             .unwrap_or_else(|| {
                 if host.config.is_some() {
                     PathBuf::from("~")
@@ -1381,20 +1325,6 @@ impl AppView {
                     dirs::home_dir().unwrap_or_else(|| self.default_cwd.clone())
                 }
             });
-        if self.cwd != root || file_session_changed {
-            self.cwd = root;
-            self.tree_request += 1;
-            self.git_changes.clear();
-            self.git_diff = None;
-            self.git_diff_request += 1;
-            self.git_error = None;
-            if self.workspace_mode == WorkspaceMode::Files {
-                self.load_files(cx);
-            }
-            if self.workspace_mode == WorkspaceMode::Git {
-                self.refresh_git(cx);
-            }
-        }
         self.sync_metrics(cx);
     }
 
@@ -1418,10 +1348,7 @@ impl AppView {
         self.latency_task = Some(cx.spawn_in(window, async move |view, cx| {
             loop {
                 let target = match view.update(cx, |this, _| {
-                    if !this.show_status_bar
-                        || this.zen
-                        || this.workspace_mode != WorkspaceMode::Terminal
-                    {
+                    if !this.show_status_bar || this.zen || this.page != Page::Terminal {
                         return None;
                     }
                     let probes = this.metrics_config.probes();
@@ -1480,7 +1407,7 @@ impl AppView {
                     .update(cx, |this, cx| {
                         if this.show_status_bar
                             && !this.zen
-                            && this.workspace_mode == WorkspaceMode::Terminal
+                            && this.page == Page::Terminal
                             && this.active == index
                             && this.hosts[index].config.as_ref() == Some(&config)
                         {
@@ -1502,7 +1429,7 @@ impl AppView {
     }
 
     fn act(&mut self, action: Action, cx: &mut Context<Self>) {
-        if self.closes_session_with_unsaved_files(&action) {
+        if self.closes_session_with_unsaved_files(&action, cx) {
             self.message = Some(crate::t!("ws.session_files_busy").to_string());
             cx.notify();
             return;
@@ -1677,6 +1604,12 @@ impl AppView {
             }
         };
         let config = HostDefinition {
+            id: self
+                .editing_host
+                .and_then(|index| self.hosts.get(index))
+                .and_then(|host| host.config.as_ref())
+                .map(|host| host.id.clone())
+                .unwrap_or_default(),
             ssh: tshell_host::SshConfig {
                 destination: destination.clone(),
                 user,
@@ -1719,11 +1652,11 @@ impl AppView {
                 self.hosts[index].viewport = None;
                 self.start_forwards_for(&config);
             }
-        } else if !self
-            .hosts
-            .iter()
-            .any(|h| h.config.as_ref() == Some(&config))
-        {
+        } else if !self.hosts.iter().any(|h| {
+            h.config.as_ref().is_some_and(|host| {
+                host.ssh == config.ssh && host.tmux == config.tmux && host.name == config.name
+            })
+        }) {
             self.hosts.push(Host {
                 name: config.name.clone(),
                 config: Some(config),
@@ -2824,7 +2757,7 @@ impl AppView {
     }
 
     fn keyboard(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if self.workspace_mode == WorkspaceMode::Git
+        if self.page == Page::Git
             && !self.settings
             && !self.command_palette
             && !self.creating_tab
@@ -2860,13 +2793,16 @@ impl AppView {
             window.prevent_default();
             return;
         }
-        if self.workspace_mode == WorkspaceMode::Files
-            && self
-                .file_editor
-                .read(cx)
-                .focus_handle(cx)
-                .contains_focused(window, cx)
-            && self.open_file.is_some()
+        if self.page == Page::Explorer
+            && self.explorer_entity().is_some_and(|entity| {
+                let explorer = entity.read(cx);
+                explorer.open_file.is_some()
+                    && explorer
+                        .file_editor
+                        .read(cx)
+                        .focus_handle(cx)
+                        .contains_focused(window, cx)
+            })
             && event.keystroke.key.eq_ignore_ascii_case("s")
             && event.keystroke.modifiers.control
             && !event.keystroke.modifiers.alt
@@ -2910,7 +2846,7 @@ impl AppView {
                 }
             }
             Shortcut::Copy | Shortcut::Paste => {
-                if self.workspace_mode == WorkspaceMode::Git {
+                if self.page == Page::Git {
                     if shortcut == Shortcut::Copy {
                         let text = gpui_kit::base::TextSelection::selected_text(window, cx);
                         if !text.is_empty() {
@@ -3030,40 +2966,23 @@ impl AppView {
             cx.notify();
         }
     }
-    fn host_files_busy(&self, index: usize) -> bool {
-        self.file_saving
-            || self.file_operation
-            || self
-                .file_states
-                .iter()
-                .any(|((host, _), state)| *host == index && state.dirty)
-            || (self.active == index
-                && (self.editor_dirty
-                    || self
-                        .pending_file_state
-                        .as_ref()
-                        .is_some_and(|state| state.dirty)))
+    fn host_files_busy(&self, index: usize, cx: &App) -> bool {
+        let id = self.hosts[index].identity();
+        self.workspaces.iter().any(|((host, _), workspace)| {
+            *host == id
+                && workspace
+                    .explorer
+                    .as_ref()
+                    .is_some_and(|explorer| explorer.read(cx).busy())
+        })
     }
-
-    fn session_files_busy(&self, session_id: &str) -> bool {
-        self.file_saving
-            || self.file_operation
-            || self
-                .file_states
-                .iter()
-                .any(|((host, id), state)| *host == self.active && id == session_id && state.dirty)
-            || (self
-                .active_file_session
-                .as_ref()
-                .is_some_and(|(host, id)| *host == self.active && id == session_id)
-                && (self.editor_dirty
-                    || self
-                        .pending_file_state
-                        .as_ref()
-                        .is_some_and(|state| state.dirty)))
+    fn session_files_busy(&self, session_id: &str, cx: &App) -> bool {
+        self.workspaces
+            .get(&(self.hosts[self.active].identity(), session_id.to_owned()))
+            .and_then(|workspace| workspace.explorer.as_ref())
+            .is_some_and(|explorer| explorer.read(cx).busy())
     }
-
-    fn closes_session_with_unsaved_files(&self, action: &Action) -> bool {
+    fn closes_session_with_unsaved_files(&self, action: &Action, cx: &App) -> bool {
         let snapshot = &self.hosts[self.active].snapshot;
         let session_id = match action {
             Action::RemoveSession(id) => Some(id.as_str()),
@@ -3077,39 +2996,20 @@ impl AppView {
                 .map(|session| session.id.as_str()),
             _ => None,
         };
-        session_id.is_some_and(|id| self.session_files_busy(id))
+        session_id.is_some_and(|id| self.session_files_busy(id, cx))
     }
 
     fn prepare_host_connection_change(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
-        if self.host_files_busy(index) {
+        if self.host_files_busy(index, cx) {
             self.message = Some(crate::t!("ws.host_files_busy").to_string());
             cx.notify();
             return false;
         }
-        self.file_states.retain(|(host, _), _| *host != index);
-        self.tool_roots.retain(|(host, _), _| *host != index);
-        self.tool_modes.retain(|(host, _), _| *host != index);
-        self.sftp_sessions.retain(|(host, _), _| *host != index);
+        let id = self.hosts[index].identity();
+        self.workspaces.retain(|(host, _), _| *host != id);
         if self.active == index {
-            self.file_request += 1;
-            self.tool_request += 1;
-            self.git_request += 1;
-            self.git_diff_request += 1;
-            self.tree_request += 1;
-            self.active_file_session = None;
-            self.pending_file_state = Some(SessionFileState::default());
-            self.open_file = None;
-            self.file_loading = None;
-            self.image_preview = None;
-            self.file_preview = None;
-            self.preview_mode = false;
-            self.editor_dirty = false;
-            self.saved_file_text.clear();
-            self.workspace_mode = WorkspaceMode::Terminal;
-            self.tree_loading.clear();
-            self.tree_loaded.clear();
-            self.git_changes.clear();
-            self.git_diff = None;
+            self.active_workspace = None;
+            self.page = Page::Terminal;
         }
         true
     }
@@ -3118,7 +3018,7 @@ impl AppView {
         if index == 0 || index >= self.hosts.len() {
             return;
         }
-        if self.host_files_busy(index) {
+        if self.host_files_busy(index, cx) {
             self.message = Some(crate::t!("ws.host_files_busy").to_string());
             cx.notify();
             return;
@@ -3127,41 +3027,15 @@ impl AppView {
             self.stop_forwards_for(&config);
             self.forwards.remove(&forward_storage_key(&config));
         }
-        let removed_active = self.active == index;
-        let shifted_active = self.active > index;
+        let id = self.hosts[index].identity();
+        self.workspaces.retain(|(host, _), _| *host != id);
         self.hosts.remove(index);
-        if removed_active {
-            self.file_request += 1;
-            self.tool_request += 1;
-            self.git_request += 1;
-            self.git_diff_request += 1;
-            self.tree_request += 1;
-        }
-        self.sftp_sessions.clear();
-        self.tool_roots = std::mem::take(&mut self.tool_roots)
-            .into_iter()
-            .filter_map(|((host, tab), root)| {
-                (host != index).then_some(((if host > index { host - 1 } else { host }, tab), root))
-            })
-            .collect();
-        self.tool_modes = std::mem::take(&mut self.tool_modes)
-            .into_iter()
-            .filter_map(|((host, tab), mode)| {
-                (host != index).then_some(((if host > index { host - 1 } else { host }, tab), mode))
-            })
-            .collect();
-        self.file_states = std::mem::take(&mut self.file_states)
-            .into_iter()
-            .filter_map(|((host, session), state)| {
-                (host != index)
-                    .then_some(((if host > index { host - 1 } else { host }, session), state))
-            })
-            .collect();
-        self.active_file_session = self.active_file_session.take().and_then(|(host, session)| {
-            (host != index).then_some((if host > index { host - 1 } else { host }, session))
-        });
-        if self.active == index {
-            self.pending_file_state = None;
+        if self
+            .active_workspace
+            .as_ref()
+            .is_some_and(|(host, _)| *host == id)
+        {
+            self.active_workspace = None;
         }
         self.active = if self.active == index {
             0
@@ -3175,15 +3049,6 @@ impl AppView {
         self.need_focus = true;
         self.save(cx);
         self.sync(cx);
-        if shifted_active
-            && self.workspace_mode != WorkspaceMode::Terminal
-            && self
-                .active_file_session
-                .as_ref()
-                .is_some_and(|key| !self.tool_roots.contains_key(key))
-        {
-            self.open_tools(self.workspace_mode, cx);
-        }
         cx.notify();
     }
     fn measure(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
@@ -3514,7 +3379,7 @@ impl AppView {
                 )
                 .flex_1()
                 .h(px(30.))
-                .when(self.workspace_mode == WorkspaceMode::Terminal, |button| {
+                .when(self.page == Page::Terminal, |button| {
                     button.bg(rgb(p.selected)).text_color(rgb(p.text))
                 })
                 .on_click(cx.listener(|this, _, _, cx| this.show_terminal(cx))),
@@ -3527,7 +3392,7 @@ impl AppView {
                 )
                 .flex_1()
                 .h(px(30.))
-                .when(self.workspace_mode == WorkspaceMode::Files, |button| {
+                .when(self.page == Page::Explorer, |button| {
                     button.bg(rgb(p.selected)).text_color(rgb(p.text))
                 })
                 .on_click(cx.listener(|this, _, _, cx| this.show_files(cx))),
@@ -3540,10 +3405,23 @@ impl AppView {
                 )
                 .flex_1()
                 .h(px(30.))
-                .when(self.workspace_mode == WorkspaceMode::Git, |button| {
+                .when(self.page == Page::Git, |button| {
                     button.bg(rgb(p.selected)).text_color(rgb(p.text))
                 })
                 .on_click(cx.listener(|this, _, _, cx| this.show_git(cx))),
+            )
+            .child(
+                icon_button("mode-docker", IconName::Box, crate::t!("docker.title"))
+                    .flex_1()
+                    .h(px(30.))
+                    .when(self.page == Page::Docker, |button| {
+                        button.bg(rgb(p.selected)).text_color(rgb(p.text))
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.page = Page::Docker;
+                        this.need_focus = true;
+                        cx.notify();
+                    })),
             )
             .into_any_element()
     }
@@ -3728,171 +3606,39 @@ impl AppView {
     }
 
     fn file_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let p = self.palette;
-        let owner = cx.entity().downgrade();
-        let active_file = self.open_file.clone();
-        let directories = self.tree_loaded.clone();
-        // One menu owner for both rows and blank space; rows only select the target.
-        let menu_target = std::rc::Rc::new(std::cell::RefCell::new(None::<(PathBuf, bool)>));
-        let row_target = menu_target.clone();
-        let tree = Tree::new(&self.file_tree, move |index, entry, _, _, _| {
-            let empty_folder = !entry.is_folder() && directories.contains(entry.item().id.as_ref());
-            let is_folder = entry.is_folder() || empty_folder;
-            let folder_item = entry.item().clone();
-            let folder_owner = owner.clone();
-            let path = PathBuf::from(entry.item().id.as_ref());
-            let is_active = active_file.as_ref().is_some_and(|active| active == &path);
-            let is_code = !is_folder && workbench::language_for_path(&path) != "plaintext";
-            let open_owner = owner.clone();
-            let disclosure = if is_folder {
-                Icon::new(if entry.is_expanded() {
-                    IconName::ChevronDown
-                } else {
-                    IconName::ChevronRight
-                })
-                .xsmall()
-                .text_color(rgb(p.muted))
-                .into_any_element()
-            } else {
-                div().w(px(12.)).flex_shrink_0().into_any_element()
-            };
-            let file_icon = Icon::new(if is_folder {
-                if entry.is_expanded() {
-                    IconName::FolderOpen
-                } else {
-                    IconName::Folder
-                }
-            } else if is_code {
-                IconName::FileCode
-            } else {
-                IconName::File
-            })
-            .xsmall()
-            .flex_shrink_0()
-            .text_color(rgb(if is_folder || is_active {
-                p.accent
-            } else {
-                p.muted
-            }));
-            let row = div()
-                .w_full()
-                .h_full()
-                .min_w_0()
-                .flex()
-                .items_center()
-                .gap(px(3.))
-                .overflow_hidden()
-                .pl(px(entry.depth() as f32 * 12.))
-                .child(disclosure)
-                .child(file_icon)
-                .child(
-                    div()
-                        .min_w_0()
-                        .flex_1()
-                        .truncate()
-                        .when(is_active, |label| {
-                            label
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(p.text))
-                        })
-                        .child(entry.item().label.clone()),
-                );
-            let target = row_target.clone();
-            let target_path = path.clone();
-            let enabled = !entry.is_disabled();
-            let drop_owner = owner.clone();
-            let drop_target = path.clone();
-            ListItem::new(SharedString::from(format!("file-entry-{index}")))
-                .h(px(style::ROW_HEIGHT))
-                .min_h(px(style::ROW_HEIGHT))
-                .px_1()
-                .py_0()
-                .rounded_sm()
-                .overflow_hidden()
-                .text_size(px(13.))
-                .line_height(relative(1.35))
-                .on_mouse_down(MouseButton::Right, move |_, _, _| {
-                    *target.borrow_mut() = enabled.then(|| (target_path.clone(), is_folder));
-                })
-                .child(row)
-                .when(is_folder, |item| {
-                    item.on_drop(move |paths: &ExternalPaths, window, cx| {
-                        let _ = drop_owner.update(cx, |app, cx| {
-                            app.explorer_upload(
-                                paths.paths().to_vec(),
-                                drop_target.clone(),
-                                window,
-                                cx,
-                            )
-                        });
-                    })
-                })
-                .when(empty_folder, |item| {
-                    item.on_click(move |_, _, cx| {
-                        let expanded = folder_item.is_expanded();
-                        folder_item.clone().expanded(!expanded);
-                        let _ = folder_owner.update(cx, |_, cx| cx.notify());
-                    })
-                })
-                .when(!is_folder && !entry.is_disabled(), |item| {
-                    item.on_click(move |_, window, cx| {
-                        let _ = open_owner
-                            .update(cx, |app, cx| app.open_path(path.clone(), window, cx));
-                    })
-                })
-        })
-        .size_full();
-        div()
-            .w_full()
-            .h_full()
-            .flex()
-            .flex_col()
-            .pt_1()
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .px_1()
-                    .child(tree),
-            )
-            .id("explorer-background")
-            .on_drop({
-                let owner = cx.entity().downgrade();
-                let root = self.cwd.clone();
-                move |paths: &ExternalPaths, window, cx| {
-                    let _ = owner.update(cx, |app, cx| {
-                        app.explorer_upload(paths.paths().to_vec(), root.clone(), window, cx)
-                    });
-                }
-            })
-            .context_menu({
-                let owner = cx.entity().downgrade();
-                move |menu, _, cx| {
-                    let Some(app) = owner.upgrade() else {
-                        return menu;
-                    };
-                    let app = app.read(cx);
-                    let target = menu_target.borrow_mut().take();
-                    let root = target.is_none();
-                    let (path, directory) = target.unwrap_or_else(|| (app.cwd.clone(), true));
-                    app.explorer_menu(menu, path, directory, root, owner.clone())
-                }
-            })
-            .into_any_element()
+        self.explorer_entity()
+            .map(|entity| entity.update(cx, |explorer, cx| explorer.file_sidebar(cx)))
+            .unwrap_or_else(|| div().into_any_element())
+    }
+    fn git_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
+        self.git_entity()
+            .map(|entity| entity.update(cx, |git, cx| git.git_sidebar(cx)))
+            .unwrap_or_else(|| div().into_any_element())
     }
     fn sidebar_header(&self, cx: &mut Context<Self>) -> AnyElement {
-        let title = match self.workspace_mode {
-            WorkspaceMode::Terminal => crate::t!("ws.sessions").to_string(),
-            WorkspaceMode::Files | WorkspaceMode::Git => self
+        let title = match self.page {
+            Page::Terminal => crate::t!("ws.sessions").to_string(),
+            Page::Docker => crate::t!("docker.title").into_owned(),
+            Page::Explorer | Page::Git => self
                 .cwd
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| self.cwd.to_string_lossy().into_owned()),
         };
         let mut actions = Vec::new();
-        match self.workspace_mode {
-            WorkspaceMode::Terminal => actions.push(
+        match self.page {
+            Page::Docker => actions.push(
+                icon_button(
+                    "docker-sidebar-refresh",
+                    IconName::RefreshCw,
+                    crate::t!("ws.refresh"),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.docker.update(cx, |docker, cx| docker.refresh(cx))
+                }))
+                .into_any_element(),
+            ),
+            Page::Terminal => actions.push(
                 icon_button(
                     "new-session",
                     IconName::Plus,
@@ -3903,8 +3649,8 @@ impl AppView {
                 .on_click(cx.listener(|this, _, window, cx| this.show_new_session(window, cx)))
                 .into_any_element(),
             ),
-            WorkspaceMode::Files | WorkspaceMode::Git => {
-                if self.workspace_mode == WorkspaceMode::Files {
+            Page::Explorer | Page::Git => {
+                if self.page == Page::Explorer {
                     let owner = cx.entity().downgrade();
                     actions.push(
                         icon_button(
@@ -3919,7 +3665,19 @@ impl AppView {
                                 return menu;
                             };
                             let app = app.read(cx);
-                            app.explorer_menu(menu, app.cwd.clone(), true, true, owner.clone())
+                            if let Some(entity) = app.explorer_entity() {
+                                let owner = entity.downgrade();
+                                let explorer = entity.read(cx);
+                                explorer.explorer_menu(
+                                    menu,
+                                    explorer.cwd.clone(),
+                                    true,
+                                    true,
+                                    owner,
+                                )
+                            } else {
+                                menu
+                            }
                         })
                         .into_any_element(),
                     );
@@ -3928,13 +3686,11 @@ impl AppView {
                     icon_button("refresh-tool", IconName::RefreshCw, crate::t!("ws.refresh"))
                         .h(px(22.))
                         .w(px(22.))
-                        .on_click(
-                            cx.listener(|this, _, window, cx| match this.workspace_mode {
-                                WorkspaceMode::Files => this.refresh_files(window, cx),
-                                WorkspaceMode::Git => this.refresh_git(cx),
-                                WorkspaceMode::Terminal => {}
-                            }),
-                        )
+                        .on_click(cx.listener(|this, _, window, cx| match this.page {
+                            Page::Explorer => this.refresh_files(window, cx),
+                            Page::Git => this.refresh_git(cx),
+                            Page::Terminal | Page::Docker => {}
+                        }))
                         .into_any_element(),
                 );
             }
@@ -3968,10 +3724,11 @@ impl AppView {
     }
 
     fn sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let content = match self.workspace_mode {
-            WorkspaceMode::Terminal => self.session_list(cx),
-            WorkspaceMode::Files => self.file_sidebar(cx),
-            WorkspaceMode::Git => self.git_sidebar(cx),
+        let content = match self.page {
+            Page::Terminal => self.session_list(cx),
+            Page::Explorer => self.file_sidebar(cx),
+            Page::Git => self.git_sidebar(cx),
+            Page::Docker => self.docker.update(cx, |docker, cx| docker.sidebar(cx)),
         };
         div()
             .size_full()
@@ -3982,221 +3739,33 @@ impl AppView {
             ))
             .border_r_1()
             .border_color(rgb(self.palette.border))
-            .child(self.host_list(cx))
+            .when(self.page != Page::Docker, |sidebar| {
+                sidebar.child(self.host_list(cx))
+            })
             .child(self.activity_switcher(cx))
             .child(self.sidebar_header(cx))
             .child(div().flex_1().min_h_0().child(content))
             .into_any_element()
     }
-    fn file_surface(&self, cx: &mut Context<Self>) -> AnyElement {
-        if self.workspace_mode == WorkspaceMode::Git {
-            return self.git_surface(cx);
+    fn file_surface(&self, _cx: &mut Context<Self>) -> AnyElement {
+        match self.page {
+            Page::Explorer => self
+                .explorer_entity()
+                .map(|entity| entity.into_any_element()),
+            Page::Git => self.git_entity().map(|entity| entity.into_any_element()),
+            Page::Docker => Some(self.docker.clone().into_any_element()),
+            Page::Terminal => None,
         }
-        if let Some(path) = &self.open_file {
-            let mut parts = Vec::new();
-            parts.push(
-                self.cwd
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| crate::t!("ws.workspace").to_string()),
-            );
-            let relative_path = path.strip_prefix(&self.cwd).unwrap_or(path);
-            parts.extend(
-                relative_path
-                    .components()
-                    .map(|part| part.as_os_str().to_string_lossy().into_owned()),
-            );
-            let previewable = self.image_preview.is_none()
-                && preview::can_preview(
-                    &self.editor_language,
-                    self.file_editor.read(cx).value().as_ref(),
-                );
-            let owner = cx.entity().downgrade();
-            let file_mode = if previewable {
-                let edit_owner = owner.clone();
-                let preview_owner = owner;
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .flex_shrink_0()
-                    .child(
-                        button("file-edit", IconName::Pencil, crate::t!("file.edit"))
-                            .when(!self.preview_mode, |button| {
-                                button.bg(rgba((self.palette.accent << 8) | 42))
-                            })
-                            .on_click(move |_, _, cx| {
-                                let _ = edit_owner.update(cx, |this, cx| {
-                                    this.preview_mode = false;
-                                    this.file_preview = None;
-                                    this.need_focus = true;
-                                    cx.notify();
-                                });
-                            }),
-                    )
-                    .child(
-                        button("file-preview", IconName::Eye, crate::t!("file.preview"))
-                            .when(self.preview_mode, |button| {
-                                button.bg(rgba((self.palette.accent << 8) | 42))
-                            })
-                            .on_click(move |_, _, cx| {
-                                let _ = preview_owner.update(cx, |this, cx| {
-                                    let text = this.file_editor.read(cx).value().to_string();
-                                    this.file_preview =
-                                        Some(preview::parse(&this.editor_language, &text));
-                                    this.preview_mode = true;
-                                    this.need_focus = false;
-                                    cx.notify();
-                                });
-                            }),
-                    )
-                    .into_any_element()
-            } else {
-                div().into_any_element()
-            };
-            div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .h(px(style::TOOLBAR_HEIGHT))
-                        .flex_shrink_0()
-                        .px_3()
-                        .flex()
-                        .items_center()
-                        .overflow_hidden()
-                        .border_b_1()
-                        .border_color(rgb(self.palette.border))
-                        .text_size(px(12.))
-                        .line_height(relative(1.2))
-                        .child(
-                            div().min_w_0().flex_1().overflow_hidden().child(
-                                Breadcrumb::new()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .text_size(px(11.))
-                                    .children(parts.into_iter().map(|part| {
-                                        BreadcrumbItem::new(part)
-                                            .min_w_0()
-                                            .truncate()
-                                            .text_color(rgb(self.terminal_palette.text))
-                                    })),
-                            ),
-                        )
-                        .child(file_mode),
-                )
-                .children(
-                    (!self.preview_mode)
-                        .then(|| self.editor_search_bar(cx))
-                        .flatten(),
-                )
-                .child(if let Some(image) = &self.image_preview {
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .p_3()
-                        .child(
-                            img(image.clone())
-                                .size_full()
-                                .object_fit(ObjectFit::Contain),
-                        )
-                        .into_any_element()
-                } else if self.preview_mode {
-                    if self.editor_language == "markdown" {
-                        self.file_preview
-                            .as_ref()
-                            .and_then(|document| preview::render_markdown(document, self.palette))
-                            .unwrap_or_else(|| div().size_full().into_any_element())
-                    } else {
-                        let fallback = self.file_preview
-                            .as_ref()
-                            .map(|document| preview::render(document, self.palette, &self.font_family))
-                            .unwrap_or_else(|| div().size_full().into_any_element());
-                        #[cfg(windows)]
-                        {
-                            let owner = cx.entity().downgrade();
-                            div()
-                                .relative()
-                                .flex_1()
-                                .min_h_0()
-                                .child(fallback)
-                                .child(
-                                    canvas(
-                                        move |bounds, window, cx| {
-                                            window.defer(cx, move |window, cx| {
-                                                let _ = owner.update(cx, |this, cx| {
-                                                    if this.workspace_mode != WorkspaceMode::Files
-                                                        || this.editor_language != "html"
-                                                        || !this.preview_mode
-                                                        || this.settings
-                                                        || this.command_palette
-                                                        || window.has_active_dialog(cx)
-                                                    {
-                                                        return;
-                                                    }
-                                                    let Some(html) = this.file_preview.as_ref().and_then(|document| document.web_html()) else {
-                                                        return;
-                                                    };
-                                                    let result = if let Some(web) = &mut this.web_preview {
-                                                        web.show(html, bounds)
-                                                    } else if this.web_preview_failed {
-                                                        return;
-                                                    } else {
-                                                        match preview::WebPreview::new(html, bounds, window) {
-                                                            Ok(web) => {
-                                                                this.web_preview = Some(web);
-                                                                Ok(())
-                                                            }
-                                                            Err(error) => Err(error),
-                                                        }
-                                                    };
-                                                    if let Err(error) = result {
-                                                        tracing::warn!(%error, "WebView preview unavailable; using native fallback");
-                                                        this.web_preview = None;
-                                                        this.web_preview_failed = true;
-                                                    }
-                                                });
-                                            });
-                                        },
-                                        |_, _, _, _| {},
-                                    )
-                                    .absolute()
-                                    .size_full(),
-                                )
-                                .into_any_element()
-                        }
-                        #[cfg(not(windows))]
-                        {
-                            fallback
-                        }
-                    }
-                } else {
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .font_family(self.font_family.clone())
-                        .text_size(px(self.font_size.clamp(12., 17.)))
-                        .line_height(relative(1.5))
-                        .child(gpui_kit::base::input::Editor::new(&self.file_editor))
-                        .into_any_element()
-                })
-                .into_any_element()
-        } else {
+        .unwrap_or_else(|| {
             style::empty_state(
-                if self.file_loading.is_some() {
-                    IconName::Clock
-                } else {
-                    IconName::FileCode
-                },
-                self.file_loading
+                IconName::FolderOpen,
+                self.navigation_loading
                     .clone()
-                    .unwrap_or_else(|| crate::t!("ws.pick_file").to_string()),
+                    .unwrap_or_else(|| crate::t!("git.select_file").to_string()),
                 self.palette,
             )
             .into_any_element()
-        }
+        })
     }
     fn sync_metrics(&mut self, cx: &mut Context<Self>) {
         let host = &self.hosts[self.active];
@@ -4365,8 +3934,17 @@ impl AppView {
     fn status_bar(&self, snapshot: &Snapshot, window: &Window, cx: &Context<Self>) -> AnyElement {
         let line_height = chrome_line_height(window, 12.);
         let height = px(CHROME_BAR_HEIGHT);
-        match self.workspace_mode {
-            WorkspaceMode::Git => StatusBar::new()
+        match self.page {
+            Page::Docker => StatusBar::new()
+                .h(height)
+                .py_0()
+                .px_3()
+                .bg(rgb(self.palette.panel))
+                .text_size(px(12.))
+                .text_color(rgb(self.palette.muted))
+                .left(self.docker.read(cx).status())
+                .into_any_element(),
+            Page::Git => StatusBar::new()
                 .h(height)
                 .min_h(height)
                 .py_0()
@@ -4388,11 +3966,14 @@ impl AppView {
                         }),
                 )
                 .into_any_element(),
-            WorkspaceMode::Files => {
-                let cursor = self.file_editor.read(cx).cursor_position();
-                let path = self
-                    .open_file
-                    .as_ref()
+            Page::Explorer => {
+                let entity = self.explorer_entity();
+                let explorer = entity.as_ref().map(|entity| entity.read(cx));
+                let cursor = explorer
+                    .map(|explorer| explorer.file_editor.read(cx).cursor_position())
+                    .unwrap_or_default();
+                let path = explorer
+                    .and_then(|explorer| explorer.open_file.as_ref())
                     .map(|path| path.display().to_string())
                     .unwrap_or_else(|| self.cwd.display().to_string());
                 StatusBar::new()
@@ -4409,35 +3990,44 @@ impl AppView {
                     .left(div().min_w_0().flex_1().truncate().child(format!(
                         "{}{}",
                         path,
-                        if self.editor_dirty { " •" } else { "" }
+                        if explorer.is_some_and(|explorer| explorer.editor_dirty) {
+                            " •"
+                        } else {
+                            ""
+                        }
                     )))
                     .right(
                         div()
                             .flex()
                             .items_center()
                             .gap_3()
-                            .child(if self.image_preview.is_some() {
-                                "PNG".to_string()
-                            } else if self.preview_mode {
-                                crate::t!("file.preview").to_string()
-                            } else {
-                                format!(
-                                    "{}  {}",
-                                    self.editor_language,
-                                    crate::t!(
-                                        "editor.ln_col",
-                                        line = cursor.line + 1,
-                                        column = cursor.character + 1
+                            .child(
+                                if explorer.is_some_and(|explorer| explorer.image_preview.is_some())
+                                {
+                                    "PNG".to_string()
+                                } else if explorer.is_some_and(|explorer| explorer.preview_mode) {
+                                    crate::t!("file.preview").to_string()
+                                } else {
+                                    format!(
+                                        "{}  {}",
+                                        explorer
+                                            .map(|explorer| explorer.editor_language.as_str())
+                                            .unwrap_or("plaintext"),
+                                        crate::t!(
+                                            "editor.ln_col",
+                                            line = cursor.line + 1,
+                                            column = cursor.character + 1
+                                        )
                                     )
-                                )
-                            })
+                                },
+                            )
                             .when_some(self.forward_status_button(cx), |row, button| {
                                 row.child(button)
                             }),
                     )
                     .into_any_element()
             }
-            WorkspaceMode::Terminal => StatusBar::new()
+            Page::Terminal => StatusBar::new()
                 .h(height)
                 .min_h(height)
                 .py_0()
@@ -4792,7 +4382,7 @@ impl Render for AppView {
         }
         self.subscribe_terminal_links(window, cx);
         for (index, host) in self.hosts.iter().enumerate() {
-            let active = (index == self.active && self.workspace_mode == WorkspaceMode::Terminal)
+            let active = (index == self.active && self.page == Page::Terminal)
                 .then(|| host.snapshot.window())
                 .flatten();
             for (id, view) in &host.views {
@@ -4801,93 +4391,28 @@ impl Render for AppView {
                 view.update(cx, |view, cx| view.set_visible(visible, cx));
             }
         }
-        self.file_editor.update(cx, |editor, _| {
-            editor.set_editor_style(editor_theme::style(self.terminal_palette))
-        });
-        if let Some(paths) = self.pending_file_paths.take() {
-            self.file_picker.update(cx, |state, cx| {
-                state.set_items(SearchableVec::new(paths), window, cx)
-            });
-        }
-        if let Some(state) = self.pending_file_state.take() {
-            self.saved_file_text = state.saved_text;
-            self.open_file = None;
-            self.image_preview = state.image;
-            self.file_preview = state.preview.clone();
-            self.preview_mode = state.preview_mode;
-            self.file_editor.update(cx, |editor, cx| {
-                editor.set_value(state.text, window, cx);
-                editor.set_highlighter(
-                    if state.language.is_empty() {
-                        "plaintext"
-                    } else {
-                        &state.language
-                    },
-                    cx,
-                );
-            });
-            self.open_file = state.path;
-            self.editor_dirty = state.dirty;
-            self.editor_language = if state.language.is_empty() {
-                "plaintext".into()
-            } else {
-                state.language
-            };
-        }
-        if let Some((path, position)) = self.file_link_position.take()
-            && self.open_file.as_ref() == Some(&path)
-            && self.image_preview.is_none()
-        {
-            self.preview_mode = false;
-            self.file_editor.update(cx, |editor, cx| {
-                editor.set_cursor_position(
-                    gpui_kit::component::input::Position::new(position.0, position.1),
-                    window,
-                    cx,
-                )
-            });
-        }
-        #[cfg(windows)]
-        if self.workspace_mode != WorkspaceMode::Files
-            || !self.preview_mode
-            || self.editor_language != "html"
-            || self.file_preview.is_none()
-            || self.settings
-            || self.command_palette
-            || window.has_active_dialog(cx)
-        {
-            if let Some(web) = &mut self.web_preview {
-                web.hide();
-            }
-        }
-        self.sync_editor_search(window, cx);
+        self.prepare_tools(window, cx);
+        self.prepare_docker(window, cx);
         if self.need_focus
             && !window.has_active_dialog(cx)
             && !self.creating_tab
             && !self.settings
             && !self.command_palette
         {
-            match self.workspace_mode {
-                WorkspaceMode::Files
-                    if self.open_file.is_some()
-                        && self.image_preview.is_none()
-                        && !self.preview_mode =>
-                {
-                    self.file_editor
-                        .update(cx, |editor, cx| editor.focus(window, cx));
+            match self.page {
+                Page::Explorer => {
+                    if let Some(entity) = self.explorer_entity() {
+                        entity.update(cx, |explorer, cx| explorer.focus(window, cx));
+                    } else {
+                        window.focus(&self.root_focus, cx);
+                    }
                     self.need_focus = false;
                 }
-                WorkspaceMode::Files if self.image_preview.is_some() => {
-                    self.need_focus = false;
-                }
-                WorkspaceMode::Files if self.preview_mode => {
-                    self.need_focus = false;
-                }
-                WorkspaceMode::Files | WorkspaceMode::Git => {
+                Page::Git | Page::Docker => {
                     window.focus(&self.root_focus, cx);
                     self.need_focus = false;
                 }
-                WorkspaceMode::Terminal => {
+                Page::Terminal => {
                     if let Some(w) = self.hosts[self.active].snapshot.window() {
                         if let Some(v) = self.hosts[self.active].views.get(&w.active_pane) {
                             window.focus(&v.read(cx).focus_handle(cx), cx);
@@ -4904,11 +4429,12 @@ impl Render for AppView {
             .message
             .clone()
             .filter(|_| !self.settings_ui.host_form)
-            .or_else(|| snapshot.message.clone());
+            .or_else(|| snapshot.message.clone())
+            .filter(|_| self.page != Page::Docker);
         let can_reconnect = snapshot.message.is_some()
             && self.hosts[self.active].config.is_some()
             && !self.settings_ui.host_form;
-        let body = if self.workspace_mode == WorkspaceMode::Terminal {
+        let body = if self.page == Page::Terminal {
             let surface = self.surface(cx);
             let owner = cx.entity().downgrade();
             let close = owner.clone();
@@ -4986,18 +4512,15 @@ impl Render for AppView {
         } else {
             div().into_any_element()
         };
-        let body = if matches!(
-            self.workspace_mode,
-            WorkspaceMode::Files | WorkspaceMode::Git
-        ) {
+        let body = if self.page != Page::Terminal {
             div()
                 .size_full()
-                .bg(rgb(if self.workspace_mode == WorkspaceMode::Git {
+                .bg(rgb(if self.page == Page::Git {
                     p.background
                 } else {
                     self.terminal_palette.terminal
                 }))
-                .text_color(rgb(if self.workspace_mode == WorkspaceMode::Git {
+                .text_color(rgb(if self.page == Page::Git {
                     p.text
                 } else {
                     self.terminal_palette.text
@@ -5065,17 +4588,21 @@ impl Render for AppView {
                 .child(div().flex_1().min_w_0().child(main))
                 .into_any_element()
         };
-        let title = current
-            .map(|tab| {
-                tab.panes
-                    .iter()
-                    .find(|pane| pane.id == tab.active_pane)
-                    .map(|pane| pane.title.as_str())
-                    .filter(|title| !title.is_empty())
-                    .unwrap_or(&tab.name)
-            })
-            .unwrap_or_default()
-            .to_owned();
+        let title = if self.page == Page::Docker {
+            self.docker.read(cx).status()
+        } else {
+            current
+                .map(|tab| {
+                    tab.panes
+                        .iter()
+                        .find(|pane| pane.id == tab.active_pane)
+                        .map(|pane| pane.title.as_str())
+                        .filter(|title| !title.is_empty())
+                        .unwrap_or(&tab.name)
+                })
+                .unwrap_or_default()
+                .to_owned()
+        };
         let dialog_layer = Root::render_dialog_layer(window, cx);
         let sheet_layer = Root::render_sheet_layer(window, cx);
         div()
@@ -5154,7 +4681,7 @@ impl Render for AppView {
                         .flex_shrink_0()
                         .flex()
                         .items_center()
-                        .text_color(rgb(if self.workspace_mode == WorkspaceMode::Terminal {
+                        .text_color(rgb(if self.page == Page::Terminal {
                             self.terminal_palette.muted
                         } else {
                             p.text
@@ -5198,7 +4725,7 @@ impl Render for AppView {
                                 .items_center()
                                 .justify_center()
                                 .window_control_area(WindowControlArea::Drag)
-                                .bg(if self.workspace_mode == WorkspaceMode::Terminal {
+                                .bg(if self.page == Page::Terminal {
                                     content_background
                                 } else {
                                     rgb(p.panel).into()
@@ -5217,7 +4744,7 @@ impl Render for AppView {
                         .child(
                             div()
                                 .h_full()
-                                .bg(if self.workspace_mode == WorkspaceMode::Terminal {
+                                .bg(if self.page == Page::Terminal {
                                     content_background
                                 } else {
                                     rgb(p.panel).into()

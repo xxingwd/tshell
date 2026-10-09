@@ -228,6 +228,7 @@ pub struct Session {
     tx: Option<SyncSender<Command>>,
     killer: Option<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
     remote_input: Option<Arc<dyn Fn(Vec<u8>) -> Result<()> + Send + Sync>>,
+    remote_size: Option<Arc<dyn Fn(u16, u16) + Send + Sync>>,
     ssh_commands: Option<async_channel::Sender<Command>>,
     remote_parser: Mutex<OutputParser>,
     remote_notifications: Mutex<crate::terminal_notifications::Notifications>,
@@ -436,6 +437,7 @@ impl Session {
             tx: Some(tx),
             killer: Some(killer),
             remote_input: None,
+            remote_size: None,
             ssh_commands: None,
             remote_parser: Mutex::new(OutputParser::default()),
             remote_notifications: Default::default(),
@@ -449,6 +451,16 @@ impl Session {
         rows: usize,
         cols: usize,
         input: Arc<dyn Fn(Vec<u8>) -> Result<()> + Send + Sync>,
+    ) -> Arc<Self> {
+        Self::remote_with_resize(id, rows, cols, input, None)
+    }
+
+    pub fn remote_with_resize(
+        id: String,
+        rows: usize,
+        cols: usize,
+        input: Arc<dyn Fn(Vec<u8>) -> Result<()> + Send + Sync>,
+        resize: Option<Arc<dyn Fn(u16, u16) + Send + Sync>>,
     ) -> Arc<Self> {
         let title = Arc::new(Mutex::new(id.clone()));
         let metadata = OutputWake::default();
@@ -485,6 +497,7 @@ impl Session {
             tx: None,
             killer: None,
             remote_input: Some(input),
+            remote_size: resize,
             ssh_commands: None,
             remote_parser: Mutex::new(OutputParser::default()),
             remote_notifications: Default::default(),
@@ -703,6 +716,16 @@ impl Session {
             return;
         }
         if self.is_remote() {
+            if let Some(resize) = &self.remote_size {
+                let (rows, cols) = (rows.clamp(2, 500), cols.clamp(2, 1000));
+                let term = self.term.lock();
+                let changed = term.screen_lines() != rows || term.columns() != cols;
+                drop(term);
+                if changed {
+                    self.remote_resize(rows, cols);
+                    resize(rows as u16, cols as u16);
+                }
+            }
             return;
         }
         let (rows, cols) = (rows.clamp(2, 500), cols.clamp(2, 1000));
