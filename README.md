@@ -21,8 +21,8 @@ xterm.js or OpenSSH feature parity.
 - A host -> session -> tab -> split workspace model with collapsible navigation,
   keyboard-driven commands, equal column/row splits, floating/focus modes, and persisted
   interface preferences.
-- Compact native controls, concise labels with on-demand help, responsive settings,
-  field-level host validation, and segmented Git diff modes. See
+- Compact native controls, concise labels with on-demand help, compact responsive settings,
+  keyboard focus feedback, field-level host validation, and adaptive Git diff controls. See
   [workspace interface](docs/workspace-interface.md).
 - Explorer and read-only Git views for local and remote working directories.
   Remote files use SFTP and remote Git commands; no remote Python or mount is
@@ -32,7 +32,8 @@ xterm.js or OpenSSH feature parity.
   search, and conflict-aware remote saves.
 - A global SFTP transfer queue with concurrent uploads/downloads, directory
   scanning, byte progress, a draggable panel that auto-collapses to the right
-  edge, speed/remaining time, and per-task cancellation, clearing, and retry. See
+  edge, speed/remaining time, and per-task cancellation, clearing, and retry.
+  File and folder downloads default to the system Downloads directory. See
   [SFTP transfers](docs/sftp-transfers.md).
 - Markdown opens in a native rich-text preview; HTML uses a read-only WebView2
   preview on Windows. Both have a one-click switch back to editing. The HTML

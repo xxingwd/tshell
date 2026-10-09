@@ -106,8 +106,8 @@ fn setting_row(
         .items_center()
         .justify_between()
         .gap_3()
-        .min_h(px(44.))
-        .py_2()
+        .min_h(px(36.))
+        .py_1()
         .child(
             div()
                 .flex()
@@ -1592,22 +1592,26 @@ impl AppView {
                         let owner = owner.clone();
                         let section_label = section_label.into_owned();
                         let keywords = [label.clone(), section_label.clone()];
-                        SettingGroup::new().title(section_label).item(
-                            SettingItem::render(move |_, window, cx| {
-                                owner
-                                    .update(cx, |app, cx| {
-                                        app.settings_content(page, Some(section), window, cx)
-                                    })
-                                    .unwrap_or_else(|_| div().into_any_element())
-                            })
-                            .keywords(keywords),
-                        )
+                        SettingGroup::new()
+                            .w_full()
+                            .max_w(px(680.))
+                            .title(section_label)
+                            .item(
+                                SettingItem::render(move |_, window, cx| {
+                                    owner
+                                        .update(cx, |app, cx| {
+                                            app.settings_content(page, Some(section), window, cx)
+                                        })
+                                        .unwrap_or_else(|_| div().into_any_element())
+                                })
+                                .keywords(keywords),
+                            )
                     }),
                 );
             }
             let keywords = [label.clone()];
             SettingPage::new(label).icon(icon).group(
-                SettingGroup::new().item(
+                SettingGroup::new().w_full().max_w(px(680.)).item(
                     SettingItem::render(move |_, window, cx| {
                         owner
                             .update(cx, |app, cx| app.settings_content(page, None, window, cx))

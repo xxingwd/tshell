@@ -580,6 +580,17 @@ impl AppView {
         cx.notify();
     }
 
+    fn set_diff_compact(&mut self, compact: bool, cx: &mut Context<Self>) {
+        if self.git_diff_compact == compact {
+            return;
+        }
+        self.git_diff_compact = compact;
+        if let Some(diff) = &mut self.git_diff {
+            diff.scroll = UniformListScrollHandle::new();
+        }
+        cx.notify();
+    }
+
     fn diff_pane(&self, side: Option<usize>, cx: &mut Context<Self>) -> AnyElement {
         let Some(DiffView {
             content: Ok(content),
@@ -855,7 +866,19 @@ impl AppView {
     }
 
     pub(super) fn git_surface(&self, cx: &mut Context<Self>) -> AnyElement {
+        let owner = cx.entity().downgrade();
+        container_query(move |size, _, cx| {
+            owner
+                .update(cx, |app, cx| app.git_surface_for_width(size.width, cx))
+                .unwrap_or_else(|_| div().into_any_element())
+        })
+        .into_any_element()
+    }
+
+    fn git_surface_for_width(&self, width: Pixels, cx: &mut Context<Self>) -> AnyElement {
         let p = self.palette;
+        let narrow = width < px(720.);
+        let owner = cx.entity().downgrade();
         let Some(diff) = &self.git_diff else {
             return style::empty_state(
                 IconName::GitBranch,
@@ -949,45 +972,79 @@ impl AppView {
                                 }
                             })),
                     )
-                    .child(
-                        ButtonGroup::new("diff-context")
-                            .small()
-                            .compact()
-                            .flex_shrink_0()
-                            .child(
-                                Button::new("diff-changes")
-                                    .h(px(style::CONTROL_HEIGHT))
-                                    .label(crate::t!("git.only_changes"))
-                                    .selected(self.git_diff_compact),
-                            )
-                            .child(
-                                Button::new("diff-full-file")
-                                    .h(px(style::CONTROL_HEIGHT))
-                                    .label(crate::t!("git.full_file"))
-                                    .selected(!self.git_diff_compact),
-                            )
-                            .on_click(cx.listener(|this, indices: &Vec<usize>, _, cx| {
-                                let Some(index) = indices.first() else { return };
-                                let compact = *index == 0;
-                                if this.git_diff_compact != compact {
-                                    this.git_diff_compact = compact;
-                                    if let Some(diff) = &mut this.git_diff {
-                                        diff.scroll = UniformListScrollHandle::new();
+                    .when(!narrow, |bar| {
+                        bar.child(
+                            ButtonGroup::new("diff-context")
+                                .small()
+                                .compact()
+                                .flex_shrink_0()
+                                .child(
+                                    Button::new("diff-changes")
+                                        .h(px(style::CONTROL_HEIGHT))
+                                        .label(crate::t!("git.only_changes"))
+                                        .selected(self.git_diff_compact),
+                                )
+                                .child(
+                                    Button::new("diff-full-file")
+                                        .h(px(style::CONTROL_HEIGHT))
+                                        .label(crate::t!("git.full_file"))
+                                        .selected(!self.git_diff_compact),
+                                )
+                                .on_click(cx.listener(|this, indices: &Vec<usize>, _, cx| {
+                                    let Some(index) = indices.first() else { return };
+                                    this.set_diff_compact(*index == 0, cx);
+                                })),
+                        )
+                    })
+                    .when(narrow, |bar| {
+                        let compact = self.git_diff_compact;
+                        bar.child(
+                            Button::new("diff-context-menu")
+                                .small()
+                                .h(px(style::CONTROL_HEIGHT))
+                                .label(crate::t!(if compact {
+                                    "git.only_changes"
+                                } else {
+                                    "git.full_file"
+                                }))
+                                .dropdown_caret(true)
+                                .dropdown_menu(move |mut menu, _, _| {
+                                    for (value, label) in
+                                        [(true, "git.only_changes"), (false, "git.full_file")]
+                                    {
+                                        let owner = owner.clone();
+                                        menu = menu.item(
+                                            PopupMenuItem::new(crate::t!(label).into_owned())
+                                                .checked(compact == value)
+                                                .on_click(move |_, _, cx| {
+                                                    let _ = owner.update(cx, |app, cx| {
+                                                        app.set_diff_compact(value, cx)
+                                                    });
+                                                }),
+                                        );
                                     }
-                                    cx.notify();
-                                }
-                            })),
-                    )
+                                    menu
+                                }),
+                        )
+                    })
                     .when(diff.change.label() != "D", |bar| {
                         bar.child(
                             Button::new("diff-open-file")
                                 .ghost()
                                 .small()
                                 .disabled(self.file_loading.is_some())
-                                .label(if self.file_loading.is_some() {
-                                    crate::t!("git.opening")
-                                } else {
-                                    crate::t!("git.open_file")
+                                .when(narrow, |button| {
+                                    button
+                                        .w(px(style::CONTROL_HEIGHT))
+                                        .icon(IconName::FileCode)
+                                        .tooltip(crate::t!("git.open_file"))
+                                })
+                                .when(!narrow, |button| {
+                                    button.label(if self.file_loading.is_some() {
+                                        crate::t!("git.opening")
+                                    } else {
+                                        crate::t!("git.open_file")
+                                    })
                                 })
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.open_path(path.clone(), window, cx)

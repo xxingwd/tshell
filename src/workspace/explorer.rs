@@ -262,49 +262,25 @@ impl AppView {
     ) {
         let key = self.active_file_session.clone();
         let host = self.active;
-        if directory {
-            let picker = cx.prompt_for_paths(PathPromptOptions {
-                files: false,
-                directories: true,
-                multiple: false,
-                prompt: Some(crate::t!("explorer.download").into_owned().into()),
-            });
-            cx.spawn_in(window, async move |view, cx| {
-                let Ok(Ok(Some(paths))) = picker.await else {
-                    return;
-                };
-                let Some(parent) = paths.into_iter().next() else {
-                    return;
-                };
-                let _ = view.update_in(cx, |app, window, cx| {
-                    if app.active != host || app.active_file_session != key {
-                        return;
-                    }
-                    let destination = source
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .ok_or_else(|| {
-                            anyhow::anyhow!("{}", crate::t!("explorer.invalid_directory_name"))
-                        })
-                        .and_then(|name| file_ops::child(&parent, name, false));
-                    match destination {
-                        Ok(destination) => {
-                            app.explorer_download_to(source, destination, window, cx)
-                        }
-                        Err(error) => {
-                            window.push_notification(Notification::error(format!("{error:#}")), cx)
-                        }
-                    }
-                });
+        let download_directory = dirs::download_dir()
+            .or_else(|| {
+                dirs::home_dir()
+                    .map(|home| home.join("Downloads"))
+                    .filter(|path| path.is_dir())
             })
-            .detach();
-            return;
-        }
+            .or_else(dirs::home_dir)
+            .unwrap_or_else(|| self.default_cwd.clone());
         let name = source.file_name().and_then(|name| name.to_str());
-        let picker = cx.prompt_for_new_path(
-            &dirs::download_dir().unwrap_or_else(|| self.default_cwd.clone()),
-            name,
-        );
+        if directory {
+            let destination = name
+                .ok_or_else(|| anyhow::anyhow!("{}", crate::t!("explorer.invalid_directory_name")))
+                .and_then(|name| file_ops::child(&download_directory, name, false));
+            if let Err(error) = destination {
+                window.push_notification(Notification::error(format!("{error:#}")), cx);
+                return;
+            }
+        }
+        let picker = cx.prompt_for_new_path(&download_directory, name);
         cx.spawn_in(window, async move |view, cx| {
             let Ok(Ok(Some(destination))) = picker.await else {
                 return;

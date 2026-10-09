@@ -564,6 +564,8 @@ pub struct AppView {
     git_error: Option<String>,
     message: Option<String>,
     root_focus: FocusHandle,
+    keyboard_focus: bool,
+    _focus_subscription: Subscription,
     cell_width: f32,
     line_height: f32,
     need_focus: bool,
@@ -828,6 +830,26 @@ impl AppView {
             window,
             cx,
         );
+        let owner = cx.entity().downgrade();
+        let focus_window = window.window_handle();
+        // Native Tab actions can consume the key before view-level handlers run.
+        let focus_subscription = cx.intercept_keystrokes(move |event, window, cx| {
+            if window.window_handle() != focus_window
+                || event.keystroke.key != "tab"
+                || event.keystroke.modifiers.control
+                || event.keystroke.modifiers.alt
+            {
+                return;
+            }
+            let _ = owner.update(cx, |app, cx| {
+                if app.settings_ui.recording.is_none()
+                    && (window.has_active_dialog(cx)
+                        || app.workspace_mode != WorkspaceMode::Terminal)
+                {
+                    app.set_keyboard_focus(true, cx);
+                }
+            });
+        });
         let mut this = Self {
             #[cfg(windows)]
             updater,
@@ -980,6 +1002,8 @@ impl AppView {
             git_error,
             message,
             root_focus: cx.focus_handle(),
+            keyboard_focus: false,
+            _focus_subscription: focus_subscription,
             cell_width: 8.4,
             line_height: 21.,
             need_focus: true,
@@ -1804,7 +1828,7 @@ impl AppView {
             };
             let height = height.min((f32::from(window.viewport_size().height) - 180.).max(180.));
             let width: f32 = match kind {
-                ModalKind::Settings => 1120.,
+                ModalKind::Settings => 960.,
                 ModalKind::Host => 560.,
                 ModalKind::Commands => 620.,
                 ModalKind::ThemeEditor => 640.,
@@ -2757,6 +2781,20 @@ impl AppView {
         self.save(cx);
         cx.notify();
     }
+    fn set_keyboard_focus(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.keyboard_focus == enabled {
+            return;
+        }
+        self.keyboard_focus = enabled;
+        Theme::global_mut(cx).ring = rgb(if enabled {
+            self.palette.accent
+        } else {
+            self.palette.border
+        })
+        .into();
+        cx.notify();
+    }
+
     fn keyboard(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.workspace_mode == WorkspaceMode::Git
             && !self.settings
@@ -4261,7 +4299,16 @@ impl AppView {
                                         .bg(rgba((self.terminal_palette.muted << 8) | 45)),
                                 )
                             })
-                            .child(div().min_w_0().truncate().child(label))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_features(FontFeatures(std::sync::Arc::new(vec![(
+                                        "tnum".into(),
+                                        1,
+                                    )])))
+                                    .child(label),
+                            )
                             .tooltip(move |window, cx| {
                                 gpui_kit::component::tooltip::Tooltip::new(detail.clone())
                                     .build(window, cx)
@@ -4711,6 +4758,9 @@ impl AppView {
 }
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.keyboard_focus {
+            Theme::global_mut(cx).ring = rgb(self.palette.accent).into();
+        }
         self.subscribe_terminal_links(window, cx);
         for (index, host) in self.hosts.iter().enumerate() {
             let active = (index == self.active && self.workspace_mode == WorkspaceMode::Terminal)
@@ -5011,6 +5061,22 @@ impl Render for AppView {
             .line_height(relative(1.25))
             .track_focus(&self.root_focus)
             .capture_key_down(cx.listener(Self::keyboard))
+            .child(
+                canvas(|_, _, _| (), {
+                    let owner = cx.entity().downgrade();
+                    move |_, _, window, _| {
+                        // Capture also covers controls that stop bubbling mouse events.
+                        window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx| {
+                            if phase == DispatchPhase::Capture {
+                                let _ =
+                                    owner.update(cx, |app, cx| app.set_keyboard_focus(false, cx));
+                            }
+                        });
+                    }
+                })
+                .absolute()
+                .size_full(),
+            )
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
                 this.move_transfer_panel(e, window, cx);
                 if let Some((origin, width)) = this.sidebar_drag {

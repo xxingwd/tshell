@@ -662,7 +662,9 @@ impl AppView {
                 .total
                 .filter(|total| *total > 0)
                 .map(|total| (job.progress.transferred as f32 / total as f32).clamp(0., 1.));
-            let bytes = if let Some(total) = job.progress.total {
+            let bytes = if job.state == TransferState::Done {
+                transfer_bytes(job.progress.transferred)
+            } else if let Some(total) = job.progress.total {
                 format!(
                     "{} / {}",
                     transfer_bytes(job.progress.transferred),
@@ -786,21 +788,33 @@ impl AppView {
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .h(px(3.))
-                                        .rounded(px(2.))
-                                        .bg(rgb(p.border))
-                                        .when_some(percent, |bar, percent| {
-                                            bar.child(
-                                                div()
-                                                    .h_full()
-                                                    .w(relative(percent))
-                                                    .rounded(px(2.))
-                                                    .bg(rgb(status_color)),
-                                            )
-                                        }),
+                                .font_features(FontFeatures(std::sync::Arc::new(vec![(
+                                    "tnum".into(),
+                                    1,
+                                )])))
+                                .when(
+                                    matches!(
+                                        job.state,
+                                        TransferState::Running | TransferState::Cancelling
+                                    ),
+                                    |row| {
+                                        row.child(
+                                            div()
+                                                .flex_1()
+                                                .h(px(3.))
+                                                .rounded(px(2.))
+                                                .bg(rgb(p.border))
+                                                .when_some(percent, |bar, percent| {
+                                                    bar.child(
+                                                        div()
+                                                            .h_full()
+                                                            .w(relative(percent))
+                                                            .rounded(px(2.))
+                                                            .bg(rgb(status_color)),
+                                                    )
+                                                }),
+                                        )
+                                    },
                                 )
                                 .child(
                                     div()
@@ -810,13 +824,19 @@ impl AppView {
                                         .child(bytes),
                                 ),
                         )
-                        .child(
-                            div()
-                                .h(px(14.))
-                                .text_size(px(11.))
-                                .text_color(rgb(p.muted))
-                                .child(rate_text),
-                        ),
+                        .when(!rate_text.is_empty(), |content| {
+                            content.child(
+                                div()
+                                    .h(px(14.))
+                                    .text_size(px(11.))
+                                    .text_color(rgb(p.muted))
+                                    .font_features(FontFeatures(std::sync::Arc::new(vec![(
+                                        "tnum".into(),
+                                        1,
+                                    )])))
+                                    .child(rate_text),
+                            )
+                        }),
                 );
             if matches!(job.state, TransferState::Queued | TransferState::Running) {
                 row = row.child(

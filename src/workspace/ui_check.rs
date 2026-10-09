@@ -372,6 +372,10 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             terminal_focus.is_focused(window),
             "Tab moved focus away from the terminal"
         );
+        anyhow::ensure!(
+            !app.read(cx).keyboard_focus,
+            "terminal Tab enabled interface focus styling"
+        );
         Ok::<_, anyhow::Error>(())
     })??;
     let viewport = app.read_with(cx, |app, _| app.hosts[0].viewport.clone());
@@ -1181,6 +1185,23 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     draw(cx)?;
     let menu_position = point(px(620.), px(100.));
     let content_position = point(px(1050.), px(450.));
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.dispatch_keystroke(Keystroke::parse("tab").unwrap(), cx);
+    })?;
+    draw(cx)?;
+    cx.update_window(handle.into(), |_, _, cx| {
+        let app = app.read(cx);
+        anyhow::ensure!(
+            app.keyboard_focus,
+            "settings Tab did not show keyboard focus"
+        );
+        anyhow::ensure!(
+            !Theme::global(cx).focus_ring
+                && Theme::global(cx).ring == rgb(app.palette.accent).into(),
+            "keyboard focus did not emphasize the border"
+        );
+        Ok::<_, anyhow::Error>(())
+    })??;
     for _ in 0..12 {
         cx.update_window(handle.into(), |_, window, cx| {
             window.dispatch_event(
@@ -1214,9 +1235,18 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     })?;
     draw(cx)?;
     app.update(cx, |app, cx| {
+        anyhow::ensure!(
+            !app.keyboard_focus,
+            "mouse click retained keyboard focus styling"
+        );
+        anyhow::ensure!(
+            Theme::global(cx).ring == Theme::global(cx).input,
+            "mouse click retained a highlighted border"
+        );
         app.settings_ui.page = 2;
         cx.notify();
-    });
+        Ok::<_, anyhow::Error>(())
+    })?;
     draw(cx)?;
     app.update(cx, |app, cx| {
         app.settings_ui.page = 0;
@@ -1486,8 +1516,14 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
                 );
                 anyhow::ensure!(
                     !Theme::global(cx).focus_ring
-                        && Theme::global(cx).ring == Theme::global(cx).input,
-                    "theme change restored a focus ring or highlighted border"
+                        && Theme::global(cx).ring
+                            == rgb(if app.keyboard_focus {
+                                app.palette.accent
+                            } else {
+                                app.palette.border
+                            })
+                            .into(),
+                    "theme change lost the active focus presentation"
                 );
                 anyhow::ensure!(
                     Theme::global(cx).tokens.background.background

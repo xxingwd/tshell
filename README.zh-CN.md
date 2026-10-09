@@ -17,8 +17,8 @@ GPUI 的应用中。终端引擎使用 Rust 原生实现和 `alacritty_terminal`
 - 远程 tmux 控制会话，使用服务端原生管理窗口、分屏、布局、标题和工作目录。
 - host -> session -> tab -> split 工作区模型，支持可折叠导航、键盘命令、
   列内行自动均分、专注/浮动模式和界面偏好持久化。
-- 紧凑原生控件、简洁文案与按需帮助、自适应设置、主机字段校验和 Git Diff
-  分段模式选择。详见 [工作区界面](docs/workspace-interface.md)。
+- 紧凑原生控件、简洁文案与按需帮助、紧凑自适应设置、键盘焦点反馈、主机字段校验和
+  自适应 Git Diff 控件。详见 [工作区界面](docs/workspace-interface.md)。
 - 面向本地和远程工作目录的 Explorer 与只读 Git 视图。远程文件使用 SFTP，
   远程 Git 使用目标主机上的 Git，不需要远程 Python 或文件挂载。
   并排和行内差异支持选择、复制文本及字符级变更高亮。
@@ -26,6 +26,7 @@ GPUI 的应用中。终端引擎使用 Rust 原生实现和 `alacritty_terminal`
 - 内置 UTF-8 文本编辑器、后台语法高亮、搜索和带冲突检测的远程保存。
 - 全局 SFTP 传输队列，支持并发上传/下载、目录扫描、字节进度、拖动面板、
   自动收起到右侧、速度与剩余时间，以及单个任务取消、清除和重试。
+  文件和文件夹下载默认保存到系统下载目录。
   详见 [SFTP 传输](docs/sftp-transfers.md)。
 - Markdown 使用原生富文本预览；HTML 在 Windows 上使用只读 WebView2 预览，均可一键切回编辑。HTML 预览不会执行脚本或加载外部资源。
 - 工作区与终端共用色调，目前内置 VS Code Modern 的亮色/深色方案。

@@ -19,7 +19,8 @@ remain owned by the terminal view.
   Click targets and hover actions have fixed dimensions.
 - Settings retain native navigation and search. Setting labels and controls
   wrap into separate lines when the content area cannot fit both. Groups are
-  unframed sections, with compact headings and consistent row spacing.
+  unframed sections capped at 680 pixels, with compact headings and 36-pixel
+  minimum setting rows. This keeps labels and controls close in wide dialogs.
   Pages omit introductory descriptions. Non-obvious options use an adjacent
   information icon with localized help; language and font selection have no
   explanatory subtitle. Shortcut and status-item lists use compact 36-pixel
@@ -44,7 +45,12 @@ remain owned by the terminal view.
   remains outside the scroll area, including at the 860 x 520 minimum viewport.
 - Explorer and Git use the same navigation row dimensions. Editor search uses
   icon commands; Git diff layout and context use segmented choices showing the
-  current selection. Changing context resets the diff's vertical scroll.
+  current selection. Below 720 pixels of Git content width, the context choice
+  becomes a dropdown and Open File uses an icon with a tooltip. Changing context
+  resets the diff's vertical scroll.
+- Tab navigation in interface views emphasizes the focused control's existing
+  border; mouse clicks restore the ordinary border. There is no outer focus ring,
+  and terminal Tab input retains its terminal behavior. Focus never changes layout.
 - Labels name the action or object directly. Repeated context descriptions and
   aggregate counts are omitted: pane totals, Git change totals, forwarding
   totals/aggregate bytes, and transfer task/pending/failed counts. Forwarding and

@@ -4,6 +4,13 @@ Remote Explorer uploads and downloads use a workspace-wide in-memory queue. The 
 survives host, session, tab, and view changes while TShell remains open. Two
 transfers may run concurrently; additional transfers wait in FIFO order.
 
+File and directory downloads use the same native save dialog, initially opened
+in the operating system's configured Downloads directory with the remote name
+suggested. For a directory, choose the destination folder's name and its parent;
+the transfer creates that folder. If no system Downloads directory is available,
+TShell uses an existing `~/Downloads`, then the home directory, and finally its
+startup directory. The user can choose a different destination for every download.
+
 The transfer panel appears in the lower-right corner when a task is added. It
 shows the direction, host, file name, current file, bytes transferred, and a
 progress bar once the total size is known. Directory transfers scan their
@@ -17,6 +24,11 @@ it open. Manual expansion and newly queued transfers restart the same idle timer
 The launcher is an icon button that indicates failures and restores the expanded
 position when clicked. The panel omits aggregate task counts. Each task has a separate cancel or clear button; long
 file names, paths, and errors are available in tooltips.
+
+Only running or cancelling tasks show a progress track. Completed tasks show
+their transferred size once; queued and failed tasks retain their status and
+byte information without an empty track. Task row heights stay fixed as states
+change, and numeric readouts use tabular digits where the interface font supports them.
 
 Running tasks show sampled transfer speed and estimated remaining time when the
 total size and a nonzero rate are available. The estimate uses recent byte
