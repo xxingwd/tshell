@@ -551,6 +551,10 @@ updates:
   unsaved: "请先保存所有编辑的文件，并等待文件操作完成。"
 
 docker:
+  directory: "目录"
+  back_to_list: "返回列表"
+  expand_detail: "放大详情"
+  close_detail: "收起详情"
   discard_changes: "放弃修改"
   cpu_limit: "CPU 限制"
   memory_limit: "内存限制"

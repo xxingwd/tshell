@@ -8,6 +8,7 @@ mod logs;
 pub mod terminal;
 
 mod actions;
+mod browser;
 mod cli;
 mod compose;
 mod daemon;

@@ -551,6 +551,10 @@ updates:
   unsaved: "Save all edited files and wait for file operations to finish before restarting."
 
 docker:
+  directory: "Directory"
+  back_to_list: "Back to list"
+  expand_detail: "Expand details"
+  close_detail: "Close details"
   discard_changes: "Discard changes"
   cpu_limit: "CPU limit"
   memory_limit: "Memory limit"

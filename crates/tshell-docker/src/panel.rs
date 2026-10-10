@@ -504,15 +504,23 @@ impl DockerView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.engine().is_none() {
+            return;
+        }
         if self
             .engine()
-            .is_none_or(|engine| engine.resources.page == page)
+            .is_some_and(|engine| engine.resources.page == page)
         {
+            if let Some(collection) = crate::browser::Collection::for_page(page) {
+                self.show_collection(collection, window, cx);
+            }
             return;
         }
         self.cancel_browsing();
         if let Some(engine) = self.engine_mut() {
             engine.resources.page = page;
+            engine.resources.collection = crate::browser::Collection::for_page(page);
+            engine.resources.inspector = false;
             engine.error = None;
         }
         self.load_resource_preview(window, cx);
@@ -541,6 +549,7 @@ impl DockerView {
         }
         if let Some(engine) = self.engine_mut() {
             engine.resources.output_visible = false;
+            engine.resources.collection = None;
             engine.resources.page = page;
             engine.resources.selected.insert(page, resource);
             engine.resources.output_visible = false;
@@ -747,6 +756,7 @@ impl DockerView {
     ) {
         if let Some(engine) = self.engine_mut() {
             engine.resources.page = ResourcePage::Containers;
+            engine.resources.collection = None;
             engine.resources.output_visible = false;
         }
         self.detail_epoch += 1;
@@ -755,6 +765,7 @@ impl DockerView {
         self.logs_worker = None;
         if let Some(engine) = self.engine_mut() {
             if engine.selected.as_ref() != Some(&id) {
+                engine.detail = None;
                 engine.log.clear();
                 engine.logs_dirty = true;
                 engine
@@ -763,7 +774,6 @@ impl DockerView {
                 engine.stats = None;
             }
             engine.selected = Some(id);
-            engine.detail = None;
             engine.logs_error = None;
         }
         self.load_detail(cx);
@@ -2017,6 +2027,7 @@ impl DockerView {
         engine.paused = true;
         engine.auto_scroll = tab % 2 == 0;
         engine.resources.page = ResourcePage::Containers;
+        engine.resources.collection = None;
         engine.logs_query.update(cx, |query, cx| {
             query.set_value(format!("fixture-{tab}"), window, cx)
         });
@@ -2200,6 +2211,7 @@ impl DockerView {
                 )
             });
         }
+        engine.resources.collection = None;
         engine.resources.output_visible = index == 10;
         engine.resources.output_resource = Some(resource.clone());
         if index == 10 {
@@ -2262,6 +2274,70 @@ impl DockerView {
                 self.engine().unwrap().resources.images[index].id.clone()
             ))
         );
+    }
+    pub fn check_browser_fixture(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> FocusHandle {
+        let host = self.target().unwrap().id.clone();
+        self.check_fixture(host, 0, window, cx);
+        self.check_resource_fixture(
+            match index {
+                1 => 0,
+                3 => 4,
+                4 => 5,
+                _ => 2,
+            },
+            window,
+            cx,
+        );
+        let collection = crate::browser::Collection::ALL[index];
+        self.show_collection(collection, window, cx);
+        let engine = self.engine_mut().unwrap();
+        engine
+            .query
+            .update(cx, |query, cx| query.set_value("", window, cx));
+        engine.resources.volumes[0].mountpoint =
+            "/var/lib/docker/volumes/fixture-data/_data".into();
+        engine.resources.networks[0].driver = Some("bridge".into());
+        engine.resources.networks[0].scope = Some("local".into());
+        engine.resources.networks[0].ipam = Some(
+            serde_json::from_value(serde_json::json!({"Config":[{"Subnet":"172.18.0.0/16"}]}))
+                .unwrap(),
+        );
+        engine.resources.table_scrolls[&collection].scroll_to_item(0, ScrollStrategy::Top);
+        engine.resources.table_focus.clone()
+    }
+    pub fn check_browser_navigation(&self, index: usize, expanded: bool, inspector: bool) {
+        let engine = self.engine().unwrap();
+        let collection = crate::browser::Collection::ALL[index];
+        assert_eq!(
+            engine.resources.collection,
+            if expanded { None } else { Some(collection) }
+        );
+        assert_eq!(engine.resources.inspector, inspector);
+        if index == 0 && inspector {
+            assert!(
+                engine.detail.is_some(),
+                "Repeated selection cleared the current preview"
+            );
+        }
+        if index == 2 && inspector {
+            assert!(
+                matches!(engine.resources.selection(), Some(Resource::Image(id)) if engine.resources.images.iter().any(|image| image.id == *id))
+            );
+        }
+    }
+    pub fn check_browser_return(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_collection(crate::browser::Collection::ALL[index], window, cx);
+        self.check_browser_navigation(index, false, false);
     }
 }
 

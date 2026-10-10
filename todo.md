@@ -329,3 +329,18 @@ cargo build --locked --release --bin tshell
 - 原生 `--workspace-ui-check` 通过：四类资源、10,000 容器/镜像、YAML/JSON/输出、深浅与窄窗口、键盘选择、按主机恢复、未保存草稿、迟到响应和无终端会话。截图已人工检查。
 - 使用隔离 `TSHELL_DATA_DIR` 与 `target/module-check/debug/tshell.exe`，保留用户运行程序及剪贴板；未执行真实 daemon 修改。
 - 报告：`artifacts/docker-resource-ui.json`；画面：`artifacts/docker-resource-screenshots/`；测试及编译日志：`tmp/modularization/resource-complete-*.log`。生成产物不提交。
+
+
+## 10. Docker 主区空间与浏览交互
+
+2026-10-10 已实现：主区默认以表格浏览容器、Compose 和镜像；更多页的 Volume / Network 分组打开对应表格。按实际主区尺寸并排或上下显示详情，可收起、放大和返回。日志、YAML、JSON 与输出使用完整主区。没有新增标题、统计卡片或侧栏数量文案。
+
+- [x] 将比较字段和资源操作放入固定行高的虚拟表格；窄表格保留核心列，长值保留全文 tooltip。
+- [x] 搜索、创建和刷新只出现一次；浏览列表时放主区，完整预览时放侧栏。
+- [x] 完成方向键、Home / End、Enter、Escape，以及各主机表格/滚动/详情状态恢复。
+- [x] 重复选择同一容器保留已有详情；暂停容器主操作显示恢复，暂停期间禁用终端入口。
+- [x] 更新中英文 README、资源设计与工作区行为文档。
+- [x] 全 workspace 测试 233 通过、20 忽略；格式、all-targets 和 release 编译检查通过。
+- [x] 原生深/浅与窄窗口回归覆盖五类表格、万条键盘选择、收起/放大/返回和主机切换；实际截图检查通过。
+
+报告：`artifacts/docker-browser-ui.json`；截图：`artifacts/docker-browser-screenshots/`；日志：`tmp/modularization/docker-browser-*.log`。生成产物不提交。真实 Engine/SSH 操作验收仍沿用第 9 节未完成项。

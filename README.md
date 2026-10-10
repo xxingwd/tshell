@@ -29,7 +29,8 @@ xterm.js or OpenSSH feature parity.
   required. Inline and side-by-side diffs support text selection/copy and
   character-level change highlighting. See [Git workspace](docs/git-workspace.md).
 - A Docker workspace for local and saved SSH Engines, with compact Containers,
-  Compose, Images and More tabs, resource operations, logs and container terminals,
+  Compose, Images and More tabs, resource tables with adaptable previews, resource
+  operations, logs and container terminals,
   editable Compose YAML and conflict-aware daemon JSON with backup/restore.
   It follows the selected host independently of terminal sessions. See
   [Docker workspace](docs/docker-workspace.md).

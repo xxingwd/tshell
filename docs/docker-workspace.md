@@ -9,10 +9,10 @@ modes, operation output and file drafts for the application lifetime.
 ## Navigation and resources
 
 The sidebar has four tabs: **Containers / Compose / Images / More**. It uses a
-search field, a creation menu and refresh, without another Docker title, status
-filters or resource counters. Narrow sidebars use icons with tooltips. Lists are
-virtualized; arrow keys, Home and End move the selection. The main pane has one
-resource toolbar, a native preview/editor and the existing status bar.
+resource navigation without another Docker title, status filters or resource
+counters. Search, creation and refresh belong to the active browsing surface. Narrow sidebars use icons with tooltips. Lists are
+virtualized; arrow keys, Home and End move the selection. The main pane uses
+resource tables, a native preview/editor and the existing status bar.
 
 | Tab | Preview | Actions |
 | --- | --- | --- |
@@ -20,6 +20,16 @@ resource toolbar, a native preview/editor and the existing status bar.
 | Compose | Projects and services, source YAML and command output | Import/associate files, validate, save/restore, up/start/stop/restart, pull, build, logs, down; optional service scope |
 | Images | Tags, size, layers/history, referencing containers and raw JSON | Pull, tag, push, remove, import/export, create a container |
 | More | Engine information, disk usage, volumes, networks, events and daemon configuration | Volume/network create/remove, network connect/disconnect, categorized pruning, daemon validation/save/restore/reload/restart |
+
+The main pane opens a virtual resource table for containers, Compose projects and
+images. Volume and network group headings open their tables. Search, creation and
+refresh move into the table toolbar while browsing. Selecting a row opens details
+beside the table at main-pane widths of at least 960 px, or below it in narrower
+windows. Details can be closed or expanded; the back button returns to the list.
+Logs, YAML, JSON and output use the full pane. Arrow keys and Home/End select rows,
+Enter expands details and Escape closes the adjacent preview. Columns adapt to
+available width and truncated values retain full-value tooltips. Each host keeps
+its selection, table scroll and preview state.
 
 Container and Compose navigation share one container snapshot. Compose grouping
 uses the exact project/service labels, not name heuristics. Image identity uses the

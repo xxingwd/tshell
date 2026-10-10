@@ -102,28 +102,30 @@ impl DockerView {
             ResourcePage::Images => vec![Action::Pull, Action::ImportImage],
             ResourcePage::More => vec![Action::CreateVolume, Action::CreateNetwork],
         };
-        sidebar = sidebar.child(
-            div()
-                .px_2()
-                .flex()
-                .items_center()
-                .gap_1()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(Input::new(query_state).small()),
-                )
-                .child(self.action_button(create_actions, None, cx))
-                .child(
-                    icon_button(
-                        "docker-refresh-resources",
-                        IconName::RefreshCw,
-                        t!("ws.refresh"),
+        sidebar = sidebar.when(!self.collection_visible(), |sidebar| {
+            sidebar.child(
+                div()
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(Input::new(query_state).small()),
                     )
-                    .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
-                ),
-        );
+                    .child(self.action_button(create_actions, None, cx))
+                    .child(
+                        icon_button(
+                            "docker-refresh-resources",
+                            IconName::RefreshCw,
+                            t!("ws.refresh"),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                    ),
+            )
+        });
         let mut rows = Vec::new();
         match page {
             ResourcePage::Containers => {
@@ -287,6 +289,23 @@ impl DockerView {
                         };
                         match row {
                             Row::Group(key) => div()
+                                .id(SharedString::from(format!("docker-group-{key}")))
+                                .cursor_pointer()
+                                .hover(|row| row.bg(rgb(this.palette.row_hover())))
+                                .on_click(cx.listener({
+                                    let key = *key;
+                                    move |this, _, window, cx| {
+                                        this.show_collection(
+                                            if key == "docker.volumes" {
+                                                crate::browser::Collection::Volumes
+                                            } else {
+                                                crate::browser::Collection::Networks
+                                            },
+                                            window,
+                                            cx,
+                                        )
+                                    }
+                                }))
                                 .h(px(30.))
                                 .px_2()
                                 .flex()
@@ -337,7 +356,11 @@ impl DockerView {
                                         .build(window, cx)
                                 })
                                 .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.select_container(id.clone(), window, cx)
+                                    this.navigate_resource(
+                                        Resource::Container(id.clone()),
+                                        window,
+                                        cx,
+                                    )
                                 }))
                                 .context_menu(move |menu, _, _| {
                                     crate::panel::action_menu(
@@ -386,7 +409,7 @@ impl DockerView {
                                     this.palette,
                                 )
                                 .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.select_resource(resource.clone(), window, cx)
+                                    this.navigate_resource(resource.clone(), window, cx)
                                 }))
                                 .context_menu(move |menu, _, _| {
                                     crate::panel::action_menu(
@@ -442,7 +465,7 @@ impl DockerView {
                         };
                         if let Some(index) = next {
                             if let Some((position, resource)) = navigation.get(index) {
-                                this.select_resource(resource.clone(), window, cx);
+                                this.navigate_resource(resource.clone(), window, cx);
                                 if let Some(engine) = this.engine() {
                                     engine.resources.scrolls[&engine.resources.page]
                                         .scroll_to_item(*position, ScrollStrategy::Top);
@@ -512,6 +535,7 @@ impl DockerView {
                 .gap_1()
                 .border_b_1()
                 .border_color(rgb(p.border))
+                .child(self.browser_controls(resource, cx))
                 .child(
                     div()
                         .flex_1()
@@ -967,7 +991,10 @@ impl DockerView {
             .into_any_element()
     }
 }
-fn resource_actions(resource: &Resource, source: Option<&crate::daemon::Source>) -> Vec<Action> {
+pub(crate) fn resource_actions(
+    resource: &Resource,
+    source: Option<&crate::daemon::Source>,
+) -> Vec<Action> {
     match resource {
         Resource::Project(_) => [
             crate::compose::Action::Up,

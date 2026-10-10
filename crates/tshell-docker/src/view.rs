@@ -235,7 +235,7 @@ impl DockerView {
             }))
             .into_any_element()
     }
-    fn surface(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn surface(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = self.palette;
         if self
             .engine()
@@ -296,7 +296,15 @@ impl DockerView {
             .containers
             .iter()
             .find(|container| container.id.as_ref() == Some(id));
-        let running = selected.is_some_and(is_running);
+        let paused = engine
+            .detail
+            .as_ref()
+            .and_then(|detail| detail.state.as_ref())
+            .is_some_and(|state| state.paused == Some(true))
+            || selected.is_some_and(|container| {
+                container.state == Some(bollard::models::ContainerSummaryStateEnum::PAUSED)
+            });
+        let running = selected.is_some_and(is_running) || paused;
         let ready = engine.detail.is_some() && engine.busy.is_none();
         let name = selected.map(container_name).unwrap_or_else(|| id.clone());
         let tab = engine.tab;
@@ -309,6 +317,9 @@ impl DockerView {
                 .flex_wrap()
                 .items_center()
                 .gap_1()
+                .child(
+                    self.browser_controls(&crate::resources::Resource::Container(id.clone()), cx),
+                )
                 .child(
                     div()
                         .min_w_0()
@@ -335,12 +346,14 @@ impl DockerView {
                 .children(
                     [
                         (
-                            if running {
+                            if paused {
+                                crate::actions::Action::Resume
+                            } else if running {
                                 crate::actions::Action::Stop
                             } else {
                                 crate::actions::Action::Start
                             },
-                            if running {
+                            if running && !paused {
                                 IconName::Square
                             } else {
                                 IconName::Play
@@ -378,7 +391,7 @@ impl DockerView {
                 )
                 .child(
                     icon_button("docker-terminal", IconName::Terminal, t!("docker.terminal"))
-                        .disabled(!ready || !running)
+                        .disabled(!ready || !running || paused)
                         .on_click(
                             cx.listener(|this, _, window, cx| this.open_terminal(window, cx)),
                         ),
@@ -580,6 +593,17 @@ fn source(target: &Target) -> String {
 }
 impl Render for DockerView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.surface(cx)
+        let owner = cx.entity();
+        canvas(
+            move |bounds, window, cx| {
+                let mut content =
+                    owner.update(cx, |this, cx| this.browser_surface(bounds.size, cx));
+                content.layout_as_root(bounds.size.into(), window, cx);
+                content.prepaint_at(bounds.origin, window, cx);
+                content
+            },
+            |_, mut content, window, cx| content.paint(window, cx),
+        )
+        .size_full()
     }
 }

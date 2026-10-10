@@ -24,7 +24,8 @@ GPUI 的应用中。终端引擎使用 Rust 原生实现和 `alacritty_terminal`
   并排和行内差异支持选择、复制文本及字符级变更高亮。
   详见 [Git 工作区](docs/git-workspace.md)。
 - Docker 工作区，支持本地及已保存 SSH 主机的 Engine：容器 / Compose / 镜像 / 更多
-  四类资源导航、资源操作、日志与容器终端，以及 Compose YAML、带冲突检测和备份恢复的
+  四类资源导航、资源表格与自适应详情、资源操作、日志与容器终端，以及 Compose YAML、
+  带冲突检测和备份恢复的
   daemon JSON 编辑。随当前主机切换，不依赖终端会话。
   详见 [Docker 工作区](docs/docker-workspace.md)。
 - 内置 UTF-8 文本编辑器、后台语法高亮、搜索和带冲突检测的远程保存。

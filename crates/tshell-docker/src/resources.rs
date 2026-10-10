@@ -175,6 +175,10 @@ pub(crate) async fn inspect(docker: &Docker, resource: &Resource) -> Result<Valu
     })
 }
 pub(crate) struct Resources {
+    pub collection: Option<crate::browser::Collection>,
+    pub inspector: bool,
+    pub table_focus: FocusHandle,
+    pub table_scrolls: BTreeMap<crate::browser::Collection, UniformListScrollHandle>,
     pub page: ResourcePage,
     pub selected: BTreeMap<ResourcePage, Resource>,
     pub queries: BTreeMap<ResourcePage, Entity<InputState>>,
@@ -223,6 +227,13 @@ impl Resources {
             editor
         });
         Self {
+            collection: Some(crate::browser::Collection::Containers),
+            inspector: false,
+            table_focus: cx.focus_handle(),
+            table_scrolls: crate::browser::Collection::ALL
+                .into_iter()
+                .map(|collection| (collection, UniformListScrollHandle::new()))
+                .collect(),
             focus: cx.focus_handle(),
             page: ResourcePage::Containers,
             selected: BTreeMap::new(),
