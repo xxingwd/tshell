@@ -46,6 +46,13 @@ impl AppView {
     ) {
         match event {
             Event::LocalEndpointChanged(path) => {
+                if self.docker.read(cx).busy(&tshell_host::HostId::local(), cx) {
+                    window.push_notification(
+                        Notification::warning(crate::t!("docker.save_first")),
+                        cx,
+                    );
+                    return;
+                }
                 self.docker_endpoint = path;
                 self.save(cx);
                 self.prepare_docker(window, cx);

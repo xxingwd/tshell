@@ -135,7 +135,7 @@ pub(crate) fn run_ui_check(output: PathBuf) -> bool {
             "language selector", "session deletion persists and preserves other sessions", "host disconnect preserves configuration and other hosts",
             "new tab has no dialog", "session file state", "Markdown and HTML preview", "session directory and optional name", "session groups with compact tab separators", "named session creation and previous tab restoration",
             "SSH forwarding dialog dark and narrow light layout", "forwarding dialog X closes after cancelling or saving Add", "transfer panel dark and light layout", "transfer header drag and viewport constraints", "transfer launcher collapse and expansion", "individual transfer cancellation and clearing", "transfer hover retention and automatic collapse",
-            "Git raw Unicode/tab selection in both layouts", "Git word and line selection", "Git off-screen selection anchor", "terminal search focus, navigation and live output", "terminal search dark and narrow light layouts", "Ctrl-click links and unchanged ordinary TUI mouse reports", "terminal file link line/column and draft preservation", "terminal directory link Explorer root", "notification pane targeting and closed identity", "Docker 10k container list and bounded logs in dark/light narrow layouts", "Docker follows visible/hidden host changes, restores Engine state and works without sessions"
+            "Git raw Unicode/tab selection in both layouts", "Git word and line selection", "Git off-screen selection anchor", "terminal search focus, navigation and live output", "terminal search dark and narrow light layouts", "Ctrl-click links and unchanged ordinary TUI mouse reports", "terminal file link line/column and draft preservation", "terminal directory link Explorer root", "notification pane targeting and closed identity", "Docker four resource pages, 10k containers/images, YAML/JSON/output editors in dark/light narrow layouts", "Docker follows visible/hidden hosts, preserves resource selection and dirty drafts, rejects stale previews and works without sessions"
                         ]})
                     }
                     Err(error) => {
@@ -2949,7 +2949,9 @@ async fn check_docker_workspace(
         ("dark", Appearance::Dark, size(px(1320.), px(840.))),
         ("light-small", Appearance::Light, size(px(860.), px(520.))),
     ] {
-        handle.update(cx, |root, window, _| {
+        handle.update(cx, |root, window, cx| {
+            // Start this fixture with fresh overlays after earlier command-palette hovers.
+            *root = Root::new(app.clone(), window, cx).bg(transparent_black());
             root.style().size.width = Some(viewport.width.into());
             root.style().size.height = Some(viewport.height.into());
             window.resize(viewport);
@@ -3028,6 +3030,86 @@ async fn check_docker_workspace(
                     window
                         .render_to_image()?
                         .save(PathBuf::from(directory).join(format!("docker-{_name}-{tab}.png")))?;
+                }
+                Ok::<_, anyhow::Error>(())
+            })??;
+        }
+        for resource in 0..11 {
+            cx.update_window(handle.into(), |_, window, cx| {
+                window.dispatch_action(Box::new(gpui_kit::component::dialog::Cancel), cx);
+                window.dispatch_event(
+                    PlatformInput::MouseMove(MouseMoveEvent {
+                        position: point(px(1.), px(1.)),
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+                app.update(cx, |app, cx| {
+                    app.page = Page::Docker;
+                    app.sidebar_collapsed = false;
+                    app.docker.update(cx, |docker, cx| {
+                        docker.check_resource_fixture(resource, window, cx)
+                    });
+                    app.switch_host(remote, cx);
+                    app.prepare_docker(window, cx);
+                    assert!(app.hosts[remote].backend.is_none());
+                    app.docker.update(cx, |docker, cx| {
+                        docker.check_resource_fixture(resource, window, cx)
+                    });
+                    app.switch_host(0, cx);
+                    app.prepare_docker(window, cx);
+                    app.docker.read(cx).check_resource_state(resource, cx);
+                });
+                window.refresh();
+                let _ = window.draw(cx);
+                app.read(cx).docker.read(cx).check_layout(cx);
+                window.dispatch_event(
+                    PlatformInput::MouseDown(MouseDownEvent {
+                        position: point(px(420.), px(400.)),
+                        click_count: 1,
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+                window.dispatch_event(
+                    PlatformInput::MouseUp(MouseUpEvent {
+                        position: point(px(420.), px(400.)),
+                        click_count: 1,
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+                if resource == 2 {
+                    let focus = app.read(cx).docker.read(cx).check_navigation_focus();
+                    focus.focus(window, cx);
+                    window.dispatch_keystroke(Keystroke::parse("down").unwrap(), cx);
+                    app.read(cx).docker.read(cx).check_image_selection(1);
+                    window.dispatch_keystroke(Keystroke::parse("up").unwrap(), cx);
+                    app.read(cx).docker.read(cx).check_image_selection(0);
+                }
+                window.dispatch_event(
+                    PlatformInput::MouseMove(MouseMoveEvent {
+                        position: point(px(1.), px(1.)),
+                        ..Default::default()
+                    }),
+                    cx,
+                );
+                window.refresh();
+                let _ = window.draw(cx);
+                Ok::<_, anyhow::Error>(())
+            })??;
+            cx.background_executor()
+                .timer(Duration::from_millis(150))
+                .await;
+            cx.update_window(handle.into(), |_, window, cx| {
+                window.refresh();
+                let _ = window.draw(cx);
+                #[cfg(feature = "ui-check-screenshots")]
+                if let Some(directory) = std::env::var_os("TSHELL_UI_SCREENSHOT_DIR") {
+                    window.render_to_image()?.save(
+                        PathBuf::from(directory)
+                            .join(format!("docker-{_name}-resource-{resource}.png")),
+                    )?;
                 }
                 Ok::<_, anyhow::Error>(())
             })??;

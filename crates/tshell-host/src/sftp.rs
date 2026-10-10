@@ -142,6 +142,29 @@ pub fn read(host: &Session, path: &Path) -> Result<String> {
         Box::pin(async move { client.read(&path).await })
     })
 }
+pub fn read_optional(host: &Session, path: &Path) -> Result<Option<String>> {
+    let path = path.to_string_lossy().into_owned();
+    run(host, move |client| {
+        Box::pin(async move { client.read_optional(&path).await })
+    })
+}
+pub fn write_with_backup(
+    host: &Session,
+    path: &Path,
+    text: &str,
+    expected: Option<&str>,
+) -> Result<Option<String>> {
+    let path = path.to_string_lossy().into_owned();
+    let text = text.to_owned();
+    let expected = expected.map(str::to_owned);
+    run(host, move |client| {
+        Box::pin(async move {
+            client
+                .write_with_backup(&path, &text, expected.as_deref())
+                .await
+        })
+    })
+}
 
 pub fn inspect_path(host: &Session, path: &Path) -> Result<(std::path::PathBuf, bool)> {
     let path = path.to_string_lossy().into_owned();

@@ -28,10 +28,10 @@ xterm.js or OpenSSH feature parity.
   Remote files use SFTP and remote Git commands; no remote Python or mount is
   required. Inline and side-by-side diffs support text selection/copy and
   character-level change highlighting. See [Git workspace](docs/git-workspace.md).
-- A Docker workspace for local and saved SSH Engines, with container
-  search/Compose grouping, inspect, logs, start/stop/restart/removal and attached
-  container terminals. The Engine follows the selected host and preserves browsing
-  state per host, independently of terminal sessions. See
+- A Docker workspace for local and saved SSH Engines, with compact Containers,
+  Compose, Images and More tabs, resource operations, logs and container terminals,
+  editable Compose YAML and conflict-aware daemon JSON with backup/restore.
+  It follows the selected host independently of terminal sessions. See
   [Docker workspace](docs/docker-workspace.md).
 - A built-in editor for UTF-8 text files, background syntax highlighting,
   search, and conflict-aware remote saves.
@@ -85,7 +85,10 @@ Explorer and Git require SFTP and Git on the target host respectively.
 
 Docker requires a running local Engine with pipe/socket permission. SSH Docker
 requires the Docker CLI on the remote host and permission to access its Engine;
-a local Docker CLI is unnecessary. Custom local pipe/socket paths are supported.
+local SDK operations need no Docker CLI. Compose and image push need the CLI on
+the selected host, with the Compose plugin for Compose; Desktop restart also uses
+its CLI. Configuration edits and service control require account permissions.
+Custom local pipe/socket paths are supported.
 
 ## Build and Run
 

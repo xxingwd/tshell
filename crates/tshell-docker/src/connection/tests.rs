@@ -54,6 +54,12 @@ fn docker(fixture: Arc<Fixture>, running: bool) -> Docker {
                 }
                 let (status,body) = if path == "/version" {
                     ("200 OK", r#"{"ApiVersion":"1.53","MinAPIVersion":"1.24"}"#.to_owned())
+                } else if path.ends_with("/info") {
+                    ("200 OK", r#"{"ID":"fixture-engine-id"}"#.to_owned())
+                } else if path.ends_with("/networks/create") {
+                    ("201 Created", r#"{"Id":"fixture-created-network","Warning":""}"#.to_owned())
+                } else if path.contains("/images/") && path.ends_with("/get") {
+                    ("200 OK", "fixture image archive bytes".into())
                 } else if path.ends_with("/json") {
                     ("200 OK", format!(r#"{{"Id":"container-full-id","State":{{"Running":{running}}}}}"#))
                 } else if path.ends_with("/exec") {
@@ -151,5 +157,92 @@ fn cancelled_request_closes_transport_before_response_headers() {
         tokio::time::timeout(Duration::from_secs(2), fixture.closed.notified())
             .await
             .unwrap();
+    });
+}
+fn network_request(docker: Docker, engine_id: &str) -> crate::actions::Request {
+    crate::actions::Request {
+        target: Target::local("fixture".into(), None),
+        docker: Some(docker),
+        engine_id: engine_id.into(),
+        resource: None,
+        container: None,
+        project: None,
+        source: None,
+        service: None,
+        file: None,
+        text: String::new(),
+        values: vec![
+            r#"{"Name":"fixture-network-with-space","Driver":"bridge","Internal":true}"#.into(),
+        ],
+        action: crate::actions::Action::CreateNetwork,
+    }
+}
+#[test]
+fn resource_mutation_checks_engine_identity_before_sending_its_payload() {
+    tshell_host::ssh::runtime().block_on(async {
+        let fixture = Arc::new(Fixture::default());
+        let result = crate::actions::execute(
+            network_request(docker(fixture.clone(), true), "another-engine"),
+            |_| {},
+        )
+        .await;
+        assert!(result.is_err());
+        let requests = fixture.requests.lock();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].0.ends_with("/info"));
+    });
+}
+#[test]
+fn network_creation_preserves_typed_engine_options_and_returns_the_full_identity() {
+    tshell_host::ssh::runtime().block_on(async {
+        let fixture = Arc::new(Fixture::default());
+        let result = crate::actions::execute(
+            network_request(docker(fixture.clone(), true), "fixture-engine-id"),
+            |_| {},
+        )
+        .await
+        .unwrap();
+        assert!(result.text.contains("fixture-created-network"));
+        let requests = fixture.requests.lock();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].0.ends_with("/networks/create"));
+        assert_eq!(requests[1].1["Name"], "fixture-network-with-space");
+        assert_eq!(requests[1].1["Internal"], true);
+    });
+}
+#[test]
+fn local_archive_export_streams_without_cli_and_preserves_existing_files() {
+    tshell_host::ssh::runtime().block_on(async {
+        let fixture = Arc::new(Fixture::default());
+        let path = std::env::temp_dir().join(format!(
+            "tshell-image-export-{}.tar",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut request = network_request(docker(fixture.clone(), true), "fixture-engine-id");
+        request.action = crate::actions::Action::ExportImage;
+        request.resource = Some(crate::resources::Resource::Image(
+            "sha256:full-image-identity".into(),
+        ));
+        request.values = vec![path.to_string_lossy().into()];
+        crate::actions::execute(request, |_| {}).await.unwrap();
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"fixture image archive bytes"
+        );
+        let mut request = network_request(docker(fixture, true), "fixture-engine-id");
+        request.action = crate::actions::Action::ExportImage;
+        request.resource = Some(crate::resources::Resource::Image(
+            "sha256:full-image-identity".into(),
+        ));
+        request.values = vec![path.to_string_lossy().into()];
+        assert!(crate::actions::execute(request, |_| {}).await.is_err());
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"fixture image archive bytes"
+        );
+        std::fs::remove_file(path).unwrap();
     });
 }

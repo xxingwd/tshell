@@ -43,11 +43,22 @@ impl Target {
             }
             Endpoint::Ssh(host) => {
                 let host = host.clone();
+                let target = self.clone();
+                let arguments =
+                    tokio::task::spawn_blocking(move || crate::cli::arguments(&target)).await??;
+                let command = tshell_host::CommandRequest::new(
+                    "docker",
+                    arguments
+                        .into_iter()
+                        .chain(["system".into(), "dial-stdio".into()]),
+                )
+                .remote_command()?;
                 let auxiliary = std::sync::Arc::new(tshell_host::ssh::auxiliary(&host));
                 Docker::connect_with_custom_transport(
                     move |request: bollard::BollardRequest| {
                         let host = host.clone();
                         let auxiliary = auxiliary.clone();
+                        let command = command.clone();
                         async move {
                             let _auxiliary = auxiliary;
                             let channel = if request.headers().contains_key(http::header::UPGRADE) {
@@ -56,7 +67,7 @@ impl Target {
                                         std::io::Error::other(error.into_boxed_dyn_error())
                                     })?;
                                 channel
-                                    .exec(true, "docker system dial-stdio")
+                                    .exec(true, command)
                                     .await
                                     .map_err(std::io::Error::other)?;
                                 tshell_host::ssh::confirmed(&mut channel).await.map_err(
@@ -64,11 +75,9 @@ impl Target {
                                 )?;
                                 channel
                             } else {
-                                tshell_host::ssh::exec_aux(&host, "docker system dial-stdio")
-                                    .await
-                                    .map_err(|error| {
-                                        std::io::Error::other(error.into_boxed_dyn_error())
-                                    })?
+                                tshell_host::ssh::exec_aux(&host, &command).await.map_err(
+                                    |error| std::io::Error::other(error.into_boxed_dyn_error()),
+                                )?
                             };
                             request_over_stream(channel.into_stdio(), request).await
                         }

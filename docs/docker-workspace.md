@@ -1,104 +1,156 @@
 # Docker workspace
 
-The next resource UI revision is specified in [the resource workspace design](docker-resource-design.md)
-and [the implementation plan](../todo.md#9-docker-资源界面与管理功能). It is planned work;
-the behavior below describes the currently implemented container workspace.
+Docker is a left-sidebar tool following the shared host selector: local host selects
+its local Engine and a saved SSH host selects its remote Engine. It works without
+terminal sessions. Selecting a host on this page does not start a shell or tmux.
+Each host/endpoint retains resource selections, searches, scroll positions, detail
+modes, operation output and file drafts for the application lifetime.
 
-Docker is a left-sidebar tool that follows the workspace's shared host selector.
-The local host selects the local Engine; a saved SSH host selects its remote Engine.
-Switching sessions within a host, closing every terminal, or hiding the sidebar
-does not change that host's Engine. Selecting a host on the Docker page does not
-start a shell or tmux session. The header and status bar show the actual endpoint.
-The explicit local endpoint is saved in `workspace.json`; each Engine retains its
-own container selection, filters, detail tab and logs during the app lifetime.
-The previous independent `docker_target` preference is ignored when loading.
+## Navigation and resources
 
-## Connections
+The sidebar has four tabs: **Containers / Compose / Images / More**. It uses a
+search field, a creation menu and refresh, without another Docker title, status
+filters or resource counters. Narrow sidebars use icons with tooltips. Lists are
+virtualized; arrow keys, Home and End move the selection. The main pane has one
+resource toolbar, a native preview/editor and the existing status bar.
 
-`tshell-docker` uses Bollard **0.21.1** directly for version negotiation, models,
-container requests, events, logs and exec. Local Windows connections use
-`//./pipe/docker_engine`; Unix connections use `/var/run/docker.sock`. The endpoint
-button accepts a different absolute pipe/socket path; an empty value restores the
-default. Local access needs a running Engine and permission to access its endpoint.
-It does not require a local Docker CLI or inherit `DOCKER_HOST`/Docker contexts.
+| Tab | Preview | Actions |
+| --- | --- | --- |
+| Containers | Overview, logs, inspect JSON; limits and a resource-usage sample; linked image, volume and network | Create, start/stop, restart, pause/resume, rename, update runtime parameters, recreate, remove, terminal |
+| Compose | Projects and services, source YAML and command output | Import/associate files, validate, save/restore, up/start/stop/restart, pull, build, logs, down; optional service scope |
+| Images | Tags, size, layers/history, referencing containers and raw JSON | Pull, tag, push, remove, import/export, create a container |
+| More | Engine information, disk usage, volumes, networks, events and daemon configuration | Volume/network create/remove, network connect/disconnect, categorized pruning, daemon validation/save/restore/reload/restart |
 
-Every saved SSH host is also an Engine target, including disconnected terminal hosts
-and hosts configured for tmux. SSH uses TShell's native russh authentication and
-connection pools. Each client retains its auxiliary pool lease across API requests,
-so negotiation, inspection and refresh reuse authentication and the transport.
-A small HTTP transport runs **`docker system dial-stdio` on the
-remote host**, without a PTY. Thus the remote host needs the Docker CLI, a running
-Engine and permission to access it. No daemon TCP port, external local SSH process,
-remote Python, mounted filesystem or forwarded Docker socket is required.
+Container and Compose navigation share one container snapshot. Compose grouping
+uses the exact project/service labels, not name heuristics. Image identity uses the
+complete ID even when the sidebar displays a short untagged ID. Related resource
+links stay inside Docker and preserve the previous page's browsing state.
 
-SSH stderr is kept outside HTTP/exec bytes, bounded separately and reported when
-the command fails. HTTP requests use origin-form paths; Hyper preserves upgraded
-exec streams. Exec uses the terminal connection pool so long-lived terminals do
-not exhaust the auxiliary pool used by queries. Changing host connection fields
-invalidates that Engine's browsing client; existing terminals retain their original
-connection. Host display-name changes retain identity and browsing state.
+## Connections and requirements
 
-## Containers and logs
+`tshell-docker` uses Bollard **0.21.1** directly for Engine models, version
+negotiation, API calls, events, logs and attached exec. Windows defaults to
+`//./pipe/docker_engine`; Unix defaults to `/var/run/docker.sock`. More → Engine
+information provides the local endpoint setting; an empty path restores the
+platform default. The explicit endpoint is persisted in `workspace.json`.
+Local SDK operations, including streamed archive import/export, need an accessible
+running Engine but no Docker CLI. They do not inherit local Docker contexts or
+`DOCKER_HOST`. Image pull currently uses anonymous registry access.
 
-The virtual container list supports text search, running/stopped filters and Compose
-project grouping. The main view shows state, image, full ID, health, timestamps,
-ports and mounts, alongside read-only raw inspect JSON.
+SSH uses TShell's native russh authentication and connection pools, running
+`docker system dial-stdio` without a PTY on the selected SSH host. The remote host
+needs Docker CLI and permission to access its Engine. Its selected endpoint/context
+is captured when connecting. No external local SSH executable, forwarded socket,
+remote Python or exposed daemon TCP port is needed. HTTP stderr is isolated from
+protocol bytes; attached exec uses the terminal pool rather than the query pool.
 
-Start, stop, restart and removal prompts capture the original Engine and complete
-container ID. Confirmation rechecks the target configuration and container state.
-Removal requires a stopped container and never forces removal or deletes volumes.
-Results and failures identify the source even after switching Engines. Each operation
-reads the actual list afterward; uncertain network outcomes are never replayed
-automatically. Container events coalesce refreshes; reconnecting the events stream
-also requests a complete snapshot.
+Compose, image push and Docker Desktop restart use the Docker CLI on the selected
+host; Compose additionally needs its plugin. Push uses that host's existing CLI
+credential helpers. CLI mutations pin an explicit endpoint/context and check Engine
+ID against the SDK snapshot before execution. Remote archives stay on the remote
+filesystem. Docker context/TLS profile management is not a separate TShell UI.
 
-Logs initially request the last 1,000 lines and follow new output. Pause cancels the
-stream; resume starts a fresh 1,000-line tail. Search, copy and automatic scrolling
-operate on a read-only native editor. The buffer retains at most **2 MiB and 10,000
-newline separators**, including oversized chunks; UTF-8 split across chunks is
-preserved. A bounded message queue batches UI updates. Hiding the page cancels its
-query, detail, event and log workers; existing mutation operations and terminals
-keep their original targets.
+## Operations and container terminals
 
-## Container terminals
+Forms and confirmation dialogs capture the original host, endpoint and complete
+resource identity. A changed connection or different Engine ID rejects a mutation.
+Operations continue on their original target while browsing another host; results
+remain in that target's preview output. SDK pulls and archives report progress;
+CLI commands show their bounded output when they finish. Uncertain network outcomes
+are not replayed automatically. Events coalesce snapshot refreshes.
 
-The terminal button creates an attached TTY exec through Bollard. The command
-starts as `/bin/sh` for Linux or `cmd.exe` for Windows and can be edited as an
-argument list. Missing commands or stopped containers report an error.
+Container removal requires a stopped container, never forces removal and does not
+delete volumes. Recreate requires a stopped container and editable creation JSON:
+the old container is renamed to a unique backup name, a stopped replacement is
+created under the original name, and the backup is retained. Failed creation tries
+to restore the original name and reports any rollback failure. This is deliberately
+separate from updating the Engine-supported runtime parameters.
 
-Each exec feeds TShell's existing terminal parser, renderer and input contract;
-resize calls the Engine exec API. Resize updates are coalesced without being lost
-when the input queue is full, and applied before subsequently forwarded input.
-Terminals appear in local navigation with an explicit `Docker · Engine · container`
-name. Reopening the same Engine endpoint/container adds another tab to that
-container's session; different Engine sources remain separate.
+Logs request the last 1,000 lines and follow new output. Pause cancels the stream;
+resume requests a fresh tail. Search, copy and auto-scroll use a read-only native
+editor. Logs retain at most **2 MiB and 10,000 newline separators** and preserve
+UTF-8 across chunks. Operation output retains at most **256 KiB** and events retain
+500 entries. Stats are a one-shot sample, not a continuously polled CPU dashboard.
+Hiding Docker cancels browsing, detail, events and log workers while mutations and
+existing terminals keep their original target.
 
-These sessions are temporary and are not restored as shell sessions at startup.
-Open extra container terminals from the Docker page; ordinary shell tabs and splits
-are unavailable inside a container session. Explorer/Git and terminal file links
-remain host tools and do not access a container filesystem. Closing a terminal
-cancels its attached exec connection; it does **not** stop/remove the container.
-Switching hosts never retargets an existing container terminal.
+The terminal button creates Bollard attached TTY exec using `/bin/sh` for Linux or
+`cmd.exe` for Windows; users can edit the command arguments. Input/output uses the
+existing terminal parser/renderer and resize uses the Engine API. Terminals have
+explicit `Docker · Engine · container` session names. The same endpoint/container
+can add tabs to the same temporary session; different sources remain separate.
+These sessions are not restored as ordinary shells. Closing exec does not stop or
+remove the container. Existing terminals never retarget on host switches, and
+Explorer/Git remain host tools rather than container filesystem browsers.
+
+## Compose files
+
+Projects are discovered from container labels and, when available,
+`docker compose ls --all --format json`. Imported source files also identify
+stopped projects; imports are currently retained for the app lifetime. Missing CLI
+or inaccessible source files do not prevent container/label browsing.
+
+Projects bind a name, ordered configuration files and working directory. The file
+selector edits individual original YAML files; each file has its own draft. Source
+paths from labels may belong to another deployment machine and must be accessible
+on the selected host, or associated explicitly. No expanded YAML overwrites source.
+
+Validation uses official `compose config --quiet`, substituting a temporary edited
+file in its original position while retaining the other files and project directory.
+CLI owns interpolation, merge, dependencies and build semantics. Down and validation
+always apply to the whole project; service selection scopes compatible operations.
+
+## daemon.json
+
+More → Engine configuration edits JSON directly. Detection uses actual Engine and
+host evidence: local Docker Desktop, native Windows default-pipe service, Linux
+system/rootless service and its `--config-file`, or an unambiguous dockerd process.
+An SSH context pointing at another daemon is not assumed to own local daemon files.
+Custom/proxy/ambiguous installations need explicit source association. A manually
+associated file can be read/saved, but cannot control an unverified service.
+
+Saving and applying are separate actions. JSON must be an object, unknown keys are
+retained, and native dockerd validation is used when available. Desktop or missing
+dockerd gets clearly labelled JSON-only validation. Dockerd validation alone does
+not prove compatibility with conflicting service flags or that every setting can
+be reloaded.
+
+Files have a 2 MiB limit. Local files and remote SFTP files reject symlinks; saves
+compare the previously loaded content, refuse external changes, create a backup
+and replace via an adjacent temporary file. Existing permissions are preserved;
+new files use restrictive permissions where supported. Restore also checks for
+external changes. Drafts survive page/host switches; the discard icon confirms reverting the current
+file to its loaded/saved content without writing to disk. Host deletion or connection
+changes are blocked while there are dirty drafts or running operations.
+
+Configuration files can be repaired while the API is offline. Reload/restart needs
+a verified live Engine/service binding, a saved valid file and the required account
+permissions. Reload is offered only for a service reporting support and applies
+only settings Docker can reload. Restart is explicit. The operation waits for the
+same Engine ID to return; this confirms API recovery, not that every configuration
+value has taken effect. Offline service startup must be handled externally.
+
+Filesystem and service operations run with the current local/SSH account. Permission
+failures are shown; no automatic sudo/elevation or privileged credential workflow
+is implemented. Desktop uses public daemon JSON and CLI, not internal settings files.
 
 ## Ownership and validation
 
-The application owns navigation, preferences and terminal attachment. `DockerView`
-owns Engine clients, list/detail state, workers and native controls. Explorer, Git
-and Docker are separate crates with no mutual dependencies. They share concrete
-`tshell-host` and `tshell-ui` capabilities, not a generic tool/plugin interface.
+The application owns host navigation, preferences and terminal attachment.
+`tshell-docker` owns resource state, drafts, native controls and asynchronous work.
+Explorer, Git and Docker remain separate crates using concrete `tshell-host` and
+`tshell-ui` capabilities; there is no generic resource/plugin registry or SDK wrapper.
 
-Automated checks cover bounded Unicode logs, Bollard version negotiation and raw
-HTTP upgrade, attached exec input/resize/drop, rejection of stopped-container exec,
-and a loopback russh fixture proving stderr isolation and channel cancellation.
-Native Windows checks exercise 10,000 containers, bounded logs, inspect/overview,
-dark/light themes, narrow layouts, sidebar collapse, delayed-response rejection and
-host-following while the Docker page is visible or hidden, per-Engine browsing
-restoration, same-host session changes and operation with no terminal sessions.
-These are protocol/UI fixtures.
+Workspace tests cover target identity, SDK request payloads, archive streaming,
+filesystem conflicts/backups/restoration, offline configuration saves, bounded logs,
+HTTP upgrade/exec and loopback SSH channel/stderr behavior. Native Windows checks
+exercise 10,000 containers/images, all four pages, YAML/JSON/output, dark/light and
+narrow layouts, keyboard navigation, sidebar collapse, draft restoration, stale
+responses and host switching without terminal sessions.
 
-The development machine used for this change has no Docker installation and no
-configured `TSHELL_SSH_TEST_HOST`. Real local/remote Engine permissions, long-running
-logs, external deletion, missing shells, disconnect outcomes and Windows-container
-exec still need environment acceptance. Linux/macOS native startup remains outside
-continuous verification. Image/volume/network management, stats, Compose execution,
-Docker contexts and custom TLS endpoints are future work.
+The development machine has no Docker installation or `TSHELL_SSH_TEST_HOST`.
+Protocol/UI fixtures have passed; real Engine/Compose/daemon/SFTP permissions,
+service recovery, registry credentials, platform-specific source detection and
+Windows-container exec still need environment acceptance. Linux/macOS native
+startup remains outside continuous verification. See the
+[design record](docker-resource-design.md) and [implementation checklist](../todo.md#9-docker-资源界面与管理功能).

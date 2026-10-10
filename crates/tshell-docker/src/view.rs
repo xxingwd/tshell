@@ -1,181 +1,20 @@
 use super::{
     DockerView, Endpoint, Target, i18n,
-    panel::{Filter, Operation, Tab, container_name, is_running},
+    panel::{Tab, container_name, is_running},
     t,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::base::input::Editor;
-use gpui_kit::component::{
-    Disableable, Icon, Selectable, Sizable,
-    button::{Button, ButtonVariants},
-    input::Input,
-};
+use gpui_kit::component::{Disableable, Selectable, Sizable, input::Input};
 use gpui_kit::{prelude::*, *};
-use std::collections::BTreeMap;
-use tshell_ui::controls::{button, icon_button};
-#[derive(Clone)]
-enum Row {
-    Group(String),
-    Container(usize),
-}
+use tshell_ui::controls::icon_button;
 impl DockerView {
-    pub fn sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut rows = Vec::new();
-        if let Some(engine) = self.engine() {
-            let query = engine.query.read(cx).value().to_lowercase();
-            let mut groups = BTreeMap::<String, Vec<usize>>::new();
-            for (index, container) in engine.containers.iter().enumerate() {
-                let running = is_running(container);
-                if (engine.filter == Filter::Running && !running)
-                    || (engine.filter == Filter::Stopped && running)
-                {
-                    continue;
-                }
-                let name = container_name(container);
-                let image = container.image.as_deref().unwrap_or_default();
-                let id = container.id.as_deref().unwrap_or_default();
-                if !format!("{name} {image} {id}")
-                    .to_lowercase()
-                    .contains(&query)
-                {
-                    continue;
-                }
-                let group = container
-                    .labels
-                    .as_ref()
-                    .and_then(|labels| labels.get("com.docker.compose.project"))
-                    .cloned()
-                    .unwrap_or_default();
-                groups.entry(group).or_default().push(index);
-            }
-            for (group, mut indices) in groups {
-                indices.sort_by_key(|index| container_name(&engine.containers[*index]));
-                if !group.is_empty() {
-                    rows.push(Row::Group(group));
-                }
-                rows.extend(indices.into_iter().map(Row::Container));
-            }
-        }
-        let rows = std::sync::Arc::new(rows);
-        let source = rows.clone();
-        let list = uniform_list(
-            "docker-container-list",
-            rows.len(),
-            cx.processor(move |this, range: std::ops::Range<usize>, _window, cx| {
-                range
-                    .map(|index| match &source[index] {
-                        Row::Group(name) => div()
-                            .h(px(32.))
-                            .px_2()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .text_size(px(12.))
-                            .text_color(rgb(this.palette.muted))
-                            .child(Icon::new(IconName::Layers).xsmall())
-                            .child(name.clone())
-                            .into_any_element(),
-                        Row::Container(index) => {
-                            let Some(engine) = this.engine() else {
-                                return div().into_any_element();
-                            };
-                            let container = &engine.containers[*index];
-                            let id = container.id.clone().unwrap_or_default();
-                            let name = container_name(container);
-                            let active = engine.selected.as_ref() == Some(&id);
-                            div()
-                                .id(SharedString::from(format!("docker-container-{id}")))
-                                .w_full()
-                                .h(px(32.))
-                                .px_2()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .cursor_pointer()
-                                .text_size(px(12.))
-                                .when(active, |row| row.bg(rgba((this.palette.accent << 8) | 32)))
-                                .hover(|row| row.bg(rgb(this.palette.row_hover())))
-                                .child(Icon::new(IconName::Circle).size(px(8.)).text_color(rgb(
-                                    if is_running(container) {
-                                        this.palette.ansi[2]
-                                    } else {
-                                        this.palette.muted
-                                    },
-                                )))
-                                .child(div().min_w_0().flex_1().truncate().child(name))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.select_container(id.clone(), cx)
-                                }))
-                                .into_any_element()
-                        }
-                    })
-                    .collect()
-            }),
-        )
-        .size_full();
-        let mut sidebar = div().size_full().flex().flex_col().gap_1();
-        if let Some(engine) = self.engine() {
-            let filter = engine.filter;
-            sidebar = sidebar
-                .child(div().px_2().child(Input::new(&engine.query).small()))
-                .child(
-                    div().px_1().flex().gap_1().children(
-                        [
-                            (Filter::All, "docker.all"),
-                            (Filter::Running, "docker.running"),
-                            (Filter::Stopped, "docker.stopped"),
-                        ]
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, (value, key))| {
-                            Button::new(("docker-filter", index))
-                                .ghost()
-                                .small()
-                                .h(px(tshell_ui::controls::CONTROL_HEIGHT))
-                                .flex_1()
-                                .min_w_0()
-                                .px_1()
-                                .label(t!(key))
-                                .selected(filter == value)
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    if let Some(engine) = this.engine_mut() {
-                                        engine.filter = value;
-                                    }
-                                    cx.notify();
-                                }))
-                        }),
-                    ),
-                )
-                .child(
-                    div()
-                        .px_2()
-                        .text_size(px(11.))
-                        .text_color(rgb(self.palette.muted))
-                        .child(
-                            t!("docker.container_count", count = engine.containers.len())
-                                .into_owned(),
-                        ),
-                );
-        }
-        sidebar
-            .child(div().flex_1().min_h_0().child(if rows.is_empty() {
-                tshell_ui::controls::empty_state(
-                    IconName::Box,
-                    t!("docker.no_containers").into_owned(),
-                    self.palette,
-                )
-                .into_any_element()
-            } else {
-                list.into_any_element()
-            }))
-            .into_any_element()
-    }
     pub fn status(&self) -> String {
         self.target()
             .map(|target| source(target))
             .unwrap_or_else(|| t!("docker.choose_engine").into_owned())
     }
-    fn overview(&self) -> AnyElement {
+    fn overview(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(engine) = self.engine() else {
             return div().into_any_element();
         };
@@ -275,12 +114,96 @@ impl DockerView {
             })
             .unwrap_or_default();
         fields.push((t!("docker.mounts").into_owned(), mounts));
+        if let Some(config) = &detail.host_config {
+            if let Some(cpus) = config.nano_cpus.filter(|value| *value > 0) {
+                fields.push((
+                    t!("docker.cpu_limit").into_owned(),
+                    format!("{:.2}", cpus as f64 / 1_000_000_000.),
+                ));
+            }
+            if let Some(memory) = config.memory.filter(|value| *value > 0) {
+                fields.push((
+                    t!("docker.memory_limit").into_owned(),
+                    crate::resources::format_bytes(memory as u64),
+                ));
+            }
+        }
+        if let Some(stats) = &engine.stats {
+            for (label, path) in [
+                ("docker.memory_usage", "/memory_stats/usage"),
+                ("docker.cpu_time", "/cpu_stats/cpu_usage/total_usage"),
+                ("docker.pids", "/pids_stats/current"),
+            ] {
+                if let Some(value) = stats.pointer(path).and_then(serde_json::Value::as_u64) {
+                    fields.push((
+                        t!(label).into_owned(),
+                        match label {
+                            "docker.memory_usage" => crate::resources::format_bytes(value),
+                            "docker.cpu_time" => format!("{:.2} s", value as f64 / 1_000_000_000.),
+                            _ => value.to_string(),
+                        },
+                    ));
+                }
+            }
+        }
+        let mut links = Vec::new();
+        if let Some(image) = &detail.image {
+            links.push((
+                crate::resources::Resource::Image(image.clone()),
+                config
+                    .and_then(|config| config.image.clone())
+                    .unwrap_or_else(|| crate::resources::short_id(image).into()),
+            ));
+        }
+        for mount in detail.mounts.as_deref().unwrap_or_default() {
+            if let Some(name) = &mount.name {
+                links.push((
+                    crate::resources::Resource::Volume(name.clone()),
+                    name.clone(),
+                ));
+            }
+        }
+        if let Some(networks) = detail
+            .network_settings
+            .as_ref()
+            .and_then(|settings| settings.networks.as_ref())
+        {
+            for (name, settings) in networks {
+                if let Some(id) = &settings.network_id {
+                    links.push((
+                        crate::resources::Resource::Network(id.clone()),
+                        name.clone(),
+                    ));
+                }
+            }
+        }
         div()
             .id("docker-overview")
             .size_full()
             .overflow_y_scroll()
             .px_4()
             .py_3()
+            .children(
+                links
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, (resource, name))| {
+                        tshell_ui::controls::button(
+                            ("docker-related", index),
+                            match resource {
+                                crate::resources::Resource::Image(_) => IconName::Image,
+                                crate::resources::Resource::Volume(_) => IconName::HardDrive,
+                                _ => IconName::Network,
+                            },
+                            name,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.select_resource(resource.clone(), window, cx)
+                            },
+                        ))
+                    }),
+            )
             .children(fields.into_iter().map(|(label, value)| {
                 div()
                     .min_w_0()
@@ -314,48 +237,18 @@ impl DockerView {
     }
     fn surface(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = self.palette;
-        let title = self
-            .target()
-            .map(|target| source(target))
-            .unwrap_or_else(|| t!("docker.choose_engine").into_owned());
-        let header = div()
-            .h(px(36.))
-            .flex_shrink_0()
-            .px_3()
-            .flex()
-            .items_center()
-            .gap_2()
-            .border_b_1()
-            .border_color(rgb(p.border))
-            .child(Icon::new(IconName::Box).small())
-            .child(
-                div()
-                    .min_w_0()
-                    .flex_1()
-                    .truncate()
-                    .text_size(px(12.))
-                    .child(title),
-            )
-            .child(
-                icon_button("docker-endpoint", IconName::Settings, t!("docker.endpoint")).on_click(
-                    cx.listener(|this, _, window, cx| this.configure_endpoint(window, cx)),
-                ),
-            )
-            .child(
-                icon_button(
-                    "docker-reconnect",
-                    IconName::RefreshCw,
-                    t!("docker.reconnect"),
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.reconnect(cx))),
-            );
+        if self
+            .engine()
+            .is_some_and(|engine| engine.resources.page != crate::ResourcePage::Containers)
+        {
+            return self.resource_surface(cx);
+        }
         let mut surface = div()
             .size_full()
             .flex()
             .flex_col()
             .text_color(rgb(p.text))
-            .bg(rgb(p.panel))
-            .child(header);
+            .bg(rgb(p.panel));
         let Some(engine) = self.engine() else {
             return surface
                 .child(tshell_ui::controls::empty_state(
@@ -386,6 +279,11 @@ impl DockerView {
             );
         }
         let Some(id) = &engine.selected else {
+            if engine.resources.output_visible && engine.resources.output_resource.is_none() {
+                return surface
+                    .child(Editor::new(&engine.resources.output))
+                    .into_any_element();
+            }
             return surface
                 .child(tshell_ui::controls::empty_state(
                     IconName::Box,
@@ -401,6 +299,7 @@ impl DockerView {
         let running = selected.is_some_and(is_running);
         let ready = engine.detail.is_some() && engine.busy.is_none();
         let name = selected.map(container_name).unwrap_or_else(|| id.clone());
+        let tab = engine.tab;
         surface = surface.child(
             div()
                 .min_h(px(36.))
@@ -421,41 +320,6 @@ impl DockerView {
                 )
                 .children(
                     [
-                        (Operation::Start, IconName::Play, !running),
-                        (Operation::Stop, IconName::Square, running),
-                        (Operation::Restart, IconName::RefreshCw, running),
-                        (Operation::Remove, IconName::Trash, !running),
-                    ]
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, (operation, icon, enabled))| {
-                        icon_button(("docker-operation", index), icon, t!(operation.key()))
-                            .disabled(!ready || !enabled)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.confirm_operation(operation, window, cx)
-                            }))
-                    }),
-                )
-                .child(
-                    button("docker-terminal", IconName::Terminal, t!("docker.terminal"))
-                        .disabled(!ready || !running)
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.open_terminal(window, cx)),
-                        ),
-                ),
-        );
-        let tab = engine.tab;
-        surface = surface.child(
-            div()
-                .h(px(34.))
-                .flex_shrink_0()
-                .px_2()
-                .flex()
-                .gap_1()
-                .border_b_1()
-                .border_color(rgb(p.border))
-                .children(
-                    [
                         (Tab::Overview, "docker.overview", IconName::Info),
                         (Tab::Logs, "docker.logs", IconName::ScrollText),
                         (Tab::Inspect, "docker.inspect", IconName::Braces),
@@ -463,118 +327,227 @@ impl DockerView {
                     .into_iter()
                     .enumerate()
                     .map(|(index, (value, key, icon))| {
-                        button(("docker-tab", index), icon, t!(key))
+                        icon_button(("docker-tab", index), icon, t!(key))
                             .selected(tab == value)
                             .on_click(cx.listener(move |this, _, _, cx| this.set_tab(value, cx)))
                     }),
-                ),
-        );
-        let content = match tab {
-            Tab::Overview => self.overview(),
-            Tab::Inspect => div()
-                .size_full()
-                .font_family(self.font_family.clone())
-                .text_size(px(self.font_size.clamp(12., 17.)))
-                .child(Editor::new(&engine.inspect_editor))
-                .into_any_element(),
-            Tab::Logs => div()
-                .size_full()
-                .min_h_0()
-                .flex()
-                .flex_col()
+                )
+                .children(
+                    [
+                        (
+                            if running {
+                                crate::actions::Action::Stop
+                            } else {
+                                crate::actions::Action::Start
+                            },
+                            if running {
+                                IconName::Square
+                            } else {
+                                IconName::Play
+                            },
+                            true,
+                        ),
+                        (
+                            crate::actions::Action::RestartContainer,
+                            IconName::RefreshCw,
+                            running,
+                        ),
+                        (
+                            crate::actions::Action::RemoveContainer,
+                            IconName::Trash,
+                            !running,
+                        ),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, (operation, icon, enabled))| {
+                        let target = engine.target.clone();
+                        let resource = crate::resources::Resource::Container(id.clone());
+                        icon_button(("docker-operation", index), icon, t!(operation.key()))
+                            .disabled(!ready || !enabled)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_action(
+                                    target.clone(),
+                                    Some(resource.clone()),
+                                    operation,
+                                    window,
+                                    cx,
+                                )
+                            }))
+                    }),
+                )
                 .child(
-                    div()
-                        .min_h(px(34.))
-                        .flex_shrink_0()
-                        .px_2()
-                        .flex()
-                        .flex_wrap()
-                        .gap_1()
-                        .items_center()
-                        .child(
-                            div()
-                                .min_w(px(100.))
-                                .flex_1()
-                                .child(Input::new(&engine.logs_query).small()),
-                        )
-                        .child(
+                    icon_button("docker-terminal", IconName::Terminal, t!("docker.terminal"))
+                        .disabled(!ready || !running)
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.open_terminal(window, cx)),
+                        ),
+                )
+                .child(self.action_button(
+                    vec![
+                            crate::actions::Action::Rename,
+                            crate::actions::Action::Update,
+                            crate::actions::Action::Recreate,
+                            if engine
+                                .detail
+                                .as_ref()
+                                .and_then(|detail| detail.state.as_ref())
+                                .is_some_and(|state| state.paused == Some(true))
+                            {
+                                crate::actions::Action::Resume
+                            } else {
+                                crate::actions::Action::Pause
+                            },
+                        ],
+                    Some(crate::resources::Resource::Container(id.clone())),
+                    cx,
+                ))
+                .when(
+                    !engine.resources.output_text.is_empty()
+                        && (engine.resources.output_resource.is_none()
+                            || engine.resources.output_resource
+                                == Some(crate::resources::Resource::Container(id.clone()))),
+                    |bar| {
+                        bar.child(
                             icon_button(
-                                "docker-log-pause",
-                                if engine.paused {
-                                    IconName::Play
-                                } else {
-                                    IconName::Pause
-                                },
-                                t!(if engine.paused {
-                                    "docker.resume"
-                                } else {
-                                    "docker.pause"
-                                }),
+                                "docker-container-output",
+                                IconName::ScrollText,
+                                t!("docker.output"),
                             )
-                            .on_click(cx.listener(|this, _, _, cx| this.pause_logs(cx))),
-                        )
-                        .child(
-                            icon_button(
-                                "docker-log-scroll",
-                                IconName::ArrowDownToLine,
-                                t!("docker.auto_scroll"),
-                            )
-                            .selected(engine.auto_scroll)
+                            .selected(engine.resources.output_visible)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if let Some(engine) = this.engine_mut() {
-                                    engine.auto_scroll = !engine.auto_scroll;
+                                    engine.resources.output_visible =
+                                        !engine.resources.output_visible;
                                 }
                                 cx.notify();
                             })),
                         )
-                        .child(
-                            icon_button("docker-log-copy", IconName::Copy, t!("editor.copy"))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(engine) = this.engine() {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(
-                                            engine.log.text(),
-                                        ));
-                                    }
-                                })),
-                        )
-                        .child(
-                            icon_button(
-                                "docker-log-refresh",
-                                IconName::RefreshCw,
-                                t!("ws.refresh"),
+                    },
+                ),
+        );
+        let content = if engine.resources.output_visible
+            && (engine.resources.output_resource.is_none()
+                || engine.resources.output_resource
+                    == Some(crate::resources::Resource::Container(id.clone())))
+        {
+            div()
+                .size_full()
+                .min_h_0()
+                .child(Editor::new(&engine.resources.output))
+                .into_any_element()
+        } else {
+            match tab {
+                Tab::Overview => self.overview(cx),
+                Tab::Inspect => div()
+                    .size_full()
+                    .font_family(self.font_family.clone())
+                    .text_size(px(self.font_size.clamp(12., 17.)))
+                    .child(Editor::new(&engine.inspect_editor))
+                    .into_any_element(),
+                Tab::Logs => div()
+                    .size_full()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .min_h(px(34.))
+                            .flex_shrink_0()
+                            .px_2()
+                            .flex()
+                            .flex_wrap()
+                            .gap_1()
+                            .items_center()
+                            .child(
+                                div()
+                                    .min_w(px(100.))
+                                    .flex_1()
+                                    .child(Input::new(&engine.logs_query).small()),
                             )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.logs_worker_reset(cx);
-                            })),
-                        ),
-                )
-                .when(engine.logs_loading, |view| {
-                    view.child(
-                        div()
-                            .px_3()
-                            .text_size(px(12.))
-                            .child(t!("docker.loading").into_owned()),
+                            .child(
+                                icon_button(
+                                    "docker-log-pause",
+                                    if engine.paused {
+                                        IconName::Play
+                                    } else {
+                                        IconName::Pause
+                                    },
+                                    t!(if engine.paused {
+                                        "docker.resume"
+                                    } else {
+                                        "docker.pause"
+                                    }),
+                                )
+                                .on_click(cx.listener(|this, _, _, cx| this.pause_logs(cx))),
+                            )
+                            .child(
+                                icon_button(
+                                    "docker-log-scroll",
+                                    IconName::ArrowDownToLine,
+                                    t!("docker.auto_scroll"),
+                                )
+                                .selected(engine.auto_scroll)
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        if let Some(engine) = this.engine_mut() {
+                                            engine.auto_scroll = !engine.auto_scroll;
+                                        }
+                                        cx.notify();
+                                    },
+                                )),
+                            )
+                            .child(
+                                icon_button("docker-log-copy", IconName::Copy, t!("editor.copy"))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        if let Some(engine) = this.engine() {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                engine.log.text(),
+                                            ));
+                                        }
+                                    })),
+                            )
+                            .child(
+                                icon_button(
+                                    "docker-log-refresh",
+                                    IconName::RefreshCw,
+                                    t!("ws.refresh"),
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
+                                        this.logs_worker_reset(cx);
+                                    },
+                                )),
+                            ),
                     )
-                })
-                .when_some(engine.logs_error.as_ref(), |view, error| {
-                    view.child(
+                    .when(engine.logs_loading, |view| {
+                        view.child(
+                            div()
+                                .px_3()
+                                .text_size(px(12.))
+                                .child(t!("docker.loading").into_owned()),
+                        )
+                    })
+                    .when_some(engine.logs_error.as_ref(), |view, error| {
+                        view.child(
+                            div()
+                                .px_3()
+                                .py_1()
+                                .text_size(px(12.))
+                                .text_color(rgb(p.ansi[1]))
+                                .child(i18n::format_failure(error)),
+                        )
+                    })
+                    .child(
                         div()
-                            .px_3()
-                            .py_1()
-                            .text_size(px(12.))
-                            .text_color(rgb(p.ansi[1]))
-                            .child(i18n::format_failure(error)),
+                            .flex_1()
+                            .min_h_0()
+                            .font_family(self.font_family.clone())
+                            .text_size(px(self.font_size.clamp(12., 17.)))
+                            .child(Editor::new(&engine.logs_editor)),
                     )
-                })
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .font_family(self.font_family.clone())
-                        .text_size(px(self.font_size.clamp(12., 17.)))
-                        .child(Editor::new(&engine.logs_editor)),
-                )
-                .into_any_element(),
+                    .into_any_element(),
+            }
         };
         surface
             .child(div().flex_1().min_h_0().flex().flex_col().child(content))

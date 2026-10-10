@@ -15,7 +15,7 @@ serde_json = "1"
 tshell-host = { path = "../tshell-host" }
 tshell-ui = { path = "../tshell-ui" }
 bollard = { version = "=0.21.1", default-features = false, features = ["pipe", "http"] }
-tokio.workspace = true
+tokio = { workspace = true, features = ["fs"] }
 futures-util = "0.3"
 http = "1"
 hyper = { version = "1", features = ["client", "http1"] }

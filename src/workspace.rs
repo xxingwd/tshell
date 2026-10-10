@@ -2964,13 +2964,14 @@ impl AppView {
     }
     fn host_files_busy(&self, index: usize, cx: &App) -> bool {
         let id = self.hosts[index].identity();
-        self.workspaces.iter().any(|((host, _), workspace)| {
-            *host == id
-                && workspace
-                    .explorer
-                    .as_ref()
-                    .is_some_and(|explorer| explorer.read(cx).busy())
-        })
+        self.docker.read(cx).busy(&id, cx)
+            || self.workspaces.iter().any(|((host, _), workspace)| {
+                *host == id
+                    && workspace
+                        .explorer
+                        .as_ref()
+                        .is_some_and(|explorer| explorer.read(cx).busy())
+            })
     }
     fn session_files_busy(&self, session_id: &str, cx: &App) -> bool {
         self.workspaces
@@ -3724,7 +3725,9 @@ impl AppView {
             Page::Terminal => self.session_list(cx),
             Page::Explorer => self.file_sidebar(cx),
             Page::Git => self.git_sidebar(cx),
-            Page::Docker => self.docker.update(cx, |docker, cx| docker.sidebar(cx)),
+            Page::Docker => self
+                .docker
+                .update(cx, |docker, cx| docker.sidebar(self.sidebar_width, cx)),
         };
         div()
             .size_full()
@@ -3737,7 +3740,9 @@ impl AppView {
             .border_color(rgb(self.palette.border))
             .child(self.host_list(cx))
             .child(self.activity_switcher(cx))
-            .child(self.sidebar_header(cx))
+            .when(self.page != Page::Docker, |view| {
+                view.child(self.sidebar_header(cx))
+            })
             .child(div().flex_1().min_h_0().child(content))
             .into_any_element()
     }

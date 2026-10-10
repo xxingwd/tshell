@@ -22,6 +22,10 @@ pub struct CommandRequest {
     pub output_limit: usize,
     pub timeout: Duration,
 }
+pub struct CommandOutput {
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
 impl CommandRequest {
     pub fn new(
         program: impl Into<String>,
@@ -86,8 +90,35 @@ async fn limited(mut stream: impl AsyncRead + Unpin, limit: usize) -> Result<Vec
     );
     Ok(bytes)
 }
+fn append_tail(bytes: &mut Vec<u8>, chunk: &[u8], limit: usize) {
+    if chunk.len() >= limit {
+        bytes.clear();
+        bytes.extend_from_slice(&chunk[chunk.len() - limit..]);
+    } else {
+        let excess = bytes
+            .len()
+            .saturating_add(chunk.len())
+            .saturating_sub(limit);
+        bytes.drain(..excess);
+        bytes.extend_from_slice(chunk);
+    }
+}
+async fn stderr_tail(mut stream: impl AsyncRead + Unpin, limit: usize) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0; 8192];
+    loop {
+        let count = stream.read(&mut buffer).await?;
+        if count == 0 {
+            return Ok(bytes);
+        }
+        append_tail(&mut bytes, &buffer[..count], limit);
+    }
+}
 impl Host {
     pub fn run(&self, request: CommandRequest) -> Result<Vec<u8>> {
+        self.run_output(request).map(|output| output.stdout)
+    }
+    pub fn run_output(&self, request: CommandRequest) -> Result<CommandOutput> {
         let host = self.clone();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         crate::ssh::runtime().spawn(async move {
@@ -102,7 +133,7 @@ impl Host {
             .recv()
             .with_diagnostic(crate::diagnostic!("ssh.worker_stopped"))?
     }
-    async fn execute(&self, request: CommandRequest) -> Result<Vec<u8>> {
+    async fn execute(&self, request: CommandRequest) -> Result<CommandOutput> {
         match self {
             Self::Local => {
                 let mut command = tokio::process::Command::new(&request.program);
@@ -133,7 +164,7 @@ impl Host {
                 let mut stdin = child.stdin.take();
                 let (stdout, stderr, status) = tokio::try_join!(
                     limited(stdout, request.output_limit),
-                    limited(stderr, 8192),
+                    stderr_tail(stderr, request.output_limit),
                     async {
                         if let Some(mut stdin) = stdin.take() {
                             stdin.write_all(&request.stdin).await?;
@@ -150,7 +181,7 @@ impl Host {
                         output = String::from_utf8_lossy(&stderr).trim()
                     )
                 );
-                Ok(stdout)
+                Ok(CommandOutput { stdout, stderr })
             }
             Self::Ssh(config) => {
                 let mut channel = crate::ssh::exec_aux(config, &request.remote_command()?).await?;
@@ -171,7 +202,7 @@ impl Host {
                             stdout.extend_from_slice(&data);
                         }
                         russh::ChannelMsg::ExtendedData { data, .. } => {
-                            stderr.extend(data.iter().take(8192usize.saturating_sub(stderr.len())))
+                            append_tail(&mut stderr, &data, request.output_limit)
                         }
                         russh::ChannelMsg::ExitStatus { exit_status } => {
                             status = i32::try_from(exit_status).ok()
@@ -187,7 +218,7 @@ impl Host {
                         output = String::from_utf8_lossy(&stderr).trim()
                     )
                 );
-                Ok(stdout)
+                Ok(CommandOutput { stdout, stderr })
             }
         }
     }
@@ -213,6 +244,26 @@ mod tests {
         assert_eq!(
             request.remote_command().unwrap(),
             r"cd '/srv/folder\name' && env 'git' 'show' 'a'\''b;$(echo nope)'"
+        );
+    }
+    #[cfg(windows)]
+    #[test]
+    fn successful_command_retains_stderr_output_without_an_eight_kib_failure() {
+        let request = CommandRequest::new(
+            "cmd.exe",
+            [
+                "/D",
+                "/C",
+                "echo stdout&for /L %i in (1,1,3000) do @echo stderr-%i 1>&2",
+            ],
+        );
+        let output = Host::Local.run_output(request).unwrap();
+        assert_eq!(String::from_utf8(output.stdout).unwrap().trim(), "stdout");
+        assert!(output.stderr.len() > 8192);
+        assert!(
+            String::from_utf8(output.stderr)
+                .unwrap()
+                .contains("stderr-3000")
         );
     }
 }

@@ -23,9 +23,9 @@ GPUI 的应用中。终端引擎使用 Rust 原生实现和 `alacritty_terminal`
   远程 Git 使用目标主机上的 Git，不需要远程 Python 或文件挂载。
   并排和行内差异支持选择、复制文本及字符级变更高亮。
   详见 [Git 工作区](docs/git-workspace.md)。
-- Docker 工作区，支持本地及已保存 SSH 主机的 Engine：容器搜索、Compose 分组、
-  概览/配置、日志、启停/重启/删除及容器终端。Engine 随当前主机切换，按主机保留
-  浏览状态，不依赖终端会话。
+- Docker 工作区，支持本地及已保存 SSH 主机的 Engine：容器 / Compose / 镜像 / 更多
+  四类资源导航、资源操作、日志与容器终端，以及 Compose YAML、带冲突检测和备份恢复的
+  daemon JSON 编辑。随当前主机切换，不依赖终端会话。
   详见 [Docker 工作区](docs/docker-workspace.md)。
 - 内置 UTF-8 文本编辑器、后台语法高亮、搜索和带冲突检测的远程保存。
 - 全局 SFTP 传输队列，支持并发上传/下载、目录扫描、字节进度、拖动面板、
@@ -66,7 +66,9 @@ tmux 主机需要安装 tmux；远程 Explorer 和 Git 分别需要目标主机�
 
 
 Docker 需要运行中的本地 Engine 及管道/socket 访问权限；SSH Docker 需要远端主机安装
-Docker CLI 并有权访问其 Engine，本机无需 Docker CLI。可指定本地管道/socket 路径。
+Docker CLI 并有权访问其 Engine。本地 SDK 操作无需 Docker CLI；Compose、镜像 push
+需要目标主机的 CLI，Compose 还需要相应插件，Desktop 重启也使用 CLI。配置编辑和服务
+控制需要当前账号的权限。可指定本地管道/socket 路径。
 
 ## 构建和运行
 

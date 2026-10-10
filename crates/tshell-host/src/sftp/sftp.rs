@@ -110,6 +110,117 @@ impl Client {
         String::from_utf8(self.read_bytes(path).await?)
             .with_diagnostic(crate::diagnostic!("sftp.not_utf8"))
     }
+    pub async fn read_optional(&self, path: &str) -> Result<Option<String>> {
+        match self.session.lstat(path).await {
+            Ok(metadata) => {
+                ensure!(
+                    metadata.attrs.file_type().is_file(),
+                    crate::diagnostic!("sftp.regular_only")
+                );
+                self.read(path).await.map(Some)
+            }
+            Err(error) if is_status(&error, StatusCode::NoSuchFile) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+    pub async fn write_with_backup(
+        &self,
+        path: &str,
+        text: &str,
+        expected: Option<&str>,
+    ) -> Result<Option<String>> {
+        ensure!(
+            self.read_optional(path).await?.as_deref() == expected,
+            crate::diagnostic!("sftp.remote_modified")
+        );
+        if let Some(expected) = expected {
+            let attrs = self.session.lstat(path).await?.attrs;
+            ensure!(
+                attrs.file_type().is_file(),
+                crate::diagnostic!("sftp.regular_only")
+            );
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos();
+            let backup = format!("{path}.tshell-{nonce}.bak");
+            self.create_text(&backup, expected, attrs).await?;
+            self.write(path, text, expected).await?;
+            Ok(Some(backup))
+        } else {
+            self.create_text(
+                path,
+                text,
+                FileAttributes {
+                    permissions: Some(0o600),
+                    ..FileAttributes::empty()
+                },
+            )
+            .await?;
+            Ok(None)
+        }
+    }
+    async fn create_text(&self, path: &str, text: &str, attrs: FileAttributes) -> Result<()> {
+        ensure!(
+            text.len() <= MAX_BYTES,
+            crate::diagnostic!("sftp.too_large")
+        );
+        let parent = path
+            .rsplit_once('/')
+            .map(|(parent, _)| parent)
+            .unwrap_or(".");
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let temporary = format!("{parent}/.tshell-new-{}-{nonce}", std::process::id());
+        let handle = self
+            .session
+            .open(
+                temporary.clone(),
+                OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE,
+                FileAttributes {
+                    permissions: Some(0o600),
+                    ..FileAttributes::empty()
+                },
+            )
+            .await?
+            .handle;
+        let written = async {
+            for (index, chunk) in text.as_bytes().chunks(CHUNK).enumerate() {
+                self.session
+                    .write(handle.clone(), (index * CHUNK) as u64, chunk.to_vec())
+                    .await?;
+            }
+            self.session
+                .fsetstat(
+                    handle.clone(),
+                    FileAttributes {
+                        permissions: attrs.permissions,
+                        uid: attrs.uid,
+                        gid: attrs.gid,
+                        ..FileAttributes::empty()
+                    },
+                )
+                .await?;
+            if self.fsync {
+                self.session.fsync(handle.clone()).await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        let closed = self.session.close(handle).await;
+        let result = async {
+            written?;
+            closed?;
+            // SFTP v3 rename refuses an existing destination, including a concurrent creator.
+            self.session.rename(&temporary, path).await?;
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        if result.is_err() {
+            let _ = self.session.remove(temporary).await;
+        }
+        result
+    }
 
     pub async fn read_bytes(&self, path: &str) -> Result<Vec<u8>> {
         let attrs = self.session.stat(path).await?.attrs;

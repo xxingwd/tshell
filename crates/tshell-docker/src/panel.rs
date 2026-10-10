@@ -1,11 +1,13 @@
-use super::{Endpoint, Target, logs::LogBuffer, t};
+use super::{
+    Endpoint, Target, i18n,
+    logs::LogBuffer,
+    resources::{Resource, ResourcePage, Resources},
+    t,
+};
 use bollard::{
     Docker,
     models::{ContainerInspectResponse, ContainerSummary, ContainerSummaryStateEnum, SystemInfo},
-    query_parameters::{
-        EventsOptionsBuilder, ListContainersOptionsBuilder, LogsOptionsBuilder,
-        RemoveContainerOptionsBuilder, RestartContainerOptionsBuilder, StopContainerOptionsBuilder,
-    },
+    query_parameters::{EventsOptionsBuilder, ListContainersOptionsBuilder, LogsOptionsBuilder},
 };
 use futures_util::StreamExt;
 use gpui_kit::component::{
@@ -14,10 +16,9 @@ use gpui_kit::component::{
     notification::Notification,
 };
 use gpui_kit::{prelude::*, *};
-use std::{
-    collections::{BTreeMap, HashMap},
-    time::Duration,
-};
+#[cfg(debug_assertions)]
+use std::collections::HashMap;
+use std::{collections::BTreeMap, time::Duration};
 use tshell_host::{Failure, HostId};
 use tshell_ui::appearance::Palette;
 #[derive(Clone)]
@@ -37,29 +38,6 @@ pub(crate) enum Tab {
     Logs,
     Inspect,
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Filter {
-    All,
-    Running,
-    Stopped,
-}
-#[derive(Clone, Copy)]
-pub(crate) enum Operation {
-    Start,
-    Stop,
-    Restart,
-    Remove,
-}
-impl Operation {
-    pub(crate) fn key(self) -> &'static str {
-        match self {
-            Self::Start => "docker.start",
-            Self::Stop => "docker.stop",
-            Self::Restart => "docker.restart",
-            Self::Remove => "docker.remove",
-        }
-    }
-}
 pub(crate) struct Engine {
     pub target: Target,
     pub docker: Option<Docker>,
@@ -67,11 +45,12 @@ pub(crate) struct Engine {
     pub containers: Vec<ContainerSummary>,
     pub selected: Option<String>,
     pub detail: Option<ContainerInspectResponse>,
+    pub stats: Option<serde_json::Value>,
     pub loading: bool,
     pub error: Option<Failure>,
     pub busy: Option<String>,
     pub tab: Tab,
-    pub filter: Filter,
+    pub resources: Resources,
     pub query: Entity<InputState>,
     pub logs_query: Entity<InputState>,
     pub logs_editor: Entity<EditorState>,
@@ -84,6 +63,11 @@ pub(crate) struct Engine {
     pub logs_loading: bool,
 }
 struct Worker(tokio::task::JoinHandle<()>);
+#[derive(Clone)]
+enum FormField {
+    Input(Entity<InputState>),
+    Json(Entity<EditorState>),
+}
 impl Drop for Worker {
     fn drop(&mut self) {
         self.0.abort();
@@ -107,12 +91,40 @@ enum Message {
         Outcome<(Docker, SystemInfo, Vec<ContainerSummary>)>,
     ),
     Listed(Target, u64, Outcome<Vec<ContainerSummary>>),
-    Detail(Target, String, u64, Outcome<ContainerInspectResponse>),
+    Detail(
+        Target,
+        String,
+        u64,
+        Outcome<(ContainerInspectResponse, Option<serde_json::Value>)>,
+    ),
     Log(Target, String, u64, Vec<u8>),
     LogEnd(Target, String, u64, Option<Failure>),
-    Operation(Target, String, Outcome<()>, Outcome<Vec<ContainerSummary>>),
+
     Refresh(Target),
     EventsError(Target, Failure),
+    Resources(
+        Target,
+        ResourcePage,
+        u64,
+        Outcome<crate::resources::Snapshot>,
+    ),
+    Preview(Target, Resource, u64, Outcome<serde_json::Value>),
+    Document(
+        Target,
+        Resource,
+        u64,
+        Outcome<(crate::documents::File, Option<crate::daemon::Source>)>,
+    ),
+    Projects(Target, u64, Outcome<Vec<crate::resources::Project>>),
+    EngineEvent(Target, serde_json::Value),
+    Managed(
+        Target,
+        Option<Resource>,
+        crate::actions::Action,
+        String,
+        Outcome<crate::actions::Outcome>,
+    ),
+    Progress(Target, String),
 }
 pub struct DockerView {
     pub(crate) targets: Vec<Target>,
@@ -133,12 +145,85 @@ pub struct DockerView {
     logs_worker: Option<Worker>,
     events_worker: Option<Worker>,
     operations: BTreeMap<HostId, Worker>,
+    resource_epoch: u64,
+    preview_epoch: u64,
+    resource_worker: Option<Worker>,
+    preview_worker: Option<Worker>,
+    project_worker: Option<Worker>,
+    pending_form: Option<(Target, Resource, crate::actions::Action)>,
     #[cfg(debug_assertions)]
     fixture: bool,
     _updates: Task<()>,
 }
 impl EventEmitter<Event> for DockerView {}
 impl DockerView {
+    pub(crate) fn discard_document(
+        &mut self,
+        target: Target,
+        resource: Resource,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.matches(&target) {
+            return;
+        }
+        let Some(document) = self
+            .engine()
+            .and_then(|engine| engine.resources.document(&resource))
+        else {
+            return;
+        };
+        let path = document.file.path.clone();
+        let draft = document.editor.read(cx).value().to_string();
+        let receiver = window.prompt(
+            PromptLevel::Warning,
+            &t!("docker.discard_changes"),
+            Some(&format!("{} · {path}", target.name)),
+            &[
+                t!("explorer.cancel").as_ref(),
+                t!("explorer.confirm").as_ref(),
+            ],
+            cx,
+        );
+        cx.spawn_in(window, async move |view, cx| {
+            if receiver.await == Ok(1) {
+                let _ = view.update_in(cx, |this, window, cx| {
+                    if let Some(engine) = this.engines.get(&target.id).filter(|engine| {
+                        engine.target.endpoint == target.endpoint && engine.busy.is_none()
+                    }) {
+                        if let Some(document) =
+                            engine.resources.documents.get(&path).filter(|document| {
+                                document.editor.read(cx).value().as_ref() == draft
+                            })
+                        {
+                            document.discard(window, cx);
+                        }
+                    }
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+    pub(crate) fn select_document(
+        &mut self,
+        target: &Target,
+        resource: Resource,
+        path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.matches(target) {
+            return;
+        }
+        self.preview_worker = None;
+        self.preview_epoch += 1;
+        if let Some(engine) = self.engine_mut() {
+            engine.resources.active_files.insert(resource, path);
+        }
+        self.load_resource_preview(window, cx);
+        cx.notify();
+    }
     pub fn new(
         targets: Vec<Target>,
         palette: Palette,
@@ -194,6 +279,12 @@ impl DockerView {
             logs_worker: None,
             events_worker: None,
             operations: BTreeMap::new(),
+            resource_epoch: 0,
+            preview_epoch: 0,
+            resource_worker: None,
+            preview_worker: None,
+            project_worker: None,
+            pending_form: None,
             #[cfg(debug_assertions)]
             fixture: false,
             _updates: updates,
@@ -266,6 +357,7 @@ impl DockerView {
         cx.notify();
     }
     fn cancel_browsing(&mut self) {
+        self.pending_form = None;
         self.query_epoch += 1;
         self.detail_epoch += 1;
         self.logs_epoch += 1;
@@ -273,6 +365,11 @@ impl DockerView {
         self.detail_worker = None;
         self.logs_worker = None;
         self.events_worker = None;
+        self.resource_epoch += 1;
+        self.preview_epoch += 1;
+        self.resource_worker = None;
+        self.preview_worker = None;
+        self.project_worker = None;
         self.refresh_pending = false;
         if let Some(engine) = self.engine_mut() {
             engine.loading = false;
@@ -324,11 +421,12 @@ impl DockerView {
                     containers: Vec::new(),
                     selected: None,
                     detail: None,
+                    stats: None,
                     loading: false,
                     error: None,
                     busy: None,
                     tab: Tab::Overview,
-                    filter: Filter::All,
+                    resources: Resources::new(window, cx),
                     query,
                     logs_query,
                     logs_editor,
@@ -351,6 +449,7 @@ impl DockerView {
             engine.docker = None;
             engine.info = None;
             engine.detail = None;
+            engine.stats = None;
             engine.error = None;
         }
         self.refresh(cx);
@@ -399,6 +498,203 @@ impl DockerView {
         }));
         cx.notify();
     }
+    pub fn set_resource_page(
+        &mut self,
+        page: ResourcePage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .engine()
+            .is_none_or(|engine| engine.resources.page == page)
+        {
+            return;
+        }
+        self.cancel_browsing();
+        if let Some(engine) = self.engine_mut() {
+            engine.resources.page = page;
+            engine.error = None;
+        }
+        self.load_resource_preview(window, cx);
+        self.refresh(cx);
+        self.start_events();
+        cx.notify();
+    }
+    pub(crate) fn select_resource(
+        &mut self,
+        resource: Resource,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Resource::Container(id) = resource {
+            self.select_container(id, window, cx);
+            return;
+        }
+        let page = resource.page();
+        let changed_page = self
+            .engine()
+            .is_some_and(|engine| engine.resources.page != page);
+        self.preview_epoch += 1;
+        self.preview_worker = None;
+        if changed_page {
+            self.cancel_browsing();
+        }
+        if let Some(engine) = self.engine_mut() {
+            engine.resources.output_visible = false;
+            engine.resources.page = page;
+            engine.resources.selected.insert(page, resource);
+            engine.resources.output_visible = false;
+            engine.error = None;
+        }
+        self.load_resource_preview(window, cx);
+        if changed_page {
+            self.refresh(cx);
+        }
+        cx.notify();
+    }
+    fn load_resources(&mut self, _cx: &mut Context<Self>) {
+        let Some(engine) = self.engine() else { return };
+        let Some(docker) = engine.docker.clone() else {
+            return;
+        };
+        let page = engine.resources.page;
+        if page == ResourcePage::Containers {
+            return;
+        }
+        let target = engine.target.clone();
+        let engine_id = engine
+            .info
+            .as_ref()
+            .and_then(|info| info.id.clone())
+            .unwrap_or_default();
+        self.resource_epoch += 1;
+        let epoch = self.resource_epoch;
+        let sender = self.sender.clone();
+        if page == ResourcePage::Compose {
+            self.project_worker = Some(worker(async move {
+                let original = target.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::compose::discover(&target, &engine_id)
+                })
+                .await;
+                let result = result
+                    .map_err(failure)
+                    .and_then(|result| result.map_err(failure));
+                let _ = sender
+                    .send(Message::Projects(original, epoch, result))
+                    .await;
+            }));
+        } else {
+            self.resource_worker = Some(worker(async move {
+                let result = crate::resources::list(&docker, page).await.map_err(failure);
+                let _ = sender
+                    .send(Message::Resources(target, page, epoch, result))
+                    .await;
+            }));
+        }
+    }
+    fn load_resource_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(engine) = self.engine() else { return };
+        let Some(resource) = engine.resources.selection().cloned() else {
+            return;
+        };
+        if let Some(value) = engine.resources.preview.get(&resource) {
+            let text = serde_json::to_string_pretty(value).unwrap_or_default();
+            engine
+                .resources
+                .editor
+                .update(cx, |editor, cx| editor.set_value(text, window, cx));
+        } else {
+            engine
+                .resources
+                .editor
+                .update(cx, |editor, cx| editor.set_value("", window, cx));
+        }
+        if matches!(resource, Resource::Project(_)) && !engine.resources.raw() {
+            return;
+        }
+        if resource == Resource::Events {
+            let text = serde_json::to_string_pretty(&engine.resources.events).unwrap_or_default();
+            engine
+                .resources
+                .editor
+                .update(cx, |editor, cx| editor.set_value(text, window, cx));
+            return;
+        }
+        if engine.resources.document(&resource).is_some() {
+            return;
+        }
+        #[cfg(debug_assertions)]
+        if self.fixture {
+            return;
+        }
+        let target = engine.target.clone();
+        let docker = engine.docker.clone();
+        let info = engine.info.clone();
+        let project = match &resource {
+            Resource::Project(name) => engine
+                .resources
+                .projects
+                .iter()
+                .find(|project| &project.name == name)
+                .cloned(),
+            _ => None,
+        };
+        let source = engine.resources.daemon.clone();
+        let active_file = engine.resources.active_files.get(&resource).cloned();
+        self.preview_epoch += 1;
+        let epoch = self.preview_epoch;
+        let sender = self.sender.clone();
+        if matches!(resource, Resource::Project(_) | Resource::Daemon) {
+            self.preview_worker = Some(worker(async move {
+                let original = target.clone();
+                let key = resource.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    let (path, source) = match resource {
+                        Resource::Daemon => {
+                            let info = info.ok_or_else(|| {
+                                anyhow::anyhow!(t!("docker.loading").into_owned())
+                            })?;
+                            let source = match source {
+                                Some(source) => source,
+                                None => crate::daemon::discover(&target, &info)?,
+                            };
+                            (source.path.clone(), Some(source))
+                        }
+                        _ => {
+                            let path = active_file
+                                .or_else(|| {
+                                    project.and_then(|project| project.files.first().cloned())
+                                })
+                                .ok_or_else(|| {
+                                    anyhow::anyhow!(
+                                        t!("docker.compose_source_missing").into_owned()
+                                    )
+                                })?;
+                            (path, None)
+                        }
+                    };
+                    Ok::<_, anyhow::Error>((crate::documents::read(&target, path)?, source))
+                })
+                .await;
+                let result = result
+                    .map_err(failure)
+                    .and_then(|result| result.map_err(failure));
+                let _ = sender
+                    .send(Message::Document(original, key, epoch, result))
+                    .await;
+            }));
+        } else if let Some(docker) = docker {
+            self.preview_worker = Some(worker(async move {
+                let result = crate::resources::inspect(&docker, &resource)
+                    .await
+                    .map_err(failure);
+                let _ = sender
+                    .send(Message::Preview(target, resource, epoch, result))
+                    .await;
+            }));
+        }
+    }
     fn start_events(&mut self) {
         if !self.visible || self.events_worker.is_some() {
             return;
@@ -412,14 +708,17 @@ impl DockerView {
         let target = engine.target.clone();
         let sender = self.sender.clone();
         self.events_worker = Some(worker(async move {
-            let filters = HashMap::from([("type".to_owned(), vec!["container".to_owned()])]);
-            let options = EventsOptionsBuilder::default().filters(&filters).build();
+            let options = EventsOptionsBuilder::default().build();
             let mut delay = 1;
             loop {
                 let mut events = docker.events(Some(options.clone()));
                 while let Some(event) = events.next().await {
                     match event {
-                        Ok(_) => {
+                        Ok(event) => {
+                            if let Ok(value) = serde_json::to_value(event) {
+                                let _ =
+                                    sender.try_send(Message::EngineEvent(target.clone(), value));
+                            }
                             let _ = sender.try_send(Message::Refresh(target.clone()));
                             tokio::time::sleep(Duration::from_millis(250)).await;
                             delay = 1;
@@ -440,7 +739,16 @@ impl DockerView {
             }
         }));
     }
-    pub(crate) fn select_container(&mut self, id: String, cx: &mut Context<Self>) {
+    pub(crate) fn select_container(
+        &mut self,
+        id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(engine) = self.engine_mut() {
+            engine.resources.page = ResourcePage::Containers;
+            engine.resources.output_visible = false;
+        }
         self.detail_epoch += 1;
         self.logs_epoch += 1;
         self.detail_worker = None;
@@ -449,6 +757,10 @@ impl DockerView {
             if engine.selected.as_ref() != Some(&id) {
                 engine.log.clear();
                 engine.logs_dirty = true;
+                engine
+                    .inspect_editor
+                    .update(cx, |editor, cx| editor.set_value("", window, cx));
+                engine.stats = None;
             }
             engine.selected = Some(id);
             engine.detail = None;
@@ -472,7 +784,35 @@ impl DockerView {
         let epoch = self.detail_epoch;
         let sender = self.sender.clone();
         self.detail_worker = Some(worker(async move {
-            let result = docker.inspect_container(&id, None).await.map_err(failure);
+            let result = async {
+                let detail = docker.inspect_container(&id, None).await?;
+                let stats = if detail
+                    .state
+                    .as_ref()
+                    .is_some_and(|state| state.running == Some(true))
+                {
+                    let mut stream = docker.stats(
+                        &id,
+                        Some(
+                            bollard::query_parameters::StatsOptionsBuilder::default()
+                                .stream(false)
+                                .one_shot(true)
+                                .build(),
+                        ),
+                    );
+                    tokio::time::timeout(Duration::from_secs(3), stream.next())
+                        .await
+                        .ok()
+                        .flatten()
+                        .and_then(Result::ok)
+                        .and_then(|value| serde_json::to_value(value).ok())
+                } else {
+                    None
+                };
+                Ok::<_, anyhow::Error>((detail, stats))
+            }
+            .await
+            .map_err(failure);
             let _ = sender
                 .send(Message::Detail(target, id, epoch, result))
                 .await;
@@ -482,6 +822,7 @@ impl DockerView {
     pub(crate) fn set_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
         if let Some(engine) = self.engine_mut() {
             engine.tab = tab;
+            engine.resources.output_visible = false;
         }
         if tab == Tab::Logs {
             if self.logs_worker.is_none() {
@@ -515,7 +856,7 @@ impl DockerView {
         let Some(engine) = self.engine() else {
             return;
         };
-        if !self.visible || engine.paused {
+        if !self.visible || engine.paused || engine.resources.page != ResourcePage::Containers {
             return;
         }
         let (Some(docker), Some(id)) = (engine.docker.clone(), engine.selected.clone()) else {
@@ -592,6 +933,7 @@ impl DockerView {
                 }
                 self.after_listing(cx);
                 self.start_events();
+                self.load_resources(cx);
             }
             Message::Listed(target, epoch, result) => {
                 if !self.matches(&target) || epoch != self.query_epoch {
@@ -609,6 +951,7 @@ impl DockerView {
                     }
                 }
                 self.after_listing(cx);
+                self.load_resources(cx);
             }
             Message::Detail(target, id, epoch, result) => {
                 if !self.matches(&target)
@@ -622,14 +965,22 @@ impl DockerView {
                 self.detail_worker = None;
                 if let Some(engine) = self.engine_mut() {
                     match result {
-                        Ok(detail) => {
+                        Ok((detail, stats)) => {
                             let text = serde_json::to_string_pretty(&detail).unwrap_or_default();
                             engine
                                 .inspect_editor
                                 .update(cx, |editor, cx| editor.set_value(text, window, cx));
                             engine.detail = Some(detail);
+                            engine.stats = stats;
                         }
                         Err(error) => engine.error = Some(error),
+                    }
+                }
+                if let Some((target, resource, action)) = self.pending_form.take() {
+                    if resource == Resource::Container(id)
+                        && self.engine().is_some_and(|engine| engine.detail.is_some())
+                    {
+                        self.open_action(target, Some(resource), action, window, cx);
                     }
                 }
             }
@@ -663,46 +1014,6 @@ impl DockerView {
                     engine.logs_loading = false;
                 }
             }
-            Message::Operation(target, id, result, listing) => {
-                self.operations.remove(&target.id);
-                let message = match &result {
-                    Ok(()) => Notification::success(
-                        t!(
-                            "docker.operation_completed",
-                            engine = target.name,
-                            container = id
-                        )
-                        .into_owned(),
-                    ),
-                    Err(error) => Notification::error(format!(
-                        "{} · {}: {}",
-                        target.name,
-                        id,
-                        tshell_ui::i18n::format_failure(error)
-                    )),
-                };
-                window.push_notification(message, cx);
-                if let Some(engine) = self
-                    .engines
-                    .get_mut(&target.id)
-                    .filter(|engine| engine.target.endpoint == target.endpoint)
-                {
-                    engine.busy = None;
-                    engine.error = result.err();
-                    match listing {
-                        Ok(containers) => engine.containers = containers,
-                        Err(error) => {
-                            if engine.error.is_none() {
-                                engine.error = Some(error);
-                            }
-                        }
-                    }
-                }
-                if self.matches(&target) {
-                    self.after_listing(cx);
-                }
-                let _ = id;
-            }
             Message::Refresh(target) => {
                 if self.matches(&target) && self.visible {
                     self.refresh(cx);
@@ -715,6 +1026,237 @@ impl DockerView {
                     }
                 }
             }
+            Message::Resources(target, page, epoch, result) => {
+                if !self.matches(&target)
+                    || epoch != self.resource_epoch
+                    || self
+                        .engine()
+                        .is_none_or(|engine| engine.resources.page != page)
+                {
+                    return;
+                }
+                self.resource_worker = None;
+                if let Some(engine) = self.engine_mut() {
+                    match result {
+                        Ok(snapshot) => engine.resources.apply(snapshot),
+                        Err(error) => engine.error = Some(error),
+                    }
+                }
+                self.load_resource_preview(window, cx);
+            }
+            Message::Preview(target, resource, epoch, result) => {
+                if !self.matches(&target)
+                    || epoch != self.preview_epoch
+                    || self
+                        .engine()
+                        .and_then(|engine| engine.resources.selection())
+                        != Some(&resource)
+                {
+                    return;
+                }
+                self.preview_worker = None;
+                if let Some(engine) = self.engine_mut() {
+                    match result {
+                        Ok(value) => {
+                            engine.resources.editor.update(cx, |editor, cx| {
+                                editor.set_value(
+                                    serde_json::to_string_pretty(&value).unwrap_or_default(),
+                                    window,
+                                    cx,
+                                )
+                            });
+                            engine.resources.preview.insert(resource, value);
+                        }
+                        Err(error) => engine.error = Some(error),
+                    }
+                }
+            }
+            Message::Document(target, resource, epoch, result) => {
+                if !self.matches(&target)
+                    || epoch != self.preview_epoch
+                    || self
+                        .engine()
+                        .and_then(|engine| engine.resources.selection())
+                        != Some(&resource)
+                {
+                    return;
+                }
+                self.preview_worker = None;
+                if let Some(engine) = self.engine_mut() {
+                    match result {
+                        Ok((file, source)) => {
+                            if let Some(source) = source {
+                                engine.resources.daemon = Some(source);
+                            }
+                            engine
+                                .resources
+                                .active_files
+                                .insert(resource.clone(), file.path.clone());
+                            engine
+                                .resources
+                                .documents
+                                .entry(file.path.clone())
+                                .or_insert_with(|| {
+                                    crate::documents::Document::new(file, &resource, window, cx)
+                                });
+                        }
+                        Err(error) => engine.error = Some(error),
+                    }
+                }
+            }
+            Message::Projects(target, epoch, result) => {
+                if !self.matches(&target) || epoch != self.resource_epoch {
+                    return;
+                }
+                self.project_worker = None;
+                if let Some(engine) = self.engine_mut() {
+                    if let Ok(projects) = result {
+                        for project in projects {
+                            if !engine
+                                .resources
+                                .projects
+                                .iter()
+                                .any(|entry| entry.name == project.name)
+                            {
+                                engine.resources.projects.push(project);
+                            }
+                        }
+                        engine
+                            .resources
+                            .projects
+                            .sort_by(|a, b| a.name.cmp(&b.name));
+                    }
+                }
+            }
+            Message::EngineEvent(target, value) => {
+                if !self.matches(&target) {
+                    return;
+                }
+                if let Some(engine) = self.engine_mut() {
+                    engine.resources.events.push(value);
+                    if engine.resources.events.len() > 500 {
+                        engine.resources.events.remove(0);
+                    }
+                    if engine.resources.selection() == Some(&Resource::Events) {
+                        let text = serde_json::to_string_pretty(&engine.resources.events)
+                            .unwrap_or_default();
+                        engine
+                            .resources
+                            .editor
+                            .update(cx, |editor, cx| editor.set_value(text, window, cx));
+                    }
+                }
+            }
+            Message::Progress(target, text) => {
+                if let Some(engine) = self
+                    .engines
+                    .get_mut(&target.id)
+                    .filter(|engine| engine.target.endpoint == target.endpoint)
+                {
+                    append_output(engine, &text, window, cx);
+                }
+            }
+            Message::Managed(target, resource, action, submitted, result) => {
+                self.operations.remove(&target.id);
+                let Some(engine) = self
+                    .engines
+                    .get_mut(&target.id)
+                    .filter(|engine| engine.target.endpoint == target.endpoint)
+                else {
+                    return;
+                };
+                engine.busy = None;
+                match result {
+                    Ok(outcome) => {
+                        if matches!(
+                            action,
+                            crate::actions::Action::Save
+                                | crate::actions::Action::Validate
+                                | crate::actions::Action::Restore
+                        ) {
+                            window.push_notification(
+                                Notification::success(format!(
+                                    "{} · {}",
+                                    target.name, outcome.text
+                                )),
+                                cx,
+                            );
+                        }
+                        append_output(engine, &outcome.text, window, cx);
+                        if let Some(source) = outcome.source {
+                            engine.resources.daemon = Some(source);
+                        }
+                        let key = outcome
+                            .project
+                            .as_ref()
+                            .map(|project| Resource::Project(project.name.clone()))
+                            .or(resource.clone());
+                        if let Some(project) = outcome.project {
+                            engine
+                                .resources
+                                .imported
+                                .retain(|old| old.name != project.name);
+                            engine.resources.imported.push(project);
+                            engine.resources.update_projects(&engine.containers);
+                        }
+                        if let (Some(key), Some(file)) = (key.clone(), outcome.file) {
+                            engine
+                                .resources
+                                .active_files
+                                .insert(key.clone(), file.path.clone());
+                            if let Some(document) = engine.resources.documents.get_mut(&file.path) {
+                                if !matches!(action, crate::actions::Action::Source)
+                                    || !document.dirty(cx)
+                                {
+                                    if matches!(
+                                        action,
+                                        crate::actions::Action::Source
+                                            | crate::actions::Action::Restore
+                                    ) && document.editor.read(cx).value().as_ref() == submitted
+                                    {
+                                        document.editor.update(cx, |editor, cx| {
+                                            editor.set_value(
+                                                file.original.clone().unwrap_or_default(),
+                                                window,
+                                                cx,
+                                            )
+                                        });
+                                    }
+                                    document.file = file;
+                                }
+                            } else {
+                                let path = file.path.clone();
+                                let document =
+                                    crate::documents::Document::new(file, &key, window, cx);
+                                engine.resources.documents.insert(path, document);
+                            }
+                        }
+                        engine.error = None;
+                        if self.matches(&target) {
+                            if matches!(action, crate::actions::Action::ImportProject) {
+                                if let Some(key) = key {
+                                    self.select_resource(key, window, cx);
+                                }
+                            }
+                            if matches!(
+                                action,
+                                crate::actions::Action::Reload | crate::actions::Action::Restart
+                            ) {
+                                self.reconnect(cx);
+                            } else if action.changes_engine() {
+                                self.refresh(cx);
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        append_output(engine, &i18n::format_failure(&error), window, cx);
+                        engine.error = Some(error);
+                        if self.matches(&target) && action.changes_engine() {
+                            self.refresh(cx);
+                        }
+                    }
+                }
+            }
         }
     }
     fn matches(&self, target: &Target) -> bool {
@@ -722,6 +1264,9 @@ impl DockerView {
             .is_some_and(|current| current.id == target.id && current.endpoint == target.endpoint)
     }
     fn after_listing(&mut self, cx: &mut Context<Self>) {
+        if let Some(engine) = self.engine_mut() {
+            engine.resources.update_projects(&engine.containers);
+        }
         let missing = self.engine().is_some_and(|engine| {
             engine.selected.as_ref().is_some_and(|id| {
                 !engine
@@ -741,10 +1286,9 @@ impl DockerView {
                 engine.log.clear();
                 engine.logs_dirty = true;
             }
-        } else if self
-            .engine()
-            .is_some_and(|engine| engine.selected.is_some())
-        {
+        } else if self.engine().is_some_and(|engine| {
+            engine.selected.is_some() && engine.resources.page == ResourcePage::Containers
+        }) {
             self.load_detail(cx);
             if self
                 .engine()
@@ -768,6 +1312,20 @@ impl DockerView {
             engine.inspect_editor.update(cx, |editor, _| {
                 editor.set_editor_style(tshell_ui::editor::style(palette))
             });
+            for editor in [&engine.resources.editor, &engine.resources.output] {
+                editor.update(cx, |editor, _| {
+                    editor.set_editor_style(tshell_ui::editor::style(palette))
+                });
+            }
+            if let Some(document) = engine
+                .resources
+                .selection()
+                .and_then(|resource| engine.resources.document(resource))
+            {
+                document.editor.update(cx, |editor, _| {
+                    editor.set_editor_style(tshell_ui::editor::style(palette))
+                });
+            }
             if engine.logs_dirty {
                 engine.logs_dirty = false;
                 let text = engine.log.text();
@@ -788,152 +1346,6 @@ impl DockerView {
                 });
             }
         }
-    }
-    pub(crate) fn confirm_operation(
-        &mut self,
-        operation: Operation,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(engine) = self.engine() else {
-            return;
-        };
-        let (Some(docker), Some(id)) = (engine.docker.clone(), engine.selected.clone()) else {
-            return;
-        };
-        if engine.busy.is_some() {
-            return;
-        }
-        let target = engine.target.clone();
-        let title = t!(operation.key()).into_owned();
-        let detail = t!(
-            "docker.confirm_operation",
-            engine = target.name.clone(),
-            container = id.clone()
-        )
-        .into_owned();
-        let cancel = t!("explorer.cancel").into_owned();
-        let confirm = t!("explorer.confirm").into_owned();
-        let receiver = window.prompt(
-            PromptLevel::Warning,
-            &title,
-            Some(&detail),
-            &[cancel.as_str(), confirm.as_str()],
-            cx,
-        );
-        cx.spawn_in(window, async move |view, cx| {
-            if receiver.await == Ok(1) {
-                let _ = view.update_in(cx, |this, window, cx| {
-                    if !this.targets.iter().any(|current| {
-                        current.id == target.id && current.endpoint == target.endpoint
-                    }) {
-                        window.push_notification(
-                            Notification::warning(t!("docker.target_changed")),
-                            cx,
-                        );
-                        return;
-                    }
-                    this.perform_operation(target, docker, id, operation, cx);
-                });
-            }
-        })
-        .detach();
-    }
-    fn perform_operation(
-        &mut self,
-        target: Target,
-        docker: Docker,
-        id: String,
-        operation: Operation,
-        cx: &mut Context<Self>,
-    ) {
-        if self.operations.contains_key(&target.id) {
-            return;
-        }
-        if let Some(engine) = self.engines.get_mut(&target.id) {
-            engine.busy = Some(id.clone());
-            engine.error = None;
-        }
-        let sender = self.sender.clone();
-        let host = target.id.clone();
-        self.operations.insert(
-            host,
-            worker(async move {
-                let result: Result<(), anyhow::Error> = async {
-                    let detail = docker.inspect_container(&id, None).await?;
-                    let running = detail
-                        .state
-                        .as_ref()
-                        .is_some_and(|state| state.running == Some(true));
-                    match operation {
-                        Operation::Start => {
-                            anyhow::ensure!(
-                                !running,
-                                tshell_host::diagnostic!("docker.state_changed")
-                            );
-                            docker.start_container(&id, None).await?;
-                        }
-                        Operation::Stop => {
-                            anyhow::ensure!(
-                                running,
-                                tshell_host::diagnostic!("docker.state_changed")
-                            );
-                            docker
-                                .stop_container(
-                                    &id,
-                                    Some(StopContainerOptionsBuilder::default().t(10).build()),
-                                )
-                                .await?;
-                        }
-                        Operation::Restart => {
-                            anyhow::ensure!(
-                                running,
-                                tshell_host::diagnostic!("docker.state_changed")
-                            );
-                            docker
-                                .restart_container(
-                                    &id,
-                                    Some(RestartContainerOptionsBuilder::default().t(10).build()),
-                                )
-                                .await?;
-                        }
-                        Operation::Remove => {
-                            anyhow::ensure!(
-                                !running,
-                                tshell_host::diagnostic!("docker.remove_running")
-                            );
-                            docker
-                                .remove_container(
-                                    &id,
-                                    Some(
-                                        RemoveContainerOptionsBuilder::default()
-                                            .force(false)
-                                            .v(false)
-                                            .build(),
-                                    ),
-                                )
-                                .await?;
-                        }
-                    }
-                    Ok(())
-                }
-                .await;
-                // A failed mutation may have reached the daemon. Read its state; never replay it.
-                let listing = docker
-                    .list_containers(Some(list_options()))
-                    .await
-                    .map_err(failure);
-                let _ = sender
-                    .send(Message::Operation(
-                        target,
-                        id,
-                        result.map_err(failure),
-                        listing,
-                    ))
-                    .await;
-            }),
-        );
-        cx.notify();
     }
     pub(crate) fn open_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(engine) = self.engine() else {
@@ -1048,6 +1460,458 @@ impl DockerView {
         });
     }
 }
+fn append_output(
+    engine: &mut Engine,
+    text: &str,
+    window: &mut Window,
+    cx: &mut Context<DockerView>,
+) {
+    engine.resources.output_text.push_str(text);
+    engine.resources.output_text.push('\n');
+    let text = &mut engine.resources.output_text;
+    if text.len() > 256 * 1024 {
+        let mut start = text.len() - 256 * 1024;
+        while !text.is_char_boundary(start) {
+            start += 1;
+        }
+        text.drain(..start);
+    }
+    engine
+        .resources
+        .output
+        .update(cx, |editor, cx| editor.set_value(text.clone(), window, cx));
+}
+impl DockerView {
+    pub fn has_unsaved_files(&self, host: &HostId, cx: &App) -> bool {
+        self.engines.get(host).is_some_and(|engine| {
+            engine
+                .resources
+                .documents
+                .values()
+                .any(|document| document.dirty(cx))
+        })
+    }
+    pub fn busy(&self, host: &HostId, cx: &App) -> bool {
+        self.operations.contains_key(host) || self.has_unsaved_files(host, cx)
+    }
+    pub(crate) fn action_button(
+        &self,
+        actions: Vec<crate::actions::Action>,
+        resource: Option<Resource>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use gpui_kit::assets::IconName;
+        use gpui_kit::component::{Disableable, menu::DropdownMenu};
+        let owner = cx.entity().downgrade();
+        let target = self.target().cloned();
+        if actions.is_empty() {
+            return div().into_any_element();
+        }
+        tshell_ui::controls::icon_button(
+            if resource.is_none() {
+                "docker-create-resource"
+            } else {
+                "docker-resource-actions"
+            },
+            if resource.is_none() {
+                IconName::Plus
+            } else {
+                IconName::Ellipsis
+            },
+            t!(if resource.is_none() {
+                "docker.create"
+            } else {
+                "file.actions"
+            }),
+        )
+        .disabled(self.engine().is_none_or(|engine| {
+            (engine.docker.is_none() && actions.iter().all(|action| action.needs_engine()))
+                || engine.busy.is_some()
+        }))
+        .dropdown_menu(move |menu, _, _| {
+            action_menu(
+                menu,
+                actions.clone(),
+                target.clone(),
+                resource.clone(),
+                owner.clone(),
+            )
+        })
+        .into_any_element()
+    }
+    pub(crate) fn open_action(
+        &mut self,
+        target: Target,
+        resource: Option<Resource>,
+        action: crate::actions::Action,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.matches(&target) {
+            return;
+        }
+        let Some(engine) = self.engine() else {
+            return;
+        };
+        if engine.docker.is_none() && action.needs_engine() {
+            window.push_notification(Notification::warning(t!("docker.loading_details")), cx);
+            return;
+        }
+        let docker = engine.docker.clone();
+        if engine.busy.is_some() {
+            return;
+        }
+        if matches!(action, crate::actions::Action::Recreate) {
+            if let Some(Resource::Container(id)) = &resource {
+                if engine.detail.as_ref().and_then(|detail| detail.id.as_ref()) != Some(id) {
+                    let id = id.clone();
+                    self.select_container(id.clone(), window, cx);
+                    self.pending_form = Some((target, Resource::Container(id), action));
+                    return;
+                }
+            }
+        }
+        let document = resource
+            .as_ref()
+            .and_then(|key| engine.resources.document(key));
+        let dirty = document.is_some_and(|document| document.dirty(cx));
+        if matches!(action, crate::actions::Action::ImportProject) && dirty {
+            window.push_notification(Notification::warning(t!("docker.save_first")), cx);
+            return;
+        }
+        let request = crate::actions::Request {
+            target: target.clone(),
+            docker,
+            engine_id: engine
+                .info
+                .as_ref()
+                .and_then(|info| info.id.clone())
+                .unwrap_or_default(),
+            resource: resource.clone(),
+            container: match &resource {
+                Some(Resource::Container(id)) => Some(id.clone()),
+                _ => engine.selected.clone(),
+            },
+            project: match &resource {
+                Some(Resource::Project(name)) => engine
+                    .resources
+                    .projects
+                    .iter()
+                    .find(|project| &project.name == name)
+                    .cloned(),
+                _ => None,
+            },
+            source: engine.resources.daemon.clone(),
+            file: document.map(|document| document.file.clone()),
+            service: match &resource {
+                Some(Resource::Project(name)) => engine.resources.services.get(name).cloned(),
+                _ => None,
+            },
+            text: document
+                .map(|document| document.editor.read(cx).value().to_string())
+                .unwrap_or_default(),
+            values: Vec::new(),
+            action,
+        };
+        let recreate = engine.detail.as_ref().map(|detail| {
+            let mut value = serde_json::to_value(&detail.config).unwrap_or_default();
+            value["HostConfig"] = serde_json::to_value(&detail.host_config).unwrap_or_default();
+            if let Some(networks) = detail
+                .network_settings
+                .as_ref()
+                .and_then(|settings| settings.networks.as_ref())
+            {
+                let endpoints: serde_json::Map<String, serde_json::Value> = networks
+                    .iter()
+                    .map(|(name, settings)| {
+                        let original = serde_json::to_value(settings).unwrap_or_default();
+                        let fields: serde_json::Map<String, serde_json::Value> =
+                            ["IPAMConfig", "Links", "Aliases", "DriverOpts"]
+                                .into_iter()
+                                .filter_map(|key| {
+                                    original.get(key).cloned().map(|value| (key.into(), value))
+                                })
+                                .collect();
+                        (name.clone(), serde_json::Value::Object(fields))
+                    })
+                    .collect();
+                value["NetworkingConfig"] = serde_json::json!({"EndpointsConfig":endpoints});
+            }
+            serde_json::to_string_pretty(&value).unwrap_or_default()
+        });
+        let image_config = match &resource {
+            Some(Resource::Image(id)) => Some(serde_json::json!({"Image":id}).to_string()),
+            _ => None,
+        };
+        if !action.fields().is_empty() {
+            let fields: Vec<_> = action
+                .fields()
+                .iter()
+                .map(|(label, initial)| {
+                    let initial = if matches!(action, crate::actions::Action::Source) {
+                        request
+                            .file
+                            .as_ref()
+                            .map(|file| file.path.as_str())
+                            .unwrap_or(initial)
+                    } else if matches!(action, crate::actions::Action::Recreate) {
+                        recreate.as_deref().unwrap_or(initial)
+                    } else if matches!(action, crate::actions::Action::CreateContainer) {
+                        if *label == "docker.json" {
+                            image_config.as_deref().unwrap_or(initial)
+                        } else {
+                            initial
+                        }
+                    } else {
+                        initial
+                    };
+                    let input = if *label == "docker.json" {
+                        FormField::Json(cx.new(|cx| {
+                            let mut editor = EditorState::new(window, cx)
+                                .language("json")
+                                .default_value(initial.to_owned());
+                            editor.set_highlighter_factory(tshell_ui::editor::factory(), cx);
+                            editor
+                        }))
+                    } else {
+                        FormField::Input(cx.new(|cx| {
+                            InputState::new(window, cx).default_value(initial.to_owned())
+                        }))
+                    };
+                    (*label, input)
+                })
+                .collect();
+            let request = std::sync::Arc::new(parking_lot::Mutex::new(Some(request)));
+            let owner = cx.entity().downgrade();
+            window.open_dialog(cx, move |dialog, _, cx| {
+                use gpui_kit::component::input::Input;
+                let (request, owner, fields) = (request.clone(), owner.clone(), fields.clone());
+                let content = div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .when(matches!(action, crate::actions::Action::Recreate), |view| {
+                        view.child(
+                            div()
+                                .text_size(px(12.))
+                                .child(t!("docker.recreate_hint").into_owned()),
+                        )
+                    })
+                    .children(fields.iter().map(|(label, input)| {
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .text_size(px(12.))
+                            .child(t!(*label).into_owned())
+                            .child(match input {
+                                FormField::Input(input) => Input::new(input).into_any_element(),
+                                FormField::Json(editor) => div()
+                                    .h(px(240.))
+                                    .font_family("monospace")
+                                    .child(gpui_kit::base::input::Editor::new(editor))
+                                    .into_any_element(),
+                            })
+                    }));
+                tshell_ui::controls::workspace_dialog(dialog, cx)
+                    .title(t!(action.key()).into_owned())
+                    .child(content)
+                    .on_ok(move |_, window, cx| {
+                        let values: Vec<_> = fields
+                            .iter()
+                            .map(|(_, input)| match input {
+                                FormField::Input(input) => {
+                                    input.read(cx).value().trim().to_string()
+                                }
+                                FormField::Json(editor) => editor.read(cx).value().to_string(),
+                            })
+                            .collect();
+                        if dirty
+                            && matches!(action, crate::actions::Action::Source)
+                            && request.lock().as_ref().is_some_and(|request| {
+                                values.first().map(String::as_str)
+                                    != request.file.as_ref().map(|file| file.path.as_str())
+                            })
+                        {
+                            window.push_notification(
+                                Notification::warning(t!("docker.save_first")),
+                                cx,
+                            );
+                            return false;
+                        }
+                        if values.iter().any(|value| value.is_empty()) {
+                            window.push_notification(
+                                Notification::warning(t!("docker.name_required")),
+                                cx,
+                            );
+                            return false;
+                        }
+                        if fields.iter().zip(&values).any(|((_, field), value)| {
+                            matches!(field, FormField::Json(_))
+                                && serde_json::from_str::<serde_json::Value>(value).is_err()
+                        }) {
+                            window.push_notification(
+                                Notification::warning(t!("docker.invalid_json")),
+                                cx,
+                            );
+                            return false;
+                        }
+                        if let Some(mut request) = request.lock().take() {
+                            request.values = values;
+                            let _ = owner
+                                .update(cx, |this, cx| this.begin_managed(request, window, cx));
+                        }
+                        true
+                    })
+            });
+        } else if action.destructive() {
+            let detail = if matches!(
+                action,
+                crate::actions::Action::Reload | crate::actions::Action::Restart
+            ) {
+                t!("docker.confirm_engine", engine = target.name.clone()).into_owned()
+            } else {
+                format!(
+                    "{} · {}",
+                    target.name,
+                    resource
+                        .as_ref()
+                        .map(|key| engine.resources.name(key))
+                        .unwrap_or_else(|| t!("docker.title").into_owned())
+                )
+            };
+            let title = t!(action.key()).into_owned();
+            let cancel = t!("explorer.cancel");
+            let confirm = t!("explorer.confirm");
+            let receiver = window.prompt(
+                PromptLevel::Warning,
+                &title,
+                Some(&detail),
+                &[cancel.as_ref(), confirm.as_ref()],
+                cx,
+            );
+            cx.spawn_in(window, async move |view, cx| {
+                if receiver.await == Ok(1) {
+                    let _ = view.update_in(cx, |this, window, cx| {
+                        this.begin_managed(request, window, cx)
+                    });
+                }
+            })
+            .detach();
+        } else {
+            self.begin_managed(request, window, cx);
+        }
+    }
+    fn begin_managed(
+        &mut self,
+        request: crate::actions::Request,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.targets.iter().any(|target| {
+            target.id == request.target.id && target.endpoint == request.target.endpoint
+        }) {
+            window.push_notification(Notification::warning(t!("docker.target_changed")), cx);
+            return;
+        }
+        if self.operations.contains_key(&request.target.id) {
+            return;
+        }
+        let target = request.target.clone();
+        let key = request.resource.clone();
+        let action = request.action;
+        let submitted = request.text.clone();
+        if let Some(engine) = self.engines.get_mut(&target.id) {
+            if matches!(action, crate::actions::Action::ImportProject)
+                && request.values.first().is_some_and(|name| {
+                    engine
+                        .resources
+                        .projects
+                        .iter()
+                        .any(|project| &project.name == name)
+                })
+            {
+                window.push_notification(Notification::warning(t!("docker.project_exists")), cx);
+                return;
+            }
+            engine.busy = Some(t!(action.key()).into_owned());
+            engine.error = None;
+            engine.resources.output_resource = key.clone();
+            engine.resources.output_text.clear();
+            engine.resources.output_visible = !matches!(
+                action,
+                crate::actions::Action::Save
+                    | crate::actions::Action::Validate
+                    | crate::actions::Action::Restore
+                    | crate::actions::Action::Source
+            );
+            append_output(
+                engine,
+                &format!("{} · {}", target.name, t!(action.key())),
+                window,
+                cx,
+            );
+        }
+        let sender = self.sender.clone();
+        self.operations.insert(
+            target.id.clone(),
+            worker(async move {
+                let progress_sender = sender.clone();
+                let progress_target = target.clone();
+                let engine_id = request.engine_id.clone();
+                let result = crate::actions::execute(request, move |text| {
+                    let _ =
+                        progress_sender.try_send(Message::Progress(progress_target.clone(), text));
+                })
+                .await;
+                let result = if result.is_ok()
+                    && matches!(
+                        action,
+                        crate::actions::Action::Reload | crate::actions::Action::Restart
+                    ) {
+                    let recovery = tokio::time::timeout(Duration::from_secs(120), async {
+                        loop {
+                            if let Ok(docker) = target.connect().await {
+                                if let Ok(info) = docker.info().await {
+                                    anyhow::ensure!(
+                                        info.id.as_deref() == Some(engine_id.as_str()),
+                                        t!("docker.cli_engine_mismatch").into_owned()
+                                    );
+                                    return Ok::<_, anyhow::Error>(());
+                                }
+                            }
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                        }
+                    })
+                    .await;
+                    match recovery {
+                        Ok(Ok(())) => result.map(|mut outcome| {
+                            outcome.text.push('\n');
+                            outcome.text.push_str(&t!("docker.engine_recovered"));
+                            outcome
+                        }),
+                        Ok(Err(error)) => Err(error),
+                        Err(_) => Err(anyhow::anyhow!(
+                            t!("docker.engine_recovery_timeout").into_owned()
+                        )),
+                    }
+                } else {
+                    result
+                };
+                let _ = sender
+                    .send(Message::Managed(
+                        target,
+                        key,
+                        action,
+                        submitted,
+                        result.map_err(failure),
+                    ))
+                    .await;
+            }),
+        );
+        cx.notify();
+    }
+}
 pub(crate) fn container_name(container: &ContainerSummary) -> String {
     container
         .names
@@ -1070,6 +1934,29 @@ pub(crate) fn is_running(container: &ContainerSummary) -> bool {
 impl DockerView {
     pub fn check_layout(&self, cx: &App) {
         let engine = self.engine().expect("Docker fixture Engine");
+        if engine.resources.page != ResourcePage::Containers {
+            let resource = engine.resources.selection().unwrap();
+            let editor = if engine.resources.output_visible {
+                Some(&engine.resources.output)
+            } else if let Some(document) = engine
+                .resources
+                .document(resource)
+                .filter(|_| engine.resources.raw() || *resource == Resource::Daemon)
+            {
+                Some(&document.editor)
+            } else if engine.resources.raw() || *resource == Resource::Events {
+                Some(&engine.resources.editor)
+            } else {
+                None
+            };
+            if let Some(editor) = editor {
+                assert!(
+                    editor.read(cx).input_bounds().size.height > px(100.),
+                    "Resource editor did not fill the main pane"
+                );
+            }
+            return;
+        }
         let editor = match engine.tab {
             Tab::Logs => &engine.logs_editor,
             Tab::Inspect => &engine.inspect_editor,
@@ -1129,11 +2016,7 @@ impl DockerView {
         };
         engine.paused = true;
         engine.auto_scroll = tab % 2 == 0;
-        engine.filter = if tab == 1 {
-            Filter::Running
-        } else {
-            Filter::All
-        };
+        engine.resources.page = ResourcePage::Containers;
         engine.logs_query.update(cx, |query, cx| {
             query.set_value(format!("fixture-{tab}"), window, cx)
         });
@@ -1185,17 +2068,224 @@ impl DockerView {
                 }
         );
         assert_eq!(engine.auto_scroll, tab % 2 == 0);
-        assert!(
-            engine.filter
-                == if tab == 1 {
-                    Filter::Running
-                } else {
-                    Filter::All
-                }
-        );
         assert_eq!(
             engine.logs_query.read(cx).value().as_ref(),
             format!("fixture-{tab}")
         );
     }
+    pub fn check_resource_fixture(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cancel_browsing();
+        let engine = self.engine_mut().unwrap();
+        engine.resources.update_projects(&engine.containers);
+        if let Some(project) = engine.resources.projects.first_mut() {
+            project.files = vec![
+                "/srv/fixture/compose.yml".into(),
+                "/srv/fixture/override.yml".into(),
+            ];
+        }
+        engine.resources.images = (0..10_000)
+            .map(|index| bollard::models::ImageSummary {
+                id: format!("sha256:{index:064}"),
+                repo_tags: vec![format!(
+                    "registry.example.com/team/long-container-name-{index:05}:latest"
+                )],
+                size: 1234567,
+                ..Default::default()
+            })
+            .collect();
+        engine.resources.volumes = vec![bollard::models::Volume {
+            name: "fixture-data".into(),
+            driver: "local".into(),
+            ..Default::default()
+        }];
+        engine.resources.networks = vec![bollard::models::Network {
+            id: Some("fixture-network-full-id".into()),
+            name: Some("fixture-network".into()),
+            ..Default::default()
+        }];
+        let resource = match index {
+            0 | 1 => Resource::Project("fixture-stack".into()),
+            2 | 3 => Resource::Image(engine.resources.images[0].id.clone()),
+            4 => Resource::Volume("fixture-data".into()),
+            5 => Resource::Network("fixture-network-full-id".into()),
+            6 => Resource::Info,
+            7 => Resource::Disk,
+            8 => Resource::Events,
+            _ => Resource::Daemon,
+        };
+        let value = match &resource {
+            Resource::Image(id) => {
+                serde_json::json!({"Id":id,"RepoTags":["registry.example.com/team/fixture-tool:latest"],"Size":1234567,"Created":"2026-10-10T00:00:00Z","Architecture":"amd64","Os":"linux","Config":{"Cmd":["/bin/sh"]},"RootFS":{"Layers":["sha256:fixture-layer"]},"History":[{"CreatedBy":"COPY /app /usr/local/bin/app"},{"CreatedBy":"RUN apk add --no-cache ca-certificates"}]})
+            }
+            Resource::Volume(name) => {
+                serde_json::json!({"Name":name,"Driver":"local","Mountpoint":"/var/lib/docker/volumes/fixture-data/_data","Scope":"local","Options":{}})
+            }
+            Resource::Network(id) => {
+                serde_json::json!({"Id":id,"Driver":"bridge","Scope":"local","Internal":false,"IPAM":{"Config":[{"Subnet":"172.18.0.0/16","Gateway":"172.18.0.1"}]},"Containers":{}})
+            }
+            Resource::Info => {
+                serde_json::json!({"ID":"fixture-engine-id","Name":"fixture-engine","ServerVersion":"28.5.0","OperatingSystem":"Linux","Architecture":"x86_64","DockerRootDir":"/var/lib/docker","Driver":"overlay2","SecurityOptions":["name=seccomp,profile=builtin"]})
+            }
+            Resource::Disk => {
+                serde_json::json!({"LayersSize":123456789,"Images":[{},{}],"Containers":[{}],"Volumes":[{}],"BuildCache":[{},{}]})
+            }
+            _ => serde_json::Value::Null,
+        };
+        if matches!(resource, Resource::Project(_) | Resource::Daemon) {
+            let path = if resource == Resource::Daemon {
+                "/etc/docker/daemon.json"
+            } else {
+                "/srv/fixture/compose.yml"
+            };
+            if !engine.resources.documents.contains_key(path) {
+                let text = if resource == Resource::Daemon {
+                    "{\n  \"debug\": false,\n  \"registry-mirrors\": [\"https://mirror.example\"]\n}\n"
+                } else {
+                    "services:\n  app:\n    image: alpine:3\n    command: [sleep, infinity]\n    volumes:\n      - app-data:/data\nvolumes:\n  app-data: {}\n"
+                };
+                let file = crate::documents::File {
+                    path: path.into(),
+                    original: Some(text.into()),
+                    backup: None,
+                };
+                let document = crate::documents::Document::new(file, &resource, window, cx);
+                document.editor.update(cx, |editor, cx| {
+                    editor.set_value(format!("{text}\n"), window, cx)
+                });
+                engine.resources.documents.insert(path.into(), document);
+            }
+            engine
+                .resources
+                .active_files
+                .insert(resource.clone(), path.into());
+            if resource == Resource::Daemon {
+                engine.resources.daemon = Some(crate::daemon::Source {
+                    path: path.into(),
+                    manager: crate::daemon::Manager::System {
+                        user: false,
+                        reload: true,
+                    },
+                    engine_id: Some("fixture-engine-id".into()),
+                });
+            }
+        }
+        engine.resources.editor.update(cx, |editor, cx| {
+            editor.set_value(serde_json::to_string_pretty(&value).unwrap(), window, cx)
+        });
+        engine.resources.preview.insert(resource.clone(), value);
+        engine
+            .resources
+            .selected
+            .insert(resource.page(), resource.clone());
+        engine.resources.page = resource.page();
+        if matches!(index, 1 | 3) {
+            engine.resources.raw.insert(engine.resources.page);
+        } else {
+            engine.resources.raw.remove(&engine.resources.page);
+        }
+        engine.resources.events = vec![
+            serde_json::json!({"Type":"container","Action":"start","Actor":{"ID":"fixture-container-full-id"},"time":1791571200}),
+        ];
+        if resource == Resource::Events {
+            engine.resources.editor.update(cx, |editor, cx| {
+                editor.set_value(
+                    serde_json::to_string_pretty(&engine.resources.events).unwrap(),
+                    window,
+                    cx,
+                )
+            });
+        }
+        engine.resources.output_visible = index == 10;
+        engine.resources.output_resource = Some(resource.clone());
+        if index == 10 {
+            append_output(
+                engine,
+                "Fixture host · dockerd --validate\nconfiguration OK\nEngine recovered",
+                window,
+                cx,
+            );
+        }
+        engine.resources.queries[&engine.resources.page]
+            .update(cx, |query, cx| query.set_value("", window, cx));
+        let target = self.target().unwrap().clone();
+        let old = self.preview_epoch.wrapping_sub(1);
+        self.apply_message(
+            Message::Preview(target, resource, old, Ok(serde_json::json!({"stale":true}))),
+            window,
+            cx,
+        );
+        assert!(
+            !self
+                .engine()
+                .unwrap()
+                .resources
+                .editor
+                .read(cx)
+                .value()
+                .contains("stale")
+        );
+        self.sync_logs(window, cx);
+        cx.notify();
+    }
+    pub fn check_resource_state(&self, index: usize, cx: &App) {
+        let engine = self.engine().unwrap();
+        assert_eq!(
+            engine.resources.page,
+            match index {
+                0 | 1 => ResourcePage::Compose,
+                2 | 3 => ResourcePage::Images,
+                _ => ResourcePage::More,
+            }
+        );
+        if matches!(index, 1 | 9) {
+            assert!(
+                engine
+                    .resources
+                    .document(engine.resources.selection().unwrap())
+                    .unwrap()
+                    .dirty(cx)
+            );
+        }
+    }
+    pub fn check_navigation_focus(&self) -> FocusHandle {
+        self.engine().unwrap().resources.focus.clone()
+    }
+    pub fn check_image_selection(&self, index: usize) {
+        assert_eq!(
+            self.engine().unwrap().resources.selection(),
+            Some(&Resource::Image(
+                self.engine().unwrap().resources.images[index].id.clone()
+            ))
+        );
+    }
+}
+
+pub(crate) fn action_menu(
+    mut menu: gpui_kit::component::menu::PopupMenu,
+    actions: Vec<crate::actions::Action>,
+    target: Option<Target>,
+    resource: Option<Resource>,
+    owner: WeakEntity<DockerView>,
+) -> gpui_kit::component::menu::PopupMenu {
+    use gpui_kit::component::menu::PopupMenuItem;
+    for action in actions {
+        let owner = owner.clone();
+        let target = target.clone();
+        let resource = resource.clone();
+        menu = menu.item(PopupMenuItem::new(t!(action.key()).into_owned()).on_click(
+            move |_, window, cx| {
+                if let Some(target) = &target {
+                    let _ = owner.update(cx, |this, cx| {
+                        this.open_action(target.clone(), resource.clone(), action, window, cx)
+                    });
+                }
+            },
+        ));
+    }
+    menu
 }

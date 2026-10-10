@@ -1,6 +1,6 @@
 # TShell 架构重构与 Docker 实施计划
 
-更新日期：2026-10-10。状态：模块拆分、基础 Docker 与主机联动已完成；新一轮 Docker 资源界面与管理功能待实施。workspace 自动化回归和 Windows 原生界面检查已通过，真实 Docker/SSH 环境验收单独保留。
+更新日期：2026-10-10。状态：模块拆分、Docker 主机联动、四类资源界面与管理功能已完成。workspace 自动化回归和 Windows 原生界面检查已通过，真实 Docker/SSH 环境验收单独保留。
 
 当前新增需求以 [Docker 资源工作区设计](docs/docker-resource-design.md) 和下文第 9 节为准：容器 / Compose / 镜像 / 更多四类入口，去掉重复标题、侧栏状态筛选和数量文案；资源预览集成操作与 Engine 配置编辑。
 
@@ -300,21 +300,32 @@ cargo build --locked --release --bin tshell
 
 ## 9. Docker 资源界面与管理功能
 
-本节是新一轮待实施工作，详细行为与连接/配置边界见 [资源工作区设计](docs/docker-resource-design.md)。之前完成的模块化与基础容器能力继续复用。
+2026-10-10 已实现，详细行为及限制见 [资源工作区设计](docs/docker-resource-design.md) 和 [Docker workspace](docs/docker-workspace.md)。
 
-- [ ] 删除主区重复 Engine 标题、侧栏 Docker 标题、全部/运行中/已停止筛选和容器数量说明。
-- [ ] 接入容器 / Compose / 镜像 / 更多四个固定资源页签，按主机分别保留各页状态。
-- [ ] 统一资源搜索、虚拟列表、选择、原生预览、详情页签、常用操作和右键菜单。
-- [ ] 完成容器平铺视图、资源参数预览和关联镜像/Volume/Network 跳转。
-- [ ] 完成镜像列表、详情/history、拉取/tag/push/删除、导入/导出与创建容器。
-- [ ] 完成更多资源中的 Engine 信息、存储、Volumes、Networks、事件与相关操作。
-- [ ] 完成容器创建、暂停/恢复、重命名、运行参数更新与明确的重建流程，复用已有日志和终端。
-- [ ] 从共享容器快照与 Compose CLI 发现项目，支持源文件导入/关联与已停止项目。
-- [ ] 完成 Compose YAML 编辑与官方校验，绑定目标 Engine 的 up/start/stop/restart/pull/build/down 操作。
-- [ ] 探测 Native Linux、rootless、Windows Engine、Docker Desktop 与自定义 daemon 配置来源。
-- [ ] 完成 daemon JSON 编辑、完整性校验、文件冲突、备份、替换写入与恢复。
-- [ ] 按实际管理方式提供明确的 reload/restart 与提权入口，重新读取状态确认配置应用结果。
-- [ ] 完成资源操作进度、失败原因与原目标结果展示；主机切换保留编辑草稿并拒绝迟到响应。
-- [ ] 更新英文/中文 README、本地化、行为文档及原生 UI 资源回归；真实环境验收单独记录。
+- [x] 删除重复标题、全部/运行中/已停止筛选及侧栏容器数量说明。
+- [x] 接入容器 / Compose / 镜像 / 更多四个页签，按 HostId + endpoint 保留浏览状态。
+- [x] 完成搜索、虚拟列表、键盘选择、原生预览/编辑器、操作菜单与右键菜单。
+- [x] 完成容器平铺、概览/日志/inspect、一次资源采样与关联镜像/Volume/Network 跳转。
+- [x] 完成镜像详情/history、匿名拉取、tag、CLI push、删除、归档导入/导出与创建容器。
+- [x] 完成 Engine 信息、存储、Volume/Network、事件、网络连接与分类清理。
+- [x] 完成创建、暂停/恢复、重命名、运行参数更新；重建保留旧容器，创建已停止替代容器，失败尝试恢复名称。
+- [x] 使用共享容器 labels 和 Compose CLI 发现项目，支持文件导入/关联、已停止项目与 service 范围。
+- [x] 完成有序多文件 YAML 编辑、官方校验与绑定原 Engine 的 Compose 操作。
+- [x] 完成 Linux/rootless、Windows 服务、自定义配置来源探测和本地 Desktop 入口；无法核实来源时显式关联文件。
+- [x] 完成 daemon JSON 编辑、校验范围说明、冲突拒绝、备份、替换写入、恢复与确认放弃草稿；离线也可修复文件。
+- [x] 将保存与 reload/restart 分开，按已核实服务提供动作，等待原 Engine ID 恢复；使用当前账号权限，权限错误明确反馈。
+- [x] 操作固定原目标，保留有界输出和各文件草稿；阻止带草稿/操作的主机连接变更，拒绝迟到响应。
+- [x] 同步中英文 README、本地化、行为文档与原生 UI 回归。
+- [ ] 在真实本地/SSH Docker 和 Compose 上验证资源操作、凭据、缺 CLI、外部变更与断线结果。
+- [ ] 在真实 Desktop、Native Linux/rootless、Windows Engine 上验证配置探测、写权限、校验和服务恢复；自动提权不在本轮范围。
 
-验收：Docker 的布局只有资源导航和预览所需信息；Bollard 直接处理 Engine API，Compose 与 daemon 配置复用已有主机能力；用户能够在正确主机预览并操作资源，配置保存与应用结果均可核对。
+自动化及原生 UI 检查使用隔离数据目录和独立可执行文件；未覆盖用户运行程序或操作真实 Docker daemon。验收记录见本节后续验证条目。
+
+本轮验证（Windows x64，2026-10-10）：
+
+- `cargo fmt --all -- --check`、`git diff --check` 通过。
+- `cargo test --workspace --locked`：233 通过、20 忽略；忽略项需要显式远端环境，不重复计算测试内启动的子进程。
+- `cargo check --workspace --all-targets --locked --features ui-check-screenshots` 与独立目录 release 编译检查通过。
+- 原生 `--workspace-ui-check` 通过：四类资源、10,000 容器/镜像、YAML/JSON/输出、深浅与窄窗口、键盘选择、按主机恢复、未保存草稿、迟到响应和无终端会话。截图已人工检查。
+- 使用隔离 `TSHELL_DATA_DIR` 与 `target/module-check/debug/tshell.exe`，保留用户运行程序及剪贴板；未执行真实 daemon 修改。
+- 报告：`artifacts/docker-resource-ui.json`；画面：`artifacts/docker-resource-screenshots/`；测试及编译日志：`tmp/modularization/resource-complete-*.log`。生成产物不提交。

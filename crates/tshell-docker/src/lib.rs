@@ -7,6 +7,15 @@ pub use connection::{Endpoint, Target};
 mod logs;
 pub mod terminal;
 
+mod actions;
+mod cli;
+mod compose;
+mod daemon;
+mod documents;
+mod images;
 mod panel;
+mod resource_view;
+mod resources;
 mod view;
 pub use panel::{DockerView, Event};
+pub use resources::ResourcePage;

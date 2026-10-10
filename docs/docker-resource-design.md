@@ -1,6 +1,6 @@
 # Docker 资源工作区设计
 
-更新日期：2026-10-10。状态：设计与下一阶段实施计划；当前代码仍是容器工作区。
+更新日期：2026-10-10。状态：四类资源界面和管理能力已实现；真实 Docker/SSH 环境验收仍待完成。实际要求和限制以 [Docker workspace](docker-workspace.md) 为准。
 
 ## 布局
 
@@ -24,7 +24,7 @@ Docker 内容区使用四个固定页签：**容器 / Compose / 镜像 / 更多*
 └───────────────────────┴───────────────────────────────────────────────┘
 ```
 
-刷新作用于当前资源页。创建按钮只有当前页支持创建时出现；没有选择资源时，主区提供对应的创建/导入入口，不默认弹出一个概览仪表盘。加载、空列表、连接失败和权限失败各自有明确反馈。
+刷新作用于当前资源页。创建按钮只有当前页支持创建时出现；没有选择资源时，主区显示选择提示，创建/导入从侧栏入口完成；操作输出仍可在预览中查看。连接与权限失败在主区反馈。
 
 ## 四类资源与操作
 
@@ -37,7 +37,7 @@ Docker 内容区使用四个固定页签：**容器 / Compose / 镜像 / 更多*
 
 “更多”是一个可扩展的分组资源列表，不把 Volume、Network 等继续加成顶层页签。Build cache 等后续能力加入对应分组，保持四个顶层入口稳定。
 
-同一种操作放在相同位置：主区资源栏提供常用动作，右键菜单补充完整动作，创建/导入入口放当前资源页的搜索栏。命令输出、拉取/推送进度和失败原因展示在所属资源的预览中，不在侧栏堆说明文字。删除与 down 明确说明目标，删除 Volume、附带删除数据和强制操作不作为默认选项。
+同一种操作放在相同位置：容器资源栏提供常用动作，其他资源通过同位置的操作菜单和右键菜单访问动作，创建/导入入口放当前资源页的搜索栏。命令输出、SDK 拉取/归档进度和失败原因展示在所属资源的预览中；CLI 输出在命令结束后显示，不在侧栏堆说明文字。删除与 down 明确说明目标，删除 Volume、附带删除数据和强制操作不作为默认选项。
 
 资源之间的跳转仍发生在 Docker 内：容器 → 镜像、挂载 → Volume、网络 → Network、Compose service → 容器。跳转保留原资源页的搜索、选择和滚动位置。
 
@@ -55,7 +55,7 @@ Compose 文件使用 Docker 自己的 `compose config --quiet` 校验。编辑�
 
 ## Engine 配置编辑
 
-入口是 **更多 → Engine 配置**。主区使用原生 JSON 编辑器，提供配置来源、校验、保存、Diff/恢复备份和明确的应用操作；不复制一套与 JSON 容易不一致的完整设置表单。
+入口是 **更多 → Engine 配置**。主区使用原生 JSON 编辑器，提供配置来源、校验、保存、恢复备份和明确的应用操作；不复制一套与 JSON 容易不一致的完整设置表单。
 
 Bollard 继续处理 Engine API 请求。`daemon.json` 编辑使用主机文件与命令能力，识别实际 daemon 的安装方式与管理方式：
 
@@ -63,9 +63,9 @@ Bollard 继续处理 Engine API 请求。`daemon.json` 编辑使用主机文件�
 | --- | --- | --- |
 | Linux 系统 Engine | `/etc/docker/daemon.json` | 检测实际服务，支持的变更可 reload，其余明确 restart |
 | Linux rootless | `$XDG_CONFIG_HOME/docker/daemon.json` 或 `~/.config/docker/daemon.json` | 绑定 daemon 所属用户及对应用户服务 |
-| Windows 原生 Engine | `C:\ProgramData\docker\config\daemon.json` | 检测实际 Windows 服务与 daemon |
-| Docker Desktop | 当前文档的 `~/.docker/daemon.json`，同时核对安装版本与实际文件 | 检测 Desktop CLI，可用时提供 `docker desktop restart`，否则提供 Desktop 设置入口 |
-| 自定义安装 | daemon 启动参数 `--config-file` 或用户指定路径 | 绑定实际配置文件与经过确认的管理方式 |
+| Windows 原生 Engine | `C:\ProgramData\docker\config\daemon.json` 或服务 `--config-file` | 检测默认管道及 Windows docker 服务 |
+| Docker Desktop | 本地 `~/.docker/daemon.json` | 明确 `docker desktop restart`，缺 CLI 时显示错误 |
+| 自定义安装 | daemon 启动参数 `--config-file` 或用户指定路径 | 允许显式关联文件；无法核实管理方式时只提供文件操作 |
 
 以上路径是探测线索，不是对所有主机的保证。Windows 上通过 named pipe 连接到 Linux Engine 时，不按客户端操作系统选择 Windows 服务的配置文件。Docker socket 可访问也不代表有配置文件写权限。SSH 目标上的 Docker context 可能指向另一台 daemon，不能默认把 SSH 主机文件当成该 daemon 的配置。
 
@@ -73,11 +73,11 @@ Bollard 继续处理 Engine API 请求。`daemon.json` 编辑使用主机文件�
 
 1. 加载配置与文件版本，保留未知字段和该主机的编辑草稿。
 2. 校验 JSON 对象；对应主机有 `dockerd` 时，对临时文件执行 `dockerd --validate --config-file <path>`，不启动一个新 daemon。缺少完整校验能力时准确标明校验范围。
-3. 保存前比对文件版本，外部修改时提供冲突 Diff；备份原文件，以临时文件替换写入并保持文件权限。远端文件系统不能保证原子替换时明确处理失败与恢复。
-4. 将“保存配置”和“重载/重启应用”分成明确动作。只有当前 daemon 版本与管理方式支持的字段才尝试 reload；其他变更明确需要 restart。
+3. 保存前比对文件版本，外部修改时拒绝覆盖并显示冲突；备份原文件，以临时文件替换写入并保持文件权限。远端文件系统不能保证原子替换时明确处理失败与恢复。
+4. 将“保存配置”和“重载/重启应用”分成明确动作。仅在服务报告支持 reload 时显示入口，并提示 Docker 只能重载支持的选项；其他变更需 restart。
 5. 重载/重启后重新读取 Engine 状态。失联时保留源配置、草稿、备份与操作结果，不能以请求已发送冒充已经生效，也不自动重复重启。
 
-权限不足时显示实际错误并提供适用的提权入口；不静默假定 `sudo` 可用。提权凭据与已有 SSH 登录认证分开处理。Docker Desktop 使用公开配置方式，不盲写其内部 `settings-store.json`，不硬编码未经验证的内部控制接口。
+权限不足时显示实际错误，文件和服务操作使用当前本地/SSH 账号；本轮没有自动 sudo、Windows 提权或额外凭据流程。离线时可关联/修复配置文件，服务启动由外部处理；在线 reload/restart 才能核实 Engine 绑定。Docker Desktop 使用公开配置方式，不盲写其内部 `settings-store.json`，不硬编码未经验证的内部控制接口。
 
 ## 代码与状态所有权
 
@@ -89,32 +89,35 @@ Bollard 继续处理 Engine API 请求。`daemon.json` 编辑使用主机文件�
 
 ```text
 crates/tshell-docker/src/
-  panel.rs          # 主机范围的状态、导航、异步消息与生命周期
-  view.rs           # 四类资源入口、列表与主区组合
-  containers.rs     # 容器预览、创建、运行参数与生命周期操作
-  images.rs         # 镜像列表、预览与操作
-  compose.rs        # 项目发现、配置文件与 Compose 命令
-  resources.rs      # Volume、Network、Engine 信息与分类清理
-  daemon.rs         # 配置来源探测、编辑保存、校验与应用
-  connection.rs     # 已有 Bollard 本地/SSH 连接
+  panel.rs          # 主机状态、异步消息、表单与生命周期
+  view.rs           # 容器详情、日志与现有 exec 入口
+  resource_view.rs  # 四类侧栏、预览、菜单与资源跳转
+  resources.rs      # 资源身份、SDK 查询和按页浏览状态
+  actions.rs        # 类型化操作、SDK 调用与文件/CLI 边界
+  images.rs         # 本地镜像归档流
+  compose.rs        # 项目发现、多文件校验与 Compose 命令
+  daemon.rs         # 配置来源、校验与服务控制
+  documents.rs      # 文件版本、草稿、冲突检测与备份保存
+  cli.rs            # 明确 endpoint/context、Engine 身份核对
+  connection.rs     # 已有 Bollard 本地/原生 SSH transport
   logs.rs           # 已有有界日志缓冲
   terminal.rs       # 已有容器终端 IO
 ```
 
 不为每个资源另建 crate，不再包装通用 Docker SDK，不建立资源插件注册器。原生 EditorState、命令执行、SSH/SFTP、主题和本地化复用现有能力。
 
-容器与 Compose 共用容器快照；其他列表按页激活加载，预览按选择加载，事件只使相关资源快照失效。页隐藏时停用浏览请求、stats 与日志订阅，避免打开 Docker 就持续扫描所有资源。
+容器与 Compose 共用容器快照；其他列表按页激活加载，预览按选择加载，事件只使相关资源快照失效。页隐藏时停用浏览请求、stats 与日志订阅，避免打开 Docker 就持续扫描所有资源。stats 是选择容器后的一次采样；事件列表限制 500 条。
 
-异步响应绑定原始 HostId、endpoint、资源身份和请求版本。跨主机/跨页旧响应不得覆盖当前预览；已执行的操作保持原目标，返回后更新原目标缓存。配置草稿不因主机切换或页面隐藏而丢失，删除/修改主机连接时须处理相关草稿与执行中的操作。已有容器终端继续固定原 Engine。
+异步响应绑定原始 HostId、endpoint、资源身份和请求版本。跨主机/跨页旧响应不得覆盖当前预览；已执行的操作保持原目标，返回后更新原目标缓存。配置草稿不因主机切换或页面隐藏而丢失；放弃修改需要确认，并只复原本地草稿，不写入文件，删除/修改主机连接时须处理相关草稿与执行中的操作。已有容器终端继续固定原 Engine。
 
-## 实施顺序与验收
+## 实施记录与验收
 
-1. 先定四类资源导航与统一主区，删除重复标题、状态筛选与侧栏计数。同步本地化与窄窗口原生回归，不先用四个空页签冒充已实现。
-2. 接入容器、镜像和更多资源的 Bollard 查询/预览，让资源跳转成立；容器与 Compose 共用快照。
-3. 补齐对应操作、创建/导入表单、右键菜单与进度反馈；用真实变化与失败场景验证操作结果。
-4. 完成 Compose 项目来源、文件编辑校验与目标绑定的 CLI 操作，验证缺 CLI 和源文件不可访问的情况。
-5. 完成 daemon 配置来源探测、编辑、校验、冲突/备份/恢复与配置应用；验证 Native Linux、rootless、Windows Engine、Docker Desktop 和 SSH 上的适用能力。
-6. 跑 workspace 测试与 Windows 原生 UI 回归。覆盖四类资源的深/浅主题、窄侧栏、长名称、大列表、键盘操作、主机切换、迟到响应、编辑草稿与操作结果来源。真实 Compose/daemon 操作使用指定测试主机与隔离资源；环境缺口保留为未完成。
+- 已完成四类资源导航、原生预览/YAML/JSON 编辑、关联跳转、资源表单、右键操作和原目标结果。
+- 已完成 Compose 有序多文件编辑、官方校验、service 范围和原 Engine CLI 绑定。
+- 已完成配置来源探测、离线文件修复、冲突检测、备份恢复及明确的服务 reload/restart；应用后等待原 Engine ID 恢复，不能由此推断所有字段已生效。
+- 重建容器保留旧容器备份，并创建已停止的替代容器；不默认清理 Volume。拉取暂为匿名 SDK，push 使用主机 CLI 凭据；导入项目和编辑草稿保留在本次应用生命周期。
+- 自动化覆盖深/浅主题、窄侧栏、万容器/镜像列表、键盘、主机切换、迟到响应、草稿和结果。生成报告/截图不提交。
+- 真实本地/SSH Docker、Compose 插件、Desktop/rootless/Windows 服务、权限与断线恢复仍需指定环境验收；不将协议与 UI fixture 当作真实部署验证。
 
 ## 官方依据
 
