@@ -1,6 +1,8 @@
 # TShell 架构重构与 Docker 实施计划
 
-更新日期：2026-10-09。状态：实施完成；workspace 自动化回归、Windows 原生界面检查、release 构建及打包通过。真实 Docker/SSH 环境验收单独保留。
+更新日期：2026-10-10。状态：模块拆分、基础 Docker 与主机联动已完成；新一轮 Docker 资源界面与管理功能待实施。workspace 自动化回归和 Windows 原生界面检查已通过，真实 Docker/SSH 环境验收单独保留。
+
+当前新增需求以 [Docker 资源工作区设计](docs/docker-resource-design.md) 和下文第 9 节为准：容器 / Compose / 镜像 / 更多四类入口，去掉重复标题、侧栏状态筛选和数量文案；资源预览集成操作与 Engine 配置编辑。
 
 本计划替换上一版。目标是直接建立清晰的最终结构，允许重写当前内部架构；继续保留用户配置、未保存文件、运行中的终端和已有功能行为。所有工具仍放在左侧，Docker 独立于终端会话。
 
@@ -68,7 +70,7 @@ tshell 应用
 - Terminal：左侧主机/会话导航，主区终端和分屏。
 - Explorer：左侧目录树，主区编辑器/预览。
 - Git：左侧变更列表，主区 Diff。
-- Docker：左侧 Engine 选择与资源列表，主区容器概览/日志/配置。
+- Docker：共用主机选择器，左侧容器 / Compose / 镜像 / 更多资源列表，主区资源预览、编辑器与操作。
 
 每个工具提供少量具体方法：绘制侧栏、绘制主区、提供状态栏内容、激活/失活、刷新和焦点处理。主应用持有对应 Entity 与 Subscription，用 GPUI 类型化事件协调平台操作和跨工具导航。
 
@@ -295,3 +297,24 @@ cargo build --locked --release --bin tshell
 - 固定版本实现：[docker.rs](https://github.com/fussybeaver/bollard/blob/v0.21.1/src/docker.rs)、[ssh.rs](https://github.com/fussybeaver/bollard/blob/v0.21.1/src/ssh.rs)。
 - SSH 依赖限制：[openssh 0.11.5](https://docs.rs/openssh/0.11.5/openssh/)。
 - Engine 与 Compose：[Docker SDK](https://docs.docker.com/engine/api/sdk/)、[Compose CLI](https://docs.docker.com/reference/cli/docker/compose/)。
+
+## 9. Docker 资源界面与管理功能
+
+本节是新一轮待实施工作，详细行为与连接/配置边界见 [资源工作区设计](docs/docker-resource-design.md)。之前完成的模块化与基础容器能力继续复用。
+
+- [ ] 删除主区重复 Engine 标题、侧栏 Docker 标题、全部/运行中/已停止筛选和容器数量说明。
+- [ ] 接入容器 / Compose / 镜像 / 更多四个固定资源页签，按主机分别保留各页状态。
+- [ ] 统一资源搜索、虚拟列表、选择、原生预览、详情页签、常用操作和右键菜单。
+- [ ] 完成容器平铺视图、资源参数预览和关联镜像/Volume/Network 跳转。
+- [ ] 完成镜像列表、详情/history、拉取/tag/push/删除、导入/导出与创建容器。
+- [ ] 完成更多资源中的 Engine 信息、存储、Volumes、Networks、事件与相关操作。
+- [ ] 完成容器创建、暂停/恢复、重命名、运行参数更新与明确的重建流程，复用已有日志和终端。
+- [ ] 从共享容器快照与 Compose CLI 发现项目，支持源文件导入/关联与已停止项目。
+- [ ] 完成 Compose YAML 编辑与官方校验，绑定目标 Engine 的 up/start/stop/restart/pull/build/down 操作。
+- [ ] 探测 Native Linux、rootless、Windows Engine、Docker Desktop 与自定义 daemon 配置来源。
+- [ ] 完成 daemon JSON 编辑、完整性校验、文件冲突、备份、替换写入与恢复。
+- [ ] 按实际管理方式提供明确的 reload/restart 与提权入口，重新读取状态确认配置应用结果。
+- [ ] 完成资源操作进度、失败原因与原目标结果展示；主机切换保留编辑草稿并拒绝迟到响应。
+- [ ] 更新英文/中文 README、本地化、行为文档及原生 UI 资源回归；真实环境验收单独记录。
+
+验收：Docker 的布局只有资源导航和预览所需信息；Bollard 直接处理 Engine API，Compose 与 daemon 配置复用已有主机能力；用户能够在正确主机预览并操作资源，配置保存与应用结果均可核对。

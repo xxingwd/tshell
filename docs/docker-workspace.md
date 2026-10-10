@@ -1,5 +1,9 @@
 # Docker workspace
 
+The next resource UI revision is specified in [the resource workspace design](docker-resource-design.md)
+and [the implementation plan](../todo.md#9-docker-资源界面与管理功能). It is planned work;
+the behavior below describes the currently implemented container workspace.
+
 Docker is a left-sidebar tool that follows the workspace's shared host selector.
 The local host selects the local Engine; a saved SSH host selects its remote Engine.
 Switching sessions within a host, closing every terminal, or hiding the sidebar
