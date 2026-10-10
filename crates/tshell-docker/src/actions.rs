@@ -235,7 +235,8 @@ pub(crate) async fn execute(request: Request, progress: impl Fn(String)) -> Resu
             .ok_or_else(|| anyhow::anyhow!(crate::t!("docker.select_container").into_owned()))
     };
     let key = || match &resource {
-        Some(Resource::Image(id) | Resource::Network(id) | Resource::Volume(id)) => Ok(id.as_str()),
+        Some(Resource::Image(image)) => Ok(image.id.as_str()),
+        Some(Resource::Network(id) | Resource::Volume(id)) => Ok(id.as_str()),
         _ => anyhow::bail!(crate::t!("docker.select_resource").into_owned()),
     };
     let mut result = Outcome {
@@ -250,7 +251,7 @@ pub(crate) async fn execute(request: Request, progress: impl Fn(String)) -> Resu
                 &docker,
                 action,
                 match &resource {
-                    Some(Resource::Image(id)) => Some(id.as_str()),
+                    Some(Resource::Image(image)) => Some(image.id.as_str()),
                     _ => None,
                 },
                 value(0),
@@ -446,10 +447,19 @@ pub(crate) async fn execute(request: Request, progress: impl Fn(String)) -> Resu
                 .await?;
         }
         Action::RemoveImage => {
+            let Some(Resource::Image(image)) = &resource else {
+                anyhow::bail!(crate::t!("docker.select_resource").into_owned());
+            };
+            let reference = image.tag.as_deref().unwrap_or(&image.id);
+            let inspected = docker.inspect_image(reference).await?;
+            ensure!(
+                inspected.id.as_deref() == Some(image.id.as_str()),
+                crate::t!("docker.state_changed").into_owned()
+            );
             result.text = serde_json::to_string_pretty(
                 &docker
                     .remove_image(
-                        key()?,
+                        reference,
                         Some(RemoveImageOptionsBuilder::default().force(false).build()),
                         None,
                     )
@@ -687,7 +697,7 @@ fn execute_files(request: Request) -> Result<Outcome> {
                 !input(0).is_empty(),
                 crate::t!("docker.name_required").into_owned()
             );
-            if let Some(Resource::Image(id)) = &resource {
+            if let Some(Resource::Image(image)) = &resource {
                 let bytes = binding.host.run(binding.request([
                     "image".into(),
                     "inspect".into(),
@@ -696,7 +706,7 @@ fn execute_files(request: Request) -> Result<Outcome> {
                     input(0).into(),
                 ]))?;
                 ensure!(
-                    String::from_utf8_lossy(&bytes).trim() == id,
+                    String::from_utf8_lossy(&bytes).trim() == image.id,
                     crate::t!("docker.state_changed").into_owned()
                 );
             }
@@ -709,7 +719,7 @@ fn execute_files(request: Request) -> Result<Outcome> {
                 crate::t!("docker.name_required").into_owned()
             );
             let arguments = if matches!(action, Action::ExportImage) {
-                let Some(Resource::Image(id)) = &resource else {
+                let Some(Resource::Image(image)) = &resource else {
                     anyhow::bail!(crate::t!("docker.select_resource").into_owned())
                 };
                 documents::ensure_missing(&target, input(0))?;
@@ -718,7 +728,7 @@ fn execute_files(request: Request) -> Result<Outcome> {
                     "save".into(),
                     "--output".into(),
                     input(0).into(),
-                    id.clone(),
+                    image.id.clone(),
                 ]
             } else {
                 vec![

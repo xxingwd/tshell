@@ -8,28 +8,36 @@ modes, operation output and file drafts for the application lifetime.
 
 ## Navigation and resources
 
-The sidebar has four tabs: **Containers / Compose / Images / More**. It uses a
-resource navigation without another Docker title, status filters or resource
-counters. Search, creation and refresh belong to the active browsing surface. Narrow sidebars use icons with tooltips. Lists are
-virtualized; arrow keys, Home and End move the selection. The main pane uses
-resource tables, a native preview/editor and the existing status bar.
+Clicking Docker turns the existing lower sidebar into a functional menu:
+Containers, Compose, Images, Volumes, Networks, Engine information, Storage,
+Events and Engine config. Icons and labels mark the current page; arrow keys and
+Home/End navigate the menu. Resource lists appear only in the main pane.
 
-| Tab | Preview | Actions |
-| --- | --- | --- |
-| Containers | Overview, logs, inspect JSON; limits and a resource-usage sample; linked image, volume and network | Create, start/stop, restart, pause/resume, rename, update runtime parameters, recreate, remove, terminal |
-| Compose | Projects and services, source YAML and command output | Import/associate files, validate, save/restore, up/start/stop/restart, pull, build, logs, down; optional service scope |
-| Images | Tags, size, layers/history, referencing containers and raw JSON | Pull, tag, push, remove, import/export, create a container |
-| More | Engine information, disk usage, volumes, networks, events and daemon configuration | Volume/network create/remove, network connect/disconnect, categorized pruning, daemon validation/save/restore/reload/restart |
+The main pane opens a virtual table for containers, Compose projects, images,
+volumes and networks. Search, creation and refresh belong to the table toolbar.
+Selecting a row opens details beside the table at main-pane widths of at least
+960 px, or below it in narrower windows. Details can be closed or expanded; the
+back button returns to the list. Logs, YAML, JSON and output use the full pane.
+Arrow keys and Home/End select rows, Enter expands details and Escape closes the
+adjacent preview. Columns adapt to available width; truncated values retain
+full-value tooltips. Each host keeps its selection, table scroll and preview.
 
-The main pane opens a virtual resource table for containers, Compose projects and
-images. Volume and network group headings open their tables. Search, creation and
-refresh move into the table toolbar while browsing. Selecting a row opens details
-beside the table at main-pane widths of at least 960 px, or below it in narrower
-windows. Details can be closed or expanded; the back button returns to the list.
-Logs, YAML, JSON and output use the full pane. Arrow keys and Home/End select rows,
-Enter expands details and Escape closes the adjacent preview. Columns adapt to
-available width and truncated values retain full-value tooltips. Each host keeps
-its selection, table scroll and preview state.
+Container listing requests `all=true`; with an empty search it includes running,
+exited, paused and Compose-managed containers from the current Engine, regardless
+of terminal session. Image listing uses the normal `all=false` scope. Each
+repository/tag is a separate row, sorted by its complete reference, followed by
+untagged rows sorted by full ID. Untagged names display `<none>:<none>`; a separate
+ID column distinguishes them. Sizes use decimal MB/GB. Details share their cache
+by image ID while selection and actions retain the exact alias. Removing a tagged
+row removes that tag, after rechecking it still resolves to the original image ID;
+removing an untagged row uses its ID. Neither operation forces deletion. Push
+prefills the selected tag.
+
+Read-only comparison against aidev on 2026-10-10 found one container in both
+`docker ps -a` and the Engine API. Expanding the default image API produced the
+same 52 tagged `(reference, full ID)` records as the CLI; TShell additionally keeps
+untagged API entries at the bottom as requested. Resource mutations and daemon
+configuration/recovery have not been validated against that host.
 
 Container and Compose navigation share one container snapshot. Compose grouping
 uses the exact project/service labels, not name heuristics. Image identity uses the

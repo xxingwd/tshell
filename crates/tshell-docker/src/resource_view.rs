@@ -1,8 +1,8 @@
 use crate::actions::Action;
 use crate::{
-    DockerView, ResourcePage, i18n,
+    DockerView, i18n,
     panel::{container_name, is_running},
-    resources::{Resource, image_name, service_name},
+    resources::{Resource, service_name},
     t,
 };
 use gpui_kit::assets::IconName;
@@ -10,481 +10,175 @@ use gpui_kit::base::input::Editor;
 use gpui_kit::component::{
     Disableable, Icon, Selectable, Sizable,
     button::{Button, ButtonVariants},
-    input::Input,
-    menu::{ContextMenuExt, DropdownMenu, PopupMenuItem},
+    menu::{DropdownMenu, PopupMenuItem},
 };
 use gpui_kit::{prelude::*, *};
 use tshell_ui::controls::icon_button;
 
 #[derive(Clone)]
-enum Row {
-    Group(&'static str),
-    Container(usize, bool),
-    Resource(Resource),
+enum Destination {
+    Collection(crate::browser::Collection),
+    Detail(Resource),
 }
-impl DockerView {
-    pub fn sidebar(&self, width: f32, cx: &mut Context<Self>) -> AnyElement {
-        let label_width = ResourcePage::ALL
-            .iter()
-            .map(|page| {
-                t!(page.key())
-                    .chars()
-                    .map(|character| if character.is_ascii() { 6. } else { 12. })
-                    .sum::<f32>()
-            })
-            .sum::<f32>()
-            + 52.;
-        let page = self
-            .engine()
-            .map(|engine| engine.resources.page)
-            .unwrap_or(ResourcePage::Containers);
-        let mut sidebar = div().size_full().flex().flex_col().gap_1().child(
-            div()
-                .h(px(34.))
-                .px_1()
-                .flex_shrink_0()
-                .flex()
-                .items_center()
-                .gap_1()
-                .border_b_1()
-                .border_color(rgb(self.palette.border))
-                .children(
-                    ResourcePage::ALL
-                        .into_iter()
-                        .enumerate()
-                        .map(|(index, value)| {
-                            let icon = match value {
-                                ResourcePage::Containers => IconName::Box,
-                                ResourcePage::Compose => IconName::Layers,
-                                ResourcePage::Images => IconName::Image,
-                                ResourcePage::More => IconName::Ellipsis,
-                            };
-                            if width < label_width {
-                                icon_button(("docker-resource-page", index), icon, t!(value.key()))
-                                    .flex_1()
-                                    .selected(page == value)
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.set_resource_page(value, window, cx)
-                                    }))
-                                    .into_any_element()
-                            } else {
-                                Button::new(("docker-resource-page", index))
-                                    .ghost()
-                                    .small()
-                                    .min_w_0()
-                                    .px_1()
-                                    .text_size(px(12.))
-                                    .tooltip(t!(value.key()))
-                                    .flex_grow(1.)
-                                    .flex_shrink_0()
-                                    .label(t!(value.key()))
-                                    .selected(page == value)
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.set_resource_page(value, window, cx)
-                                    }))
-                                    .into_any_element()
-                            }
-                        }),
-                ),
-        );
-        let Some(engine) = self.engine() else {
-            return sidebar.into_any_element();
-        };
-        let query_state = if page == ResourcePage::Containers {
-            &engine.query
-        } else {
-            &engine.resources.queries[&page]
-        };
-        let query = query_state.read(cx).value().to_lowercase();
-        let create_actions = match page {
-            ResourcePage::Containers => vec![Action::CreateContainer],
-            ResourcePage::Compose => vec![Action::ImportProject],
-            ResourcePage::Images => vec![Action::Pull, Action::ImportImage],
-            ResourcePage::More => vec![Action::CreateVolume, Action::CreateNetwork],
-        };
-        sidebar = sidebar.when(!self.collection_visible(), |sidebar| {
-            sidebar.child(
-                div()
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(Input::new(query_state).small()),
-                    )
-                    .child(self.action_button(create_actions, None, cx))
-                    .child(
-                        icon_button(
-                            "docker-refresh-resources",
-                            IconName::RefreshCw,
-                            t!("ws.refresh"),
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
-                    ),
-            )
-        });
-        let mut rows = Vec::new();
-        match page {
-            ResourcePage::Containers => {
-                let mut indices: Vec<_> = engine
-                    .containers
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, container)| {
-                        format!(
-                            "{} {} {}",
-                            container_name(container),
-                            container.image.as_deref().unwrap_or_default(),
-                            container.id.as_deref().unwrap_or_default()
-                        )
-                        .to_lowercase()
-                        .contains(&query)
-                    })
-                    .map(|(index, _)| index)
-                    .collect();
-                indices.sort_by_key(|index| container_name(&engine.containers[*index]));
-                rows.extend(
-                    indices
-                        .into_iter()
-                        .map(|index| Row::Container(index, false)),
-                );
+impl Destination {
+    fn active(&self, engine: &crate::panel::Engine) -> bool {
+        match self {
+            Self::Collection(collection) => {
+                engine.resources.page == collection.page()
+                    && (engine.resources.collection == Some(*collection)
+                        || (engine.resources.collection.is_none()
+                            && (crate::browser::Collection::for_page(engine.resources.page)
+                                == Some(*collection)
+                                || engine
+                                    .resources
+                                    .selection()
+                                    .and_then(crate::browser::Collection::for_resource)
+                                    == Some(*collection))))
             }
-            ResourcePage::Compose => {
-                for project in &engine.resources.projects {
-                    let matching = project.name.to_lowercase().contains(&query);
-                    let containers: Vec<_> = engine
-                        .containers
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, container)| {
-                            container
-                                .labels
-                                .as_ref()
-                                .and_then(|labels| labels.get("com.docker.compose.project"))
-                                == Some(&project.name)
-                        })
-                        .collect();
-                    if matching
-                        || containers.iter().any(|(_, container)| {
-                            service_name(container).to_lowercase().contains(&query)
-                        })
-                    {
-                        rows.push(Row::Resource(Resource::Project(project.name.clone())));
-                        rows.extend(
-                            containers
-                                .into_iter()
-                                .filter(|(_, container)| {
-                                    matching
-                                        || service_name(container).to_lowercase().contains(&query)
-                                })
-                                .map(|(index, _)| Row::Container(index, true)),
-                        );
-                    }
-                }
-            }
-            ResourcePage::Images => {
-                let mut images: Vec<_> = engine
-                    .resources
-                    .images
-                    .iter()
-                    .filter(|image| {
-                        format!("{} {}", image_name(image), image.id)
-                            .to_lowercase()
-                            .contains(&query)
-                    })
-                    .collect();
-                images.sort_by_key(|image| image_name(image));
-                rows.extend(
-                    images
-                        .into_iter()
-                        .map(|image| Row::Resource(Resource::Image(image.id.clone()))),
-                );
-            }
-            ResourcePage::More => {
-                for resource in [
-                    Resource::Info,
-                    Resource::Disk,
-                    Resource::Events,
-                    Resource::Daemon,
-                ] {
-                    if engine
-                        .resources
-                        .name(&resource)
-                        .to_lowercase()
-                        .contains(&query)
-                    {
-                        rows.push(Row::Resource(resource));
-                    }
-                }
-                let volumes: Vec<_> = engine
-                    .resources
-                    .volumes
-                    .iter()
-                    .filter(|volume| volume.name.to_lowercase().contains(&query))
-                    .collect();
-                if !volumes.is_empty() {
-                    rows.push(Row::Group("docker.volumes"));
-                    rows.extend(
-                        volumes
-                            .into_iter()
-                            .map(|volume| Row::Resource(Resource::Volume(volume.name.clone()))),
-                    );
-                }
-                let networks: Vec<_> = engine
-                    .resources
-                    .networks
-                    .iter()
-                    .filter(|network| {
-                        network
-                            .name
-                            .as_deref()
-                            .unwrap_or_default()
-                            .to_lowercase()
-                            .contains(&query)
-                    })
-                    .collect();
-                if !networks.is_empty() {
-                    rows.push(Row::Group("docker.networks"));
-                    rows.extend(
-                        networks
-                            .into_iter()
-                            .filter_map(|network| network.id.clone())
-                            .map(|id| Row::Resource(Resource::Network(id))),
-                    );
-                }
+            Self::Detail(resource) => {
+                engine.resources.page == resource.page()
+                    && engine.resources.collection.is_none()
+                    && engine.resources.selection() == Some(resource)
             }
         }
-        let count = rows.len();
-        let navigation: Vec<_> = rows
-            .iter()
-            .enumerate()
-            .filter_map(|(position, row)| {
-                Some((
-                    position,
-                    match row {
-                        Row::Group(_) => None,
-                        Row::Resource(key) => Some(key.clone()),
-                        Row::Container(index, _) => engine.containers[*index]
-                            .id
-                            .clone()
-                            .map(Resource::Container),
-                    }?,
-                ))
-            })
-            .collect();
+    }
+    fn open(&self, view: &mut DockerView, window: &mut Window, cx: &mut Context<DockerView>) {
+        match self {
+            Self::Collection(collection) => view.show_collection(*collection, window, cx),
+            Self::Detail(resource) => view.select_resource(resource.clone(), window, cx),
+        }
+    }
+}
+impl DockerView {
+    pub fn sidebar(&self, _width: f32, cx: &mut Context<Self>) -> AnyElement {
+        use crate::browser::Collection;
+        let entries = vec![
+            (
+                Destination::Collection(Collection::Containers),
+                IconName::Box,
+                Collection::Containers.key(),
+            ),
+            (
+                Destination::Collection(Collection::Projects),
+                IconName::Layers,
+                Collection::Projects.key(),
+            ),
+            (
+                Destination::Collection(Collection::Images),
+                IconName::Image,
+                Collection::Images.key(),
+            ),
+            (
+                Destination::Collection(Collection::Volumes),
+                IconName::HardDrive,
+                Collection::Volumes.key(),
+            ),
+            (
+                Destination::Collection(Collection::Networks),
+                IconName::Network,
+                Collection::Networks.key(),
+            ),
+            (
+                Destination::Detail(Resource::Info),
+                IconName::Info,
+                "docker.engine_info",
+            ),
+            (
+                Destination::Detail(Resource::Disk),
+                IconName::HardDrive,
+                "docker.storage",
+            ),
+            (
+                Destination::Detail(Resource::Events),
+                IconName::ScrollText,
+                "docker.events",
+            ),
+            (
+                Destination::Detail(Resource::Daemon),
+                IconName::Settings,
+                "docker.engine_config",
+            ),
+        ];
+        let Some(engine) = self.engine() else {
+            return div().into_any_element();
+        };
         let focus = engine.resources.focus.clone();
-        let scroll = engine.resources.scrolls[&page].clone();
-        let list = uniform_list(
-            ("docker-resource-list", page as usize),
-            count,
-            cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                range
-                    .map(|index| {
-                        let row = &rows[index];
-                        let Some(engine) = this.engine() else {
-                            return div().into_any_element();
-                        };
-                        match row {
-                            Row::Group(key) => div()
-                                .id(SharedString::from(format!("docker-group-{key}")))
-                                .cursor_pointer()
-                                .hover(|row| row.bg(rgb(this.palette.row_hover())))
-                                .on_click(cx.listener({
-                                    let key = *key;
-                                    move |this, _, window, cx| {
-                                        this.show_collection(
-                                            if key == "docker.volumes" {
-                                                crate::browser::Collection::Volumes
-                                            } else {
-                                                crate::browser::Collection::Networks
-                                            },
-                                            window,
-                                            cx,
-                                        )
-                                    }
-                                }))
-                                .h(px(30.))
-                                .px_2()
-                                .flex()
-                                .items_center()
-                                .text_size(px(12.))
-                                .text_color(rgb(this.palette.muted))
-                                .child(t!(*key).into_owned())
-                                .into_any_element(),
-                            Row::Container(index, service) => {
-                                let container = &engine.containers[*index];
-                                let id = container.id.clone().unwrap_or_default();
-                                let owner = cx.entity().downgrade();
-                                let target = engine.target.clone();
-                                let resource = Resource::Container(id.clone());
-                                let name = if *service {
-                                    service_name(container)
-                                } else {
-                                    container_name(container)
-                                };
-                                let active = !service && engine.selected.as_ref() == Some(&id);
-                                let paused = container.state
-                                    == Some(bollard::models::ContainerSummaryStateEnum::PAUSED);
-                                let mut palette = this.palette;
-                                palette.muted = if is_running(container) {
-                                    palette.ansi[2]
-                                } else if paused {
-                                    palette.ansi[3]
-                                } else {
-                                    palette.muted
-                                };
-                                let status = container.status.clone().unwrap_or_default();
-                                resource_row(
-                                    SharedString::from(format!("docker-container-{id}")),
-                                    name,
-                                    if is_running(container) {
-                                        IconName::Play
-                                    } else if paused {
-                                        IconName::Pause
-                                    } else {
-                                        IconName::Square
-                                    },
-                                    active,
-                                    palette,
-                                )
-                                .when(*service, |row| row.pl_5())
-                                .tooltip(move |window, cx| {
-                                    gpui_kit::component::tooltip::Tooltip::new(status.clone())
-                                        .build(window, cx)
-                                })
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.navigate_resource(
-                                        Resource::Container(id.clone()),
-                                        window,
-                                        cx,
-                                    )
-                                }))
-                                .context_menu(move |menu, _, _| {
-                                    crate::panel::action_menu(
-                                        menu,
-                                        resource_actions(&resource, None),
-                                        Some(target.clone()),
-                                        Some(resource.clone()),
-                                        owner.clone(),
-                                    )
-                                })
-                                .into_any_element()
-                            }
-                            Row::Resource(resource) => {
-                                let name = engine.resources.name(resource);
-                                let active = engine.resources.selection() == Some(resource);
-                                let icon = match resource {
-                                    Resource::Container(_) => IconName::Box,
-                                    Resource::Project(_) => IconName::Layers,
-                                    Resource::Image(_) => IconName::Image,
-                                    Resource::Volume(_) => IconName::HardDrive,
-                                    Resource::Network(_) => IconName::Network,
-                                    Resource::Info => IconName::Info,
-                                    Resource::Disk => IconName::HardDrive,
-                                    Resource::Events => IconName::ScrollText,
-                                    Resource::Daemon => IconName::Settings,
-                                };
-                                let resource = resource.clone();
-                                let menu_resource = resource.clone();
-                                let target = engine.target.clone();
-                                let owner = cx.entity().downgrade();
-                                let actions = resource_actions(
-                                    &resource,
-                                    engine.resources.daemon.as_ref().filter(|source| {
-                                        source.engine_id.as_ref()
-                                            == engine
-                                                .info
-                                                .as_ref()
-                                                .and_then(|info| info.id.as_ref())
-                                    }),
-                                );
-                                resource_row(
-                                    SharedString::from(format!("docker-resource-{resource:?}")),
-                                    name,
-                                    icon,
-                                    active,
-                                    this.palette,
-                                )
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.navigate_resource(resource.clone(), window, cx)
-                                }))
-                                .context_menu(move |menu, _, _| {
-                                    crate::panel::action_menu(
-                                        menu,
-                                        actions.clone(),
-                                        Some(target.clone()),
-                                        Some(menu_resource.clone()),
-                                        owner.clone(),
-                                    )
-                                })
-                                .into_any_element()
-                            }
-                        }
-                    })
-                    .collect()
-            }),
-        )
-        .track_scroll(&scroll)
-        .size_full();
-        sidebar
-            .child(
-                div()
-                    .id("docker-resource-navigation")
-                    .track_focus(&focus)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |_, _, window, cx| focus.focus(window, cx)),
-                    )
-                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                        let Some(engine) = this.engine() else {
-                            return;
-                        };
-                        let current = if engine.resources.page == ResourcePage::Containers {
-                            engine.selected.clone().map(Resource::Container)
-                        } else {
-                            engine.resources.selection().cloned()
-                        };
-                        let position = current
-                            .as_ref()
-                            .and_then(|key| navigation.iter().position(|(_, entry)| entry == key));
-                        let next = match event.keystroke.key.as_str() {
-                            "down" => Some(
-                                position
-                                    .map(|index| {
-                                        (index + 1).min(navigation.len().saturating_sub(1))
-                                    })
-                                    .unwrap_or(0),
-                            ),
-                            "up" => Some(position.unwrap_or(0).saturating_sub(1)),
-                            "home" => Some(0),
-                            "end" => Some(navigation.len().saturating_sub(1)),
-                            _ => None,
-                        };
-                        if let Some(index) = next {
-                            if let Some((position, resource)) = navigation.get(index) {
-                                this.navigate_resource(resource.clone(), window, cx);
-                                if let Some(engine) = this.engine() {
-                                    engine.resources.scrolls[&engine.resources.page]
-                                        .scroll_to_item(*position, ScrollStrategy::Top);
-                                }
-                                cx.stop_propagation();
-                            }
-                        }
-                    }))
-                    .flex_1()
-                    .min_h_0()
-                    .child(if count == 0 {
-                        tshell_ui::controls::empty_state(
-                            IconName::Search,
-                            t!("docker.no_resources").into_owned(),
-                            self.palette,
-                        )
-                        .into_any_element()
-                    } else {
-                        list.into_any_element()
+        let navigation: Vec<_> = entries.iter().map(|(entry, _, _)| entry.clone()).collect();
+        div()
+            .id("docker-menu")
+            .role(Role::TabList)
+            .size_full()
+            .flex()
+            .flex_col()
+            .py_2()
+            .text_color(rgb(self.palette.text))
+            .track_focus(&focus)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |_, _, window, cx| focus.focus(window, cx)),
+            )
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                let current = this
+                    .engine()
+                    .and_then(|engine| navigation.iter().position(|entry| entry.active(engine)))
+                    .unwrap_or(0);
+                let next = match event.keystroke.key.as_str() {
+                    "down" => Some((current + 1).min(navigation.len() - 1)),
+                    "up" => Some(current.saturating_sub(1)),
+                    "home" => Some(0),
+                    "end" => Some(navigation.len() - 1),
+                    _ => None,
+                };
+                if let Some(index) = next {
+                    navigation[index].open(this, window, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .children(
+                entries
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, (entry, icon, key))| {
+                        let active = entry.active(engine);
+                        div()
+                            .id(("docker-menu-entry", index))
+                            .role(Role::Tab)
+                            .aria_label(t!(key).into_owned())
+                            .aria_selected(active)
+                            .when(active, |entry| entry.aria_active_descendant())
+                            .h(px(32.))
+                            .w_full()
+                            .px_3()
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .cursor_pointer()
+                            .text_size(px(13.))
+                            .when(index == 3 || index == 5, |entry| entry.mt_2())
+                            .when(active, |entry| entry.bg(rgb(self.palette.selected)))
+                            .hover(|entry| entry.bg(rgb(self.palette.row_hover())))
+                            .child(
+                                Icon::new(icon)
+                                    .size(px(14.))
+                                    .text_color(rgb(self.palette.muted)),
+                            )
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .truncate()
+                                    .child(t!(key).into_owned()),
+                            )
+                            .tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(t!(key).into_owned())
+                                    .build(window, cx)
+                            })
+                            .on_click(
+                                cx.listener(move |this, _, window, cx| {
+                                    entry.open(this, window, cx)
+                                }),
+                            )
                     }),
             )
             .into_any_element()
@@ -745,12 +439,12 @@ impl DockerView {
             .size_full()
             .into_any_element()
         } else {
-            let value = engine.resources.preview.get(resource);
+            let value = engine.resources.preview.get(&resource.inspect_key());
             let references: Vec<_> = engine
                 .containers
                 .iter()
                 .filter(|container| match resource {
-                    Resource::Image(id) => container.image_id.as_ref() == Some(id),
+                    Resource::Image(image) => container.image_id.as_ref() == Some(&image.id),
                     Resource::Volume(name) => container.mounts.as_ref().is_some_and(|mounts| {
                         mounts.iter().any(|mount| mount.name.as_ref() == Some(name))
                     }),
@@ -1177,7 +871,7 @@ fn fields(resource: &Resource, value: &serde_json::Value) -> Vec<(String, String
             if *path == "Size" {
                 return Some((
                     t!(*key).into_owned(),
-                    crate::resources::format_bytes(entry.as_u64().unwrap_or_default()),
+                    crate::resources::format_image_size(entry.as_u64().unwrap_or_default()),
                 ));
             }
             if *path == "History" {

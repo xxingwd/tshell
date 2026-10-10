@@ -81,7 +81,7 @@ fn failure(error: impl Into<anyhow::Error>) -> Failure {
 fn worker(future: impl std::future::Future<Output = ()> + Send + 'static) -> Worker {
     Worker(tshell_host::ssh::runtime().spawn(future))
 }
-fn list_options() -> bollard::query_parameters::ListContainersOptions {
+pub(crate) fn list_options() -> bollard::query_parameters::ListContainersOptions {
     ListContainersOptionsBuilder::default().all(true).build()
 }
 enum Message {
@@ -607,7 +607,7 @@ impl DockerView {
         let Some(resource) = engine.resources.selection().cloned() else {
             return;
         };
-        if let Some(value) = engine.resources.preview.get(&resource) {
+        if let Some(value) = engine.resources.preview.get(&resource.inspect_key()) {
             let text = serde_json::to_string_pretty(value).unwrap_or_default();
             engine
                 .resources
@@ -1075,7 +1075,10 @@ impl DockerView {
                                     cx,
                                 )
                             });
-                            engine.resources.preview.insert(resource, value);
+                            engine
+                                .resources
+                                .preview
+                                .insert(resource.inspect_key(), value);
                         }
                         Err(error) => engine.error = Some(error),
                     }
@@ -1650,7 +1653,7 @@ impl DockerView {
             serde_json::to_string_pretty(&value).unwrap_or_default()
         });
         let image_config = match &resource {
-            Some(Resource::Image(id)) => Some(serde_json::json!({"Image":id}).to_string()),
+            Some(Resource::Image(image)) => Some(serde_json::json!({"Image":image.id}).to_string()),
             _ => None,
         };
         if !action.fields().is_empty() {
@@ -1664,6 +1667,13 @@ impl DockerView {
                             .as_ref()
                             .map(|file| file.path.as_str())
                             .unwrap_or(initial)
+                    } else if matches!(action, crate::actions::Action::Push)
+                        && *label == "docker.image"
+                    {
+                        match &resource {
+                            Some(Resource::Image(image)) => image.tag.as_deref().unwrap_or(initial),
+                            _ => initial,
+                        }
                     } else if matches!(action, crate::actions::Action::Recreate) {
                         recreate.as_deref().unwrap_or(initial)
                     } else if matches!(action, crate::actions::Action::CreateContainer) {
@@ -2121,7 +2131,7 @@ impl DockerView {
         }];
         let resource = match index {
             0 | 1 => Resource::Project("fixture-stack".into()),
-            2 | 3 => Resource::Image(engine.resources.images[0].id.clone()),
+            2 | 3 => Resource::Image(engine.resources.images[0].id.clone().into()),
             4 => Resource::Volume("fixture-data".into()),
             5 => Resource::Network("fixture-network-full-id".into()),
             6 => Resource::Info,
@@ -2130,8 +2140,8 @@ impl DockerView {
             _ => Resource::Daemon,
         };
         let value = match &resource {
-            Resource::Image(id) => {
-                serde_json::json!({"Id":id,"RepoTags":["registry.example.com/team/fixture-tool:latest"],"Size":1234567,"Created":"2026-10-10T00:00:00Z","Architecture":"amd64","Os":"linux","Config":{"Cmd":["/bin/sh"]},"RootFS":{"Layers":["sha256:fixture-layer"]},"History":[{"CreatedBy":"COPY /app /usr/local/bin/app"},{"CreatedBy":"RUN apk add --no-cache ca-certificates"}]})
+            Resource::Image(image) => {
+                serde_json::json!({"Id":image.id,"RepoTags":["registry.example.com/team/fixture-tool:latest"],"Size":1234567,"Created":"2026-10-10T00:00:00Z","Architecture":"amd64","Os":"linux","Config":{"Cmd":["/bin/sh"]},"RootFS":{"Layers":["sha256:fixture-layer"]},"History":[{"CreatedBy":"COPY /app /usr/local/bin/app"},{"CreatedBy":"RUN apk add --no-cache ca-certificates"}]})
             }
             Resource::Volume(name) => {
                 serde_json::json!({"Name":name,"Driver":"local","Mountpoint":"/var/lib/docker/volumes/fixture-data/_data","Scope":"local","Options":{}})
@@ -2268,11 +2278,8 @@ impl DockerView {
         self.engine().unwrap().resources.focus.clone()
     }
     pub fn check_image_selection(&self, index: usize) {
-        assert_eq!(
-            self.engine().unwrap().resources.selection(),
-            Some(&Resource::Image(
-                self.engine().unwrap().resources.images[index].id.clone()
-            ))
+        assert!(
+            matches!(self.engine().unwrap().resources.selection(), Some(Resource::Image(reference)) if reference.id == self.engine().unwrap().resources.images[index].id)
         );
     }
     pub fn check_browser_fixture(
@@ -2299,6 +2306,25 @@ impl DockerView {
         engine
             .query
             .update(cx, |query, cx| query.set_value("", window, cx));
+        engine.containers[1].state = Some(ContainerSummaryStateEnum::EXITED);
+        engine.containers[1].status = Some("Exited (0) 2 hours ago".into());
+        engine.containers[2].state = Some(ContainerSummaryStateEnum::PAUSED);
+        engine.containers[2].status = Some("Up 12 days (Paused)".into());
+        if index == 2 {
+            engine.resources.images[0].repo_tags =
+                vec!["caddy:latest".into(), "caddy:stable".into()];
+            engine.resources.images[1].repo_tags =
+                vec!["redis:7-alpine".into(), "redis:7.4-alpine".into()];
+            engine.resources.images.push(bollard::models::ImageSummary {
+                id: format!("sha256:{}", "f".repeat(64)),
+                size: 4_500_000,
+                ..Default::default()
+            });
+            let key = Resource::Image(engine.resources.images[0].id.clone().into());
+            if let Some(preview) = engine.resources.preview.get_mut(&key) {
+                preview["RepoTags"] = serde_json::json!(["caddy:latest", "caddy:stable"]);
+            }
+        }
         engine.resources.volumes[0].mountpoint =
             "/var/lib/docker/volumes/fixture-data/_data".into();
         engine.resources.networks[0].driver = Some("bridge".into());
@@ -2309,6 +2335,12 @@ impl DockerView {
         );
         engine.resources.table_scrolls[&collection].scroll_to_item(0, ScrollStrategy::Top);
         engine.resources.table_focus.clone()
+    }
+    pub fn check_image_reference(&self, index: usize, tag: Option<&str>) {
+        self.check_image_selection(index);
+        assert!(
+            matches!(self.engine().unwrap().resources.selection(), Some(Resource::Image(reference)) if reference.tag.as_deref() == tag)
+        );
     }
     pub fn check_browser_navigation(&self, index: usize, expanded: bool, inspector: bool) {
         let engine = self.engine().unwrap();
@@ -2326,7 +2358,7 @@ impl DockerView {
         }
         if index == 2 && inspector {
             assert!(
-                matches!(engine.resources.selection(), Some(Resource::Image(id)) if engine.resources.images.iter().any(|image| image.id == *id))
+                matches!(engine.resources.selection(), Some(Resource::Image(reference)) if engine.resources.images.iter().any(|image| image.id == reference.id))
             );
         }
     }

@@ -8,6 +8,7 @@ struct Fixture {
     input: parking_lot::Mutex<Vec<u8>>,
     closed: tokio::sync::Notify,
     hang: std::sync::atomic::AtomicBool,
+    image_id: parking_lot::Mutex<Option<String>>,
 }
 fn docker(fixture: Arc<Fixture>, running: bool) -> Docker {
     Docker::connect_with_custom_transport(move |request| {
@@ -58,6 +59,25 @@ fn docker(fixture: Arc<Fixture>, running: bool) -> Docker {
                     ("200 OK", r#"{"ID":"fixture-engine-id"}"#.to_owned())
                 } else if path.ends_with("/networks/create") {
                     ("201 Created", r#"{"Id":"fixture-created-network","Warning":""}"#.to_owned())
+                } else if path.contains("/images/json?") {
+                    let images = [
+                        bollard::models::ImageSummary { id: "sha256:full-image-identity".into(), repo_tags: vec!["redis:7-alpine".into(), "redis:7.4-alpine".into()], ..Default::default() },
+                        bollard::models::ImageSummary { id: "sha256:untagged-image".into(), ..Default::default() },
+                    ];
+                    ("200 OK", serde_json::to_string(&images).unwrap())
+                } else if path.contains("/containers/json?") {
+                    let mut containers = vec![
+                        bollard::models::ContainerSummary { id: Some("running-full-id".into()), state: Some(bollard::models::ContainerSummaryStateEnum::RUNNING), ..Default::default() },
+                        bollard::models::ContainerSummary { id: Some("exited-full-id".into()), state: Some(bollard::models::ContainerSummaryStateEnum::EXITED), ..Default::default() },
+                        bollard::models::ContainerSummary { id: Some("paused-full-id".into()), state: Some(bollard::models::ContainerSummaryStateEnum::PAUSED), ..Default::default() },
+                    ];
+                    if !path.contains("all=true") { containers.truncate(1); }
+                    ("200 OK", serde_json::to_string(&containers).unwrap())
+                } else if path.contains("/images/") && path.ends_with("/json") {
+                    let id = fixture.image_id.lock().clone().unwrap_or_else(|| "sha256:full-image-identity".into());
+                    ("200 OK", serde_json::json!({"Id":id}).to_string())
+                } else if path.contains("/images/") && path.contains("force=false") {
+                    ("200 OK", r#"[{"Untagged":"redis:7-alpine"}]"#.into())
                 } else if path.contains("/images/") && path.ends_with("/get") {
                     ("200 OK", "fixture image archive bytes".into())
                 } else if path.ends_with("/json") {
@@ -75,6 +95,79 @@ fn docker(fixture: Arc<Fixture>, running: bool) -> Docker {
             request_over_stream(client,request).await
         }
     },Some("http://fixture"),5,API_DEFAULT_VERSION).unwrap()
+}
+#[test]
+fn container_listing_includes_running_exited_and_paused_without_session_filters() {
+    tshell_host::ssh::runtime().block_on(async {
+        let fixture = Arc::new(Fixture::default());
+        let containers = docker(fixture.clone(), true)
+            .list_containers(Some(crate::panel::list_options()))
+            .await
+            .unwrap();
+        assert_eq!(
+            containers
+                .iter()
+                .filter_map(|container| container.id.as_deref())
+                .collect::<Vec<_>>(),
+            ["running-full-id", "exited-full-id", "paused-full-id"]
+        );
+        let requests = fixture.requests.lock();
+        assert!(requests[0].0.contains("all=true"));
+        assert!(!requests[0].0.contains("filters="));
+    });
+}
+#[test]
+fn image_listing_uses_default_scope_and_keeps_aliases_and_untagged_images() {
+    tshell_host::ssh::runtime().block_on(async {
+        let fixture = Arc::new(Fixture::default());
+        let snapshot =
+            crate::resources::list(&docker(fixture.clone(), true), crate::ResourcePage::Images)
+                .await
+                .unwrap();
+        let references = crate::resources::image_references(&snapshot.images.unwrap());
+        assert_eq!(references.len(), 3);
+        assert_eq!(references[0].tag.as_deref(), Some("redis:7-alpine"));
+        assert_eq!(references[1].tag.as_deref(), Some("redis:7.4-alpine"));
+        assert!(references[2].tag.is_none());
+        assert!(fixture.requests.lock()[0].0.contains("all=false"));
+    });
+}
+#[test]
+fn removing_a_named_image_checks_its_identity_and_deletes_only_the_selected_tag() {
+    tshell_host::ssh::runtime().block_on(async {
+        let fixture = Arc::new(Fixture::default());
+        let mut request = network_request(docker(fixture.clone(), true), "fixture-engine-id");
+        request.action = crate::actions::Action::RemoveImage;
+        request.resource = Some(crate::resources::Resource::Image(
+            crate::resources::ImageReference {
+                id: "sha256:full-image-identity".into(),
+                tag: Some("redis:7-alpine".into()),
+            },
+        ));
+        crate::actions::execute(request, |_| {}).await.unwrap();
+        let requests = fixture.requests.lock();
+        assert_eq!(requests.len(), 3);
+        assert!(requests[1].0.contains("redis") && requests[1].0.ends_with("/json"));
+        assert!(requests[2].0.contains("redis") && requests[2].0.contains("force=false"));
+        assert!(!requests[2].0.contains("full-image-identity"));
+    });
+}
+#[test]
+fn removing_an_image_rejects_a_tag_that_now_points_to_a_different_identity() {
+    tshell_host::ssh::runtime().block_on(async {
+        let fixture = Arc::new(Fixture::default());
+        *fixture.image_id.lock() = Some("sha256:replacement".into());
+        let mut request = network_request(docker(fixture.clone(), true), "fixture-engine-id");
+        request.action = crate::actions::Action::RemoveImage;
+        request.resource = Some(crate::resources::Resource::Image(
+            crate::resources::ImageReference {
+                id: "sha256:full-image-identity".into(),
+                tag: Some("redis:7-alpine".into()),
+            },
+        ));
+        assert!(crate::actions::execute(request, |_| {}).await.is_err());
+        assert_eq!(fixture.requests.lock().len(), 2);
+    });
 }
 #[test]
 fn sdk_negotiates_and_hijacks_exec_with_input_resize_and_cancellation() {
@@ -224,7 +317,7 @@ fn local_archive_export_streams_without_cli_and_preserves_existing_files() {
         let mut request = network_request(docker(fixture.clone(), true), "fixture-engine-id");
         request.action = crate::actions::Action::ExportImage;
         request.resource = Some(crate::resources::Resource::Image(
-            "sha256:full-image-identity".into(),
+            "sha256:full-image-identity".to_owned().into(),
         ));
         request.values = vec![path.to_string_lossy().into()];
         crate::actions::execute(request, |_| {}).await.unwrap();
@@ -235,7 +328,7 @@ fn local_archive_export_streams_without_cli_and_preserves_existing_files() {
         let mut request = network_request(docker(fixture, true), "fixture-engine-id");
         request.action = crate::actions::Action::ExportImage;
         request.resource = Some(crate::resources::Resource::Image(
-            "sha256:full-image-identity".into(),
+            "sha256:full-image-identity".to_owned().into(),
         ));
         request.values = vec![path.to_string_lossy().into()];
         assert!(crate::actions::execute(request, |_| {}).await.is_err());

@@ -344,3 +344,20 @@ cargo build --locked --release --bin tshell
 - [x] 原生深/浅与窄窗口回归覆盖五类表格、万条键盘选择、收起/放大/返回和主机切换；实际截图检查通过。
 
 报告：`artifacts/docker-browser-ui.json`；截图：`artifacts/docker-browser-screenshots/`；日志：`tmp/modularization/docker-browser-*.log`。生成产物不提交。真实 Engine/SSH 操作验收仍沿用第 9 节未完成项。
+
+
+## 11. Docker 功能菜单与镜像标签列表
+
+2026-10-10 按最新交互调整，第 10 节的左栏资源列表由功能菜单替代：容器、Compose、镜像、Volumes、Networks、Engine 信息、存储、事件和 Engine 配置。主区只显示一份资源列表，选中后展开详情。导航可通过键盘访问，并标记当前位置。
+
+- [x] 容器保持 `all=true`，搜索为空时显示全部运行/停止/暂停及 Compose 容器，独立于终端会话。
+- [x] 镜像使用普通 `all=false` 范围；每个完整仓库标签单独成行，带标签项在前，无标签项按 ID 排底部。
+- [x] 为镜像行保留完整 ID + 精确标签身份，短 ID 显示和完整 ID tooltip 分开；详情缓存按 ID 共享。
+- [x] 删除有标签行只移除所选标签，重新核对完整 ID；标签已指向其他镜像时拒绝操作，继续禁止强制删除。
+- [x] Push 预填所选标签，镜像列表与详情统一使用十进制 MB/GB。
+- [x] 测试覆盖三类容器、镜像普通范围、多标签独立选择、无标签末尾、删除标签及外部重标记拒绝。
+- [x] workspace 238 通过、20 忽略；格式、all-targets、release 编译检查通过。
+- [x] 深浅主题与窄窗口原生回归通过；菜单导航、万条镜像、多标签选择、无标签末尾和各主机状态恢复已检查，截图为隔离测试数据。
+- [x] aidev 只读对照：CLI/API 的完整容器 ID 集合一致（1 个）；有标签的镜像引用 + 完整 ID 集合一致（52 条）。API 返回的 34 条无标签项按本次要求保留在列表底部。
+
+报告：`artifacts/docker-menu-ui.json`、`artifacts/docker-aidev-readonly-comparison.json`；截图：`artifacts/docker-menu-screenshots/`；日志：`tmp/modularization/docker-menu-*.log`。生成产物不提交。首轮 workspace 测试的原有文件备份用例遇到一次 Windows 拒绝访问；该用例及完整 workspace 重跑均通过，未调整文件 IO 语义。aidev 未执行写操作；资源修改、Compose 与 daemon 恢复仍待真实环境验收。

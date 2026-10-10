@@ -3,7 +3,7 @@ use crate::{
     actions::Action,
     i18n,
     panel::{Engine, container_name},
-    resources::{Resource, format_bytes, image_name},
+    resources::{Resource, format_image_size, image_references, short_id},
     t,
 };
 use gpui_kit::assets::IconName;
@@ -35,7 +35,7 @@ impl Collection {
             ResourcePage::More => None,
         }
     }
-    fn for_resource(resource: &Resource) -> Option<Self> {
+    pub(crate) fn for_resource(resource: &Resource) -> Option<Self> {
         match resource {
             Resource::Container(_) => Some(Self::Containers),
             Resource::Project(_) => Some(Self::Projects),
@@ -45,12 +45,21 @@ impl Collection {
             _ => None,
         }
     }
-    fn page(self) -> ResourcePage {
+    pub(crate) fn page(self) -> ResourcePage {
         match self {
             Self::Containers => ResourcePage::Containers,
             Self::Projects => ResourcePage::Compose,
             Self::Images => ResourcePage::Images,
             Self::Volumes | Self::Networks => ResourcePage::More,
+        }
+    }
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Containers => "docker.containers",
+            Self::Projects => "docker.compose",
+            Self::Images => "docker.images",
+            Self::Volumes => "docker.volumes",
+            Self::Networks => "docker.networks",
         }
     }
     fn columns(self) -> [&'static str; 4] {
@@ -69,9 +78,9 @@ impl Collection {
             ],
             Self::Images => [
                 "docker.tags",
+                "docker.resource_id",
                 "docker.size",
                 "docker.containers",
-                "docker.resource_id",
             ],
             Self::Volumes => [
                 "docker.name",
@@ -179,24 +188,36 @@ fn rows(engine: &Engine, collection: Collection, query: &str) -> Vec<Row> {
                 ],
             })
             .collect(),
-        Collection::Images => engine
-            .resources
-            .images
-            .iter()
-            .map(|image| Row {
-                resource: Resource::Image(image.id.clone()),
-                cells: [
-                    image_name(image),
-                    format_bytes(image.size.max(0) as u64),
-                    if image.containers < 0 {
-                        "—".into()
-                    } else {
-                        image.containers.to_string()
-                    },
-                    image.id.clone(),
-                ],
-            })
-            .collect(),
+        Collection::Images => {
+            let by_id: std::collections::BTreeMap<_, _> = engine
+                .resources
+                .images
+                .iter()
+                .map(|image| (image.id.as_str(), image))
+                .collect();
+            image_references(&engine.resources.images)
+                .into_iter()
+                .filter_map(|reference| {
+                    let image = by_id.get(reference.id.as_str())?;
+                    Some(Row {
+                        cells: [
+                            reference
+                                .tag
+                                .clone()
+                                .unwrap_or_else(|| "<none>:<none>".into()),
+                            short_id(&image.id).into(),
+                            format_image_size(image.size.max(0) as u64),
+                            if image.containers < 0 {
+                                "—".into()
+                            } else {
+                                image.containers.to_string()
+                            },
+                        ],
+                        resource: Resource::Image(reference),
+                    })
+                })
+                .collect()
+        }
         Collection::Volumes => engine
             .resources
             .volumes
@@ -248,13 +269,16 @@ fn rows(engine: &Engine, collection: Collection, query: &str) -> Vec<Row> {
             .iter()
             .any(|cell| cell.to_lowercase().contains(query))
             || match &row.resource {
-                Resource::Container(id) | Resource::Image(id) | Resource::Network(id) => {
+                Resource::Container(id) | Resource::Network(id) => {
                     id.to_lowercase().contains(query)
                 }
+                Resource::Image(image) => image.id.to_lowercase().contains(query),
                 _ => false,
             }
     });
-    rows.sort_by(|left, right| left.cells[0].cmp(&right.cells[0]));
+    if collection != Collection::Images {
+        rows.sort_by(|left, right| left.cells[0].cmp(&right.cells[0]));
+    }
     rows
 }
 fn selected(engine: &Engine) -> Option<Resource> {
@@ -453,6 +477,11 @@ impl DockerView {
         } else {
             2
         };
+        let name_weight = if collection == Collection::Images {
+            4.
+        } else {
+            2.
+        };
         let focus = engine.resources.table_focus.clone();
         let scroll = engine.resources.table_scrolls[&collection].clone();
         let palette = self.palette;
@@ -488,11 +517,14 @@ impl DockerView {
                                         .id(("docker-table-cell", column))
                                         .min_w_0()
                                         .flex_basis(px(0.))
-                                        .flex_grow(if column == 0 { 2. } else { 1. })
+                                        .flex_grow(if column == 0 { name_weight } else { 1. })
                                         .px_2()
                                         .truncate()
                                         .tooltip({
-                                            let value = value.clone();
+                                            let value = match (&row.resource, column) {
+                                                (Resource::Image(image), 1) => image.id.clone(),
+                                                _ => value.clone(),
+                                            };
                                             move |window, cx| {
                                                 gpui_kit::component::tooltip::Tooltip::new(
                                                     value.clone(),
@@ -541,7 +573,12 @@ impl DockerView {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .child(div().flex_1().min_w_0().child(Input::new(query).small()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(Input::new(query).small().cleanable(true)),
+                    )
                     .child(self.action_button(collection.create_actions(), None, cx))
                     .child(
                         icon_button(
@@ -593,7 +630,7 @@ impl DockerView {
                                 div()
                                     .min_w_0()
                                     .flex_basis(px(0.))
-                                    .flex_grow(if column == 0 { 2. } else { 1. })
+                                    .flex_grow(if column == 0 { name_weight } else { 1. })
                                     .px_2()
                                     .truncate()
                                     .child(t!(label).into_owned())

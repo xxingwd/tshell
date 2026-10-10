@@ -29,10 +29,47 @@ impl ResourcePage {
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ImageReference {
+    pub id: String,
+    pub tag: Option<String>,
+}
+impl From<String> for ImageReference {
+    fn from(id: String) -> Self {
+        Self { id, tag: None }
+    }
+}
+pub(crate) fn image_references(images: &[ImageSummary]) -> Vec<ImageReference> {
+    let mut references = Vec::new();
+    for image in images {
+        let tags: Vec<_> = image
+            .repo_tags
+            .iter()
+            .filter(|tag| !tag.is_empty() && tag.as_str() != "<none>:<none>")
+            .collect();
+        if tags.is_empty() {
+            references.push(ImageReference::from(image.id.clone()));
+        } else {
+            references.extend(tags.into_iter().map(|tag| ImageReference {
+                id: image.id.clone(),
+                tag: Some(tag.clone()),
+            }));
+        }
+    }
+    references.sort_by(|left, right| {
+        left.tag
+            .is_none()
+            .cmp(&right.tag.is_none())
+            .then_with(|| left.tag.cmp(&right.tag))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    references.dedup();
+    references
+}
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Resource {
     Container(String),
     Project(String),
-    Image(String),
+    Image(ImageReference),
     Volume(String),
     Network(String),
     Info,
@@ -41,6 +78,12 @@ pub(crate) enum Resource {
     Daemon,
 }
 impl Resource {
+    pub fn inspect_key(&self) -> Self {
+        match self {
+            Self::Image(image) => Self::Image(image.id.clone().into()),
+            _ => self.clone(),
+        }
+    }
     pub fn page(&self) -> ResourcePage {
         match self {
             Self::Container(_) => ResourcePage::Containers,
@@ -106,7 +149,7 @@ pub(crate) fn image_name(image: &ImageSummary) -> String {
     if tags.is_empty() {
         short_id(&image.id).to_owned()
     } else {
-        tags.join(", ")
+        tags.into_iter().min().unwrap_or_default()
     }
 }
 pub(crate) fn short_id(id: &str) -> &str {
@@ -120,6 +163,14 @@ pub(crate) fn format_bytes(bytes: u64) -> String {
         unit += 1;
     }
     format!("{size:.1} {}", ["B", "KiB", "MiB", "GiB", "TiB"][unit])
+}
+pub(crate) fn format_image_size(bytes: u64) -> String {
+    let (mut size, mut unit) = (bytes as f64, 0);
+    while size >= 1000. && unit < 4 {
+        size /= 1000.;
+        unit += 1;
+    }
+    format!("{size:.1} {}", ["B", "kB", "MB", "GB", "TB"][unit])
 }
 pub(crate) struct Snapshot {
     pub images: Option<Vec<ImageSummary>>,
@@ -138,7 +189,7 @@ pub(crate) async fn list(docker: &Docker, page: ResourcePage) -> Result<Snapshot
         ResourcePage::Images => {
             result.images = Some(
                 docker
-                    .list_images(Some(ListImagesOptionsBuilder::default().all(true).build()))
+                    .list_images(Some(ListImagesOptionsBuilder::default().all(false).build()))
                     .await?,
             );
         }
@@ -158,9 +209,11 @@ pub(crate) async fn list(docker: &Docker, page: ResourcePage) -> Result<Snapshot
 }
 pub(crate) async fn inspect(docker: &Docker, resource: &Resource) -> Result<Value> {
     Ok(match resource {
-        Resource::Image(id) => {
-            let (detail, history) =
-                tokio::try_join!(docker.inspect_image(id), docker.image_history(id))?;
+        Resource::Image(image) => {
+            let (detail, history) = tokio::try_join!(
+                docker.inspect_image(&image.id),
+                docker.image_history(&image.id)
+            )?;
             let mut value = serde_json::to_value(detail)?;
             value["History"] = serde_json::to_value(history)?;
             value
@@ -182,7 +235,6 @@ pub(crate) struct Resources {
     pub page: ResourcePage,
     pub selected: BTreeMap<ResourcePage, Resource>,
     pub queries: BTreeMap<ResourcePage, Entity<InputState>>,
-    pub scrolls: BTreeMap<ResourcePage, UniformListScrollHandle>,
     pub focus: FocusHandle,
     pub images: Vec<ImageSummary>,
     pub volumes: Vec<Volume>,
@@ -238,10 +290,6 @@ impl Resources {
             page: ResourcePage::Containers,
             selected: BTreeMap::new(),
             queries,
-            scrolls: ResourcePage::ALL
-                .into_iter()
-                .map(|page| (page, UniformListScrollHandle::new()))
-                .collect(),
             images: Vec::new(),
             volumes: Vec::new(),
             networks: Vec::new(),
@@ -307,12 +355,13 @@ impl Resources {
         match resource {
             Resource::Container(id) => short_id(id).into(),
             Resource::Project(name) | Resource::Volume(name) => name.clone(),
-            Resource::Image(id) => self
-                .images
-                .iter()
-                .find(|image| &image.id == id)
-                .map(image_name)
-                .unwrap_or_else(|| short_id(id).into()),
+            Resource::Image(reference) => reference.tag.clone().unwrap_or_else(|| {
+                self.images
+                    .iter()
+                    .find(|image| image.id == reference.id)
+                    .map(image_name)
+                    .unwrap_or_else(|| short_id(&reference.id).into())
+            }),
             Resource::Network(id) => self
                 .networks
                 .iter()
@@ -334,7 +383,53 @@ pub(crate) fn host(target: &Target) -> tshell_host::Host {
 }
 #[cfg(test)]
 mod tests {
-    use super::{ContainerSummary, projects};
+    use super::{ContainerSummary, ImageSummary, image_references, projects};
+    #[test]
+    fn image_aliases_remain_separate_and_untagged_images_follow_named_references() {
+        let images = [
+            ImageSummary {
+                id: "sha256:000000000000-untagged".into(),
+                repo_tags: vec!["<none>:<none>".into()],
+                ..Default::default()
+            },
+            ImageSummary {
+                id: "sha256:shared-redis".into(),
+                repo_tags: vec![
+                    "redis:7.4-alpine".into(),
+                    "redis:7-alpine".into(),
+                    "redis:7-alpine".into(),
+                ],
+                ..Default::default()
+            },
+            ImageSummary {
+                id: "sha256:caddy".into(),
+                repo_tags: vec!["caddy:latest".into()],
+                ..Default::default()
+            },
+            ImageSummary {
+                id: "sha256:111111111111-untagged".into(),
+                ..Default::default()
+            },
+        ];
+        let references = image_references(&images);
+        assert_eq!(
+            references
+                .iter()
+                .map(|image| image.tag.as_deref())
+                .collect::<Vec<_>>(),
+            [
+                Some("caddy:latest"),
+                Some("redis:7-alpine"),
+                Some("redis:7.4-alpine"),
+                None,
+                None
+            ]
+        );
+        assert_eq!(references[1].id, references[2].id);
+        assert_ne!(references[1], references[2]);
+        assert_eq!(references[3].id, images[0].id);
+        assert_eq!(references[4].id, images[3].id);
+    }
     #[test]
     fn compose_projects_keep_exact_identity_and_all_source_files() {
         let labels = std::collections::HashMap::from([

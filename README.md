@@ -28,12 +28,11 @@ xterm.js or OpenSSH feature parity.
   Remote files use SFTP and remote Git commands; no remote Python or mount is
   required. Inline and side-by-side diffs support text selection/copy and
   character-level change highlighting. See [Git workspace](docs/git-workspace.md).
-- A Docker workspace for local and saved SSH Engines, with compact Containers,
-  Compose, Images and More tabs, resource tables with adaptable previews, resource
-  operations, logs and container terminals,
-  editable Compose YAML and conflict-aware daemon JSON with backup/restore.
-  It follows the selected host independently of terminal sessions. See
-  [Docker workspace](docs/docker-workspace.md).
+- A Docker workspace for local and saved SSH Engines, with a functional sidebar
+  menu, complete container lists, separate image-tag rows and adaptable previews.
+  It supports resource operations, logs, container terminals, editable Compose
+  YAML and conflict-aware daemon JSON with backup/restore, independently of
+  terminal sessions. See [Docker workspace](docs/docker-workspace.md).
 - A built-in editor for UTF-8 text files, background syntax highlighting,
   search, and conflict-aware remote saves.
 - A global SFTP transfer queue with concurrent uploads/downloads, directory

@@ -149,7 +149,7 @@ impl DockerView {
         let mut links = Vec::new();
         if let Some(image) = &detail.image {
             links.push((
-                crate::resources::Resource::Image(image.clone()),
+                crate::resources::Resource::Image(image.clone().into()),
                 config
                     .and_then(|config| config.image.clone())
                     .unwrap_or_else(|| crate::resources::short_id(image).into()),

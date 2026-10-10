@@ -135,7 +135,7 @@ pub(crate) fn run_ui_check(output: PathBuf) -> bool {
             "language selector", "session deletion persists and preserves other sessions", "host disconnect preserves configuration and other hosts",
             "new tab has no dialog", "session file state", "Markdown and HTML preview", "session directory and optional name", "session groups with compact tab separators", "named session creation and previous tab restoration",
             "SSH forwarding dialog dark and narrow light layout", "forwarding dialog X closes after cancelling or saving Add", "transfer panel dark and light layout", "transfer header drag and viewport constraints", "transfer launcher collapse and expansion", "individual transfer cancellation and clearing", "transfer hover retention and automatic collapse",
-            "Git raw Unicode/tab selection in both layouts", "Git word and line selection", "Git off-screen selection anchor", "terminal search focus, navigation and live output", "terminal search dark and narrow light layouts", "Ctrl-click links and unchanged ordinary TUI mouse reports", "terminal file link line/column and draft preservation", "terminal directory link Explorer root", "notification pane targeting and closed identity", "Docker resource tables, responsive adjacent previews, keyboard selection/expand/close/return and per-host restoration", "Docker four resource pages, 10k containers/images, YAML/JSON/output editors in dark/light narrow layouts", "Docker follows visible/hidden hosts, preserves resource selection and dirty drafts, rejects stale previews and works without sessions"
+            "Git raw Unicode/tab selection in both layouts", "Git word and line selection", "Git off-screen selection anchor", "terminal search focus, navigation and live output", "terminal search dark and narrow light layouts", "Ctrl-click links and unchanged ordinary TUI mouse reports", "terminal file link line/column and draft preservation", "terminal directory link Explorer root", "notification pane targeting and closed identity", "Docker separate image aliases, tagged-first ordering, untagged tail and complete IDs", "Docker resource tables, responsive adjacent previews, keyboard selection/expand/close/return and per-host restoration", "Docker functional sidebar menu, 10k containers/images, YAML/JSON/output editors in dark/light narrow layouts", "Docker follows visible/hidden hosts, preserves resource selection and dirty drafts, rejects stale previews and works without sessions"
                         ]})
                     }
                     Err(error) => {
@@ -3083,9 +3083,18 @@ async fn check_docker_workspace(
                     let focus = app.read(cx).docker.read(cx).check_navigation_focus();
                     focus.focus(window, cx);
                     window.dispatch_keystroke(Keystroke::parse("down").unwrap(), cx);
-                    app.read(cx).docker.read(cx).check_image_selection(1);
+                    app.read(cx)
+                        .docker
+                        .read(cx)
+                        .check_browser_navigation(3, false, false);
                     window.dispatch_keystroke(Keystroke::parse("up").unwrap(), cx);
-                    app.read(cx).docker.read(cx).check_image_selection(0);
+                    app.read(cx)
+                        .docker
+                        .read(cx)
+                        .check_browser_navigation(2, false, false);
+                    app.read(cx).docker.clone().update(cx, |docker, cx| {
+                        docker.check_resource_fixture(resource, window, cx)
+                    });
                 }
                 window.dispatch_event(
                     PlatformInput::MouseMove(MouseMoveEvent {
@@ -3138,14 +3147,46 @@ async fn check_docker_workspace(
                     .read(cx)
                     .check_browser_navigation(collection, false, true);
                 if collection == 2 {
+                    app.read(cx)
+                        .docker
+                        .read(cx)
+                        .check_image_reference(0, Some("caddy:latest"));
                     window.dispatch_keystroke(Keystroke::parse("end").unwrap(), cx);
-                    app.read(cx).docker.read(cx).check_image_selection(9_999);
+                    app.read(cx)
+                        .docker
+                        .read(cx)
+                        .check_image_reference(10_000, None);
+                    window.dispatch_keystroke(Keystroke::parse("escape").unwrap(), cx);
+                    window.refresh();
+                    let _ = window.draw(cx);
+                    #[cfg(feature = "ui-check-screenshots")]
+                    if let Some(directory) = std::env::var_os("TSHELL_UI_SCREENSHOT_DIR") {
+                        window.render_to_image()?.save(
+                            PathBuf::from(directory)
+                                .join(format!("docker-{_name}-untagged-images.png")),
+                        )?;
+                    }
                     window.dispatch_keystroke(Keystroke::parse("home").unwrap(), cx);
-                    app.read(cx).docker.read(cx).check_image_selection(0);
+                    app.read(cx)
+                        .docker
+                        .read(cx)
+                        .check_image_reference(0, Some("caddy:latest"));
                     window.dispatch_keystroke(Keystroke::parse("down").unwrap(), cx);
-                    app.read(cx).docker.read(cx).check_image_selection(1);
-                    window.dispatch_keystroke(Keystroke::parse("up").unwrap(), cx);
-                    app.read(cx).docker.read(cx).check_image_selection(0);
+                    app.read(cx)
+                        .docker
+                        .read(cx)
+                        .check_image_reference(0, Some("caddy:stable"));
+                    window.dispatch_keystroke(Keystroke::parse("down").unwrap(), cx);
+                    app.read(cx)
+                        .docker
+                        .read(cx)
+                        .check_image_reference(1, Some("redis:7-alpine"));
+                    window.dispatch_keystroke(Keystroke::parse("down").unwrap(), cx);
+                    app.read(cx)
+                        .docker
+                        .read(cx)
+                        .check_image_reference(1, Some("redis:7.4-alpine"));
+                    window.dispatch_keystroke(Keystroke::parse("home").unwrap(), cx);
                 }
                 window.dispatch_keystroke(Keystroke::parse("escape").unwrap(), cx);
                 app.read(cx)
