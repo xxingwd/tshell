@@ -8,8 +8,13 @@ impl AppView {
         self.open_tools(Page::Git, cx);
     }
     pub(super) fn show_terminal(&mut self, cx: &mut Context<Self>) {
+        let from_docker = self.page == Page::Docker;
         self.page = Page::Terminal;
         self.need_focus = true;
+        if from_docker && self.hosts[self.active].backend.is_none() {
+            self.switch_host(self.active, cx);
+            self.page = Page::Terminal;
+        }
         cx.notify();
     }
     pub(super) fn explorer_entity(&self) -> Option<Entity<Explorer>> {
@@ -344,6 +349,9 @@ impl AppView {
         }
     }
     pub(super) fn open_tools(&mut self, mode: Page, cx: &mut Context<Self>) {
+        if self.page == Page::Docker && self.hosts[self.active].backend.is_none() {
+            self.show_terminal(cx);
+        }
         if self.active_is_container() {
             self.message = Some(crate::t!("docker.file_tools_unavailable").into_owned());
             cx.notify();

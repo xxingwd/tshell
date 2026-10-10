@@ -1,10 +1,13 @@
 # Docker workspace
 
-Docker is a left-sidebar tool independent of terminal hosts and sessions. Select an
-Engine in its own picker. Switching terminal sessions, closing every terminal, or
-hiding the sidebar does not change the selected Engine. The header and status bar
-show its actual endpoint. The selected Engine and explicit local endpoint are saved
-in `workspace.json`; browsing state belongs to each Engine during the app lifetime.
+Docker is a left-sidebar tool that follows the workspace's shared host selector.
+The local host selects the local Engine; a saved SSH host selects its remote Engine.
+Switching sessions within a host, closing every terminal, or hiding the sidebar
+does not change that host's Engine. Selecting a host on the Docker page does not
+start a shell or tmux session. The header and status bar show the actual endpoint.
+The explicit local endpoint is saved in `workspace.json`; each Engine retains its
+own container selection, filters, detail tab and logs during the app lifetime.
+The previous independent `docker_target` preference is ignored when loading.
 
 ## Connections
 
@@ -71,7 +74,7 @@ Open extra container terminals from the Docker page; ordinary shell tabs and spl
 are unavailable inside a container session. Explorer/Git and terminal file links
 remain host tools and do not access a container filesystem. Closing a terminal
 cancels its attached exec connection; it does **not** stop/remove the container.
-Changing the Docker picker never retargets an existing terminal.
+Switching hosts never retargets an existing container terminal.
 
 ## Ownership and validation
 
@@ -85,7 +88,9 @@ HTTP upgrade, attached exec input/resize/drop, rejection of stopped-container ex
 and a loopback russh fixture proving stderr isolation and channel cancellation.
 Native Windows checks exercise 10,000 containers, bounded logs, inspect/overview,
 dark/light themes, narrow layouts, sidebar collapse, delayed-response rejection and
-Engine independence when no terminal sessions exist. These are protocol/UI fixtures.
+host-following while the Docker page is visible or hidden, per-Engine browsing
+restoration, same-host session changes and operation with no terminal sessions.
+These are protocol/UI fixtures.
 
 The development machine used for this change has no Docker installation and no
 configured `TSHELL_SSH_TEST_HOST`. Real local/remote Engine permissions, long-running

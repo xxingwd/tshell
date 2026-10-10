@@ -41,7 +41,7 @@ Keep the repository shallow and put code beside the subsystem it owns:
 - `crates/tshell-explorer/`, `crates/tshell-git/` and `crates/tshell-docker/` own
   their tool entities, business state, IO and views. They share host/UI crates
   without depending on one another or the application. Docker uses Bollard directly.
-  Its Engine target is independent of terminal session selection.
+  Its Engine follows the workspace host selector, independently of terminal session selection.
 - `src/terminal_theme.rs` and `src/terminal_theme/` contain terminal palettes,
   custom theme persistence, and theme defaults.
 - `src/update.rs` and `src/update/` contain Windows update discovery,

@@ -135,7 +135,7 @@ pub(crate) fn run_ui_check(output: PathBuf) -> bool {
             "language selector", "session deletion persists and preserves other sessions", "host disconnect preserves configuration and other hosts",
             "new tab has no dialog", "session file state", "Markdown and HTML preview", "session directory and optional name", "session groups with compact tab separators", "named session creation and previous tab restoration",
             "SSH forwarding dialog dark and narrow light layout", "forwarding dialog X closes after cancelling or saving Add", "transfer panel dark and light layout", "transfer header drag and viewport constraints", "transfer launcher collapse and expansion", "individual transfer cancellation and clearing", "transfer hover retention and automatic collapse",
-            "Git raw Unicode/tab selection in both layouts", "Git word and line selection", "Git off-screen selection anchor", "terminal search focus, navigation and live output", "terminal search dark and narrow light layouts", "Ctrl-click links and unchanged ordinary TUI mouse reports", "terminal file link line/column and draft preservation", "terminal directory link Explorer root", "notification pane targeting and closed identity", "Docker 10k container list and bounded logs in dark/light narrow layouts", "Docker target independence with no terminal sessions and late response rejection"
+            "Git raw Unicode/tab selection in both layouts", "Git word and line selection", "Git off-screen selection anchor", "terminal search focus, navigation and live output", "terminal search dark and narrow light layouts", "Ctrl-click links and unchanged ordinary TUI mouse reports", "terminal file link line/column and draft preservation", "terminal directory link Explorer root", "notification pane targeting and closed identity", "Docker 10k container list and bounded logs in dark/light narrow layouts", "Docker follows visible/hidden host changes, restores Engine state and works without sessions"
                         ]})
                     }
                     Err(error) => {
@@ -2915,7 +2915,37 @@ async fn check_docker_workspace(
     app: Entity<AppView>,
     cx: &mut AsyncApp,
 ) -> anyhow::Result<()> {
-    for (name, appearance, viewport) in [
+    let (previous, remote, remote_id) = cx.update_window(handle.into(), |_, _, cx| {
+        app.update(cx, |app, _| {
+            let config = HostDefinition {
+                id: Default::default(),
+                ssh: tshell_host::SshConfig {
+                    destination: "docker-ui-check.invalid".into(),
+                    user: "test".into(),
+                    port: None,
+                    identity_file: None,
+                },
+                name: "Docker host fixture".into(),
+                tmux: true,
+                socket: None,
+            };
+            let remote_id = config.id.clone();
+            let remote = app.hosts.len();
+            app.hosts.push(Host {
+                name: config.name.clone(),
+                config: Some(config),
+                backend: None,
+                snapshot: Snapshot::default(),
+                pending: Vec::new(),
+                views: BTreeMap::new(),
+                read_notices: BTreeMap::new(),
+                collapsed_sessions: BTreeSet::new(),
+                viewport: None,
+            });
+            (app.active, remote, remote_id)
+        })
+    })?;
+    for (_name, appearance, viewport) in [
         ("dark", Appearance::Dark, size(px(1320.), px(840.))),
         ("light-small", Appearance::Light, size(px(860.), px(520.))),
     ] {
@@ -2931,22 +2961,56 @@ async fn check_docker_workspace(
                     app.set_appearance(appearance, window, cx);
                     app.page = Page::Docker;
                     app.sidebar_collapsed = false;
-                    app.docker
-                        .update(cx, |docker, cx| docker.check_fixture(tab, window, cx));
-                    let target = app.docker.read(cx).selected_target();
-                    let previous = app.active;
-                    app.active = 0;
-                    app.sync(cx);
+                    let remote_tab = (tab + 1) % 3;
+                    let targets = docker::targets(&app.hosts, app.docker_endpoint.clone());
+                    app.docker.update(cx, |docker, cx| {
+                        docker.set_targets(targets, window, cx);
+                        docker.check_fixture(remote_id.clone(), remote_tab, window, cx);
+                        docker.check_fixture(tshell_host::HostId::local(), tab, window, cx);
+                    });
+                    app.switch_host(remote, cx);
+                    app.prepare_docker(window, cx);
+                    assert_eq!(
+                        app.docker.read(cx).selected_target(),
+                        Some(remote_id.clone())
+                    );
+                    assert!(app.hosts[remote].backend.is_none());
+                    app.docker.read(cx).check_fixture_state(remote_tab, cx);
+                    app.switch_host(0, cx);
+                    app.prepare_docker(window, cx);
                     assert_eq!(app.page, Page::Docker);
+                    let target = Some(tshell_host::HostId::local());
                     assert_eq!(app.docker.read(cx).selected_target(), target);
+                    app.docker.read(cx).check_fixture_state(tab, cx);
+                    // Hidden pages follow the host without opening a query or losing state.
+                    app.page = Page::Terminal;
+                    app.prepare_docker(window, cx);
+                    app.active = remote;
+                    app.sync(cx);
+                    app.prepare_docker(window, cx);
+                    assert_eq!(
+                        app.docker.read(cx).selected_target(),
+                        Some(remote_id.clone())
+                    );
+                    app.page = Page::Docker;
+                    app.prepare_docker(window, cx);
+                    app.docker.read(cx).check_fixture_state(remote_tab, cx);
+                    app.switch_host(0, cx);
+                    app.prepare_docker(window, cx);
+                    if let Some(session) = app.hosts[0].snapshot.sessions.last() {
+                        app.act(Action::SelectSession(session.id.clone()), cx);
+                        app.prepare_docker(window, cx);
+                        assert_eq!(app.docker.read(cx).selected_target(), target);
+                        app.docker.read(cx).check_fixture_state(tab, cx);
+                    }
                     let backend = app.hosts[0].backend.take();
                     app.hosts[0].snapshot = Snapshot::default();
                     app.sync(cx);
+                    app.prepare_docker(window, cx);
                     assert!(app.hosts[0].snapshot.sessions.is_empty());
                     assert_eq!(app.page, Page::Docker);
                     assert_eq!(app.docker.read(cx).selected_target(), target);
                     app.hosts[0].backend = backend;
-                    app.active = previous;
                     app.sync(cx);
                 });
                 window.dispatch_event(
@@ -2963,7 +3027,7 @@ async fn check_docker_workspace(
                 if let Some(directory) = std::env::var_os("TSHELL_UI_SCREENSHOT_DIR") {
                     window
                         .render_to_image()?
-                        .save(PathBuf::from(directory).join(format!("docker-{name}-{tab}.png")))?;
+                        .save(PathBuf::from(directory).join(format!("docker-{_name}-{tab}.png")))?;
                 }
                 Ok::<_, anyhow::Error>(())
             })??;
@@ -2977,5 +3041,14 @@ async fn check_docker_workspace(
             let _ = window.draw(cx);
         })?;
     }
+    cx.update_window(handle.into(), |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.active = previous;
+            app.hosts.remove(remote);
+            app.page = Page::Terminal;
+            app.sync(cx);
+            app.prepare_docker(window, cx);
+        });
+    })?;
     Ok(())
 }

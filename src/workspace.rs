@@ -100,7 +100,6 @@ struct Preferences {
     forwards: BTreeMap<String, Vec<crate::ssh_forward::LocalForward>>,
     sessions: BTreeMap<String, Vec<crate::backend::SessionProfile>>,
     docker_endpoint: Option<String>,
-    docker_target: Option<tshell_host::HostId>,
     last_host: String,
     appearance: Appearance,
     sidebar_collapsed: bool,
@@ -828,7 +827,7 @@ impl AppView {
         }
         let docker_targets = docker::targets(&hosts, prefs.docker_endpoint.clone());
         let docker = cx.new(|cx| {
-            let mut view = tshell_docker::DockerView::new(
+            tshell_docker::DockerView::new(
                 docker_targets,
                 palette,
                 terminal_palette,
@@ -840,9 +839,7 @@ impl AppView {
                 },
                 window,
                 cx,
-            );
-            view.restore_target(prefs.docker_target.clone());
-            view
+            )
         });
         let (workspace_updates, updates) = async_channel::bounded(1);
         let initial_window_size =
@@ -1162,7 +1159,6 @@ impl AppView {
             keybindings: self.keybindings.clone(),
             forwards: self.forwards.clone(),
             docker_endpoint: self.docker_endpoint.clone(),
-            docker_target: self.docker.read(cx).selected_target(),
             hosts: self.hosts.iter().filter_map(|h| h.config.clone()).collect(),
             sessions: self
                 .hosts
@@ -1450,7 +1446,7 @@ impl AppView {
         self.message = None;
         self.need_focus = true;
         let host = &mut self.hosts[index];
-        if host.backend.is_none() {
+        if host.backend.is_none() && self.page != Page::Docker {
             if let Some(config) = host.config.clone() {
                 host.backend = if config.tmux {
                     Some(Backend::Tmux(TmuxClient::connect(config)))
@@ -3739,9 +3735,7 @@ impl AppView {
             ))
             .border_r_1()
             .border_color(rgb(self.palette.border))
-            .when(self.page != Page::Docker, |sidebar| {
-                sidebar.child(self.host_list(cx))
-            })
+            .child(self.host_list(cx))
             .child(self.activity_switcher(cx))
             .child(self.sidebar_header(cx))
             .child(div().flex_1().min_h_0().child(content))

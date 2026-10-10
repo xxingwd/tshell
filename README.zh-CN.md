@@ -23,8 +23,9 @@ GPUI 的应用中。终端引擎使用 Rust 原生实现和 `alacritty_terminal`
   远程 Git 使用目标主机上的 Git，不需要远程 Python 或文件挂载。
   并排和行内差异支持选择、复制文本及字符级变更高亮。
   详见 [Git 工作区](docs/git-workspace.md)。
-- 独立 Docker 工作区，支持本地及已保存 SSH 主机的 Engine：容器搜索、Compose 分组、
-  概览/配置、日志、启停/重启/删除及容器终端。Engine 选择独立于终端会话。
+- Docker 工作区，支持本地及已保存 SSH 主机的 Engine：容器搜索、Compose 分组、
+  概览/配置、日志、启停/重启/删除及容器终端。Engine 随当前主机切换，按主机保留
+  浏览状态，不依赖终端会话。
   详见 [Docker 工作区](docs/docker-workspace.md)。
 - 内置 UTF-8 文本编辑器、后台语法高亮、搜索和带冲突检测的远程保存。
 - 全局 SFTP 传输队列，支持并发上传/下载、目录扫描、字节进度、拖动面板、

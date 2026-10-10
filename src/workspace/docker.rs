@@ -27,7 +27,7 @@ impl AppView {
     }
     pub(super) fn prepare_docker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let targets = targets(&self.hosts, self.docker_endpoint.clone());
-        let default = self.hosts[self.active].identity();
+        let host_id = self.hosts[self.active].identity();
         let visible = self.page == Page::Docker;
         self.docker.update(cx, |docker, cx| {
             docker.palette = self.palette;
@@ -35,7 +35,7 @@ impl AppView {
             docker.font_family = self.font_family.clone();
             docker.font_size = self.font_size;
             docker.set_targets(targets, window, cx);
-            docker.set_visible(visible, default, window, cx);
+            docker.set_visible(visible, host_id, window, cx);
         });
     }
     pub(super) fn docker_event(
@@ -45,7 +45,6 @@ impl AppView {
         cx: &mut Context<Self>,
     ) {
         match event {
-            Event::TargetSelected(_) => self.save(cx),
             Event::LocalEndpointChanged(path) => {
                 self.docker_endpoint = path;
                 self.save(cx);

@@ -20,9 +20,10 @@ one `SessionWorkspace` per stable host/session identity; Explorer/Git are create
 lazily and preserve documents and diffs in their owning entities. Host IDs migrate
 old endpoint-based session/forwarding keys without requiring manual config edits.
 
-All four entries stay in the left sidebar. Docker replaces host/session navigation
-with its own Engine picker and container list. Its Engine does not follow terminal
-session selection and remains usable with no terminal sessions. See
+All four entries stay in the left sidebar and share the host selector. Docker shows
+the selected host's Engine and container list; it does not depend on terminal session
+selection and remains usable with no terminal sessions. Switching hosts in Docker
+does not create a terminal session. See
 [Docker workspace](docker-workspace.md) and [the implementation plan](../todo.md).
 
 ## Shared Layout

@@ -30,7 +30,6 @@ pub enum Event {
         command: Vec<String>,
     },
     LocalEndpointChanged(Option<String>),
-    TargetSelected(HostId),
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tab {
@@ -134,6 +133,8 @@ pub struct DockerView {
     logs_worker: Option<Worker>,
     events_worker: Option<Worker>,
     operations: BTreeMap<HostId, Worker>,
+    #[cfg(debug_assertions)]
+    fixture: bool,
     _updates: Task<()>,
 }
 impl EventEmitter<Event> for DockerView {}
@@ -193,14 +194,13 @@ impl DockerView {
             logs_worker: None,
             events_worker: None,
             operations: BTreeMap::new(),
+            #[cfg(debug_assertions)]
+            fixture: false,
             _updates: updates,
         }
     }
     pub fn selected_target(&self) -> Option<HostId> {
         self.selected.clone()
-    }
-    pub fn restore_target(&mut self, id: Option<HostId>) {
-        self.selected = id;
     }
     pub fn target(&self) -> Option<&Target> {
         let id = self.selected.as_ref()?;
@@ -248,27 +248,20 @@ impl DockerView {
     pub fn set_visible(
         &mut self,
         visible: bool,
-        default: HostId,
+        host_id: HostId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.visible == visible {
+        let target_changed = self.selected.as_ref() != Some(&host_id);
+        if self.visible == visible && !target_changed {
             return;
         }
         self.visible = visible;
         if !visible {
             self.cancel_browsing();
+            self.selected = Some(host_id);
         } else {
-            if self.selected.is_none() {
-                self.selected = Some(if self.targets.iter().any(|target| target.id == default) {
-                    default
-                } else {
-                    HostId::local()
-                });
-            }
-            if let Some(id) = self.selected.clone() {
-                self.select_target(id, window, cx);
-            }
+            self.select_target(host_id, window, cx);
         }
         cx.notify();
     }
@@ -297,7 +290,6 @@ impl DockerView {
         };
         self.cancel_browsing();
         self.selected = Some(id.clone());
-        cx.emit(Event::TargetSelected(id.clone()));
         if !self.engines.contains_key(&id) {
             let query = cx
                 .new(|cx| InputState::new(window, cx).placeholder(t!("docker.search_containers")));
@@ -364,6 +356,10 @@ impl DockerView {
         self.refresh(cx);
     }
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        #[cfg(debug_assertions)]
+        if self.fixture {
+            return;
+        }
         if !self.visible {
             return;
         }
@@ -1085,12 +1081,19 @@ impl DockerView {
         );
     }
     /// Native UI fixture; never opens a real Engine or an SSH connection.
-    pub fn check_fixture(&mut self, tab: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn check_fixture(
+        &mut self,
+        host_id: HostId,
+        tab: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.fixture = true;
         self.cancel_browsing();
         self.visible = false;
-        self.select_target(HostId::local(), window, cx);
+        self.select_target(host_id, window, cx);
         self.visible = true;
-        let engine = self.engine_mut().expect("local fixture Engine");
+        let engine = self.engine_mut().expect("fixture Engine");
         engine.info = Some(
             serde_json::from_value(
                 serde_json::json!({"OperatingSystem":"Linux","Name":"fixture-engine"}),
@@ -1111,7 +1114,7 @@ impl DockerView {
                 ..Default::default()
             })
             .collect();
-        let id = engine.containers[0].id.clone().unwrap();
+        let id = engine.containers[tab].id.clone().unwrap();
         engine.selected = Some(id.clone());
         engine.detail = Some(serde_json::from_value(serde_json::json!({
             "Id":id,"Name":"/service-0","Created":"2026-10-09T00:00:00Z",
@@ -1125,6 +1128,15 @@ impl DockerView {
             _ => Tab::Overview,
         };
         engine.paused = true;
+        engine.auto_scroll = tab % 2 == 0;
+        engine.filter = if tab == 1 {
+            Filter::Running
+        } else {
+            Filter::All
+        };
+        engine.logs_query.update(cx, |query, cx| {
+            query.set_value(format!("fixture-{tab}"), window, cx)
+        });
         engine.log.clear();
         engine.log.push("中文 logs \n".repeat(500_000).as_bytes());
         assert!(engine.log.text().len() <= 2 * 1024 * 1024);
@@ -1157,5 +1169,33 @@ impl DockerView {
         assert_eq!(self.engine().unwrap().containers.len(), 10_000);
         assert!(!self.engine().unwrap().log.text().ends_with("stale"));
         cx.notify();
+    }
+    pub fn check_fixture_state(&self, tab: usize, cx: &App) {
+        let engine = self.engine().expect("fixture Engine");
+        assert_eq!(engine.containers.len(), 10_000);
+        assert_eq!(engine.selected, engine.containers[tab].id);
+        assert!(engine.paused);
+        assert!(!engine.log.text().is_empty());
+        assert!(
+            engine.tab
+                == match tab {
+                    1 => Tab::Logs,
+                    2 => Tab::Inspect,
+                    _ => Tab::Overview,
+                }
+        );
+        assert_eq!(engine.auto_scroll, tab % 2 == 0);
+        assert!(
+            engine.filter
+                == if tab == 1 {
+                    Filter::Running
+                } else {
+                    Filter::All
+                }
+        );
+        assert_eq!(
+            engine.logs_query.read(cx).value().as_ref(),
+            format!("fixture-{tab}")
+        );
     }
 }

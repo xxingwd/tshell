@@ -9,7 +9,6 @@ use gpui_kit::component::{
     Disableable, Icon, Selectable, Sizable,
     button::{Button, ButtonVariants},
     input::Input,
-    menu::{DropdownMenu, PopupMenuItem},
 };
 use gpui_kit::{prelude::*, *};
 use std::collections::BTreeMap;
@@ -21,31 +20,6 @@ enum Row {
 }
 impl DockerView {
     pub fn sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let owner = cx.entity().downgrade();
-        let targets = self.targets.clone();
-        let label = self
-            .target()
-            .map(|target| target.name.clone())
-            .unwrap_or_else(|| t!("docker.choose_engine").into_owned());
-        let selected = self.selected.clone();
-        let picker = button("docker-engine", IconName::Server, label)
-            .w_full()
-            .justify_start()
-            .dropdown_menu(move |mut menu, _, _| {
-                for target in &targets {
-                    let (owner, id) = (owner.clone(), target.id.clone());
-                    menu = menu.item(
-                        PopupMenuItem::new(target.name.clone())
-                            .checked(selected.as_ref() == Some(&id))
-                            .on_click(move |_, window, cx| {
-                                let _ = owner.update(cx, |this, cx| {
-                                    this.select_target(id.clone(), window, cx)
-                                });
-                            }),
-                    );
-                }
-                menu
-            });
         let mut rows = Vec::new();
         if let Some(engine) = self.engine() {
             let query = engine.query.read(cx).value().to_lowercase();
@@ -139,12 +113,7 @@ impl DockerView {
             }),
         )
         .size_full();
-        let mut sidebar = div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(div().px_1().child(picker));
+        let mut sidebar = div().size_full().flex().flex_col().gap_1();
         if let Some(engine) = self.engine() {
             let filter = engine.filter;
             sidebar = sidebar

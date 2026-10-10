@@ -82,14 +82,15 @@ tshell 应用
 | 会话对应的工作目录与 Explorer/Git Entity | 主应用的 `SessionWorkspace` |
 | 文件树、文档、未保存内容、编辑器与预览 | 所属 Explorer Entity |
 | Git 变更、Diff、选择、滚动与布局偏好 | 所属 Git Entity；需要跨会话共享的现有偏好由应用保存 |
-| Engine 目标、容器选择、日志、操作与连接 | 独立 Docker Entity，按 Engine 保存浏览状态 |
+| 当前 Engine 目标 | 主应用从当前 HostId 派生，复用左侧主机选择器 |
+| Engine 连接、容器选择、日志与操作 | Docker Entity，按 HostId 保存浏览状态 |
 | 上传/下载排队与全局任务 UI | 主应用的全局传输队列 |
 
 `SessionWorkspace` 将一个会话的工作目录和两个工具实体放在一起，直接替代主应用当前分散的文件/Git 状态与恢复映射。工具只接收 host handle 与目录，不接收 `AppView`、backend、tmux 或完整会话对象。实体按实际使用惰性创建；页隐藏时隐藏原生预览窗口、停用视图专属任务，关闭会话前处理未保存内容。
 
 Explorer/Git 首次打开时由主应用从终端解析目录，随后保持该会话的工具根目录；不因 pane 切换或 shell `cd` 自动丢失浏览/编辑状态。目录变更经宿主协调，两工具获取相同工作目录，Git 自行定位仓库根。
 
-Docker 首次可默认选择当前主机，此后目标只由明确选择改变。切换或关闭任何终端会话不会切 Engine；没有终端会话也能连接本地或已保存 SSH 主机。面板一直显示真实 Engine 来源，不能用当前终端主机标题替代它。
+Docker 跟随工作区共用的主机选择器：本地主机对应本地 Engine，SSH 主机对应远端 Engine；每个主机保留自己的容器选择、筛选、详情页和日志状态。同一主机内切换或关闭终端会话不会切 Engine，没有终端会话也能连接 Docker。Docker 页切换主机不创建 shell/tmux 会话，面板一直显示真实 Engine 来源。
 
 ### 3.3 事件只用于宿主边界
 
@@ -215,11 +216,11 @@ connector 放在 Docker crate 的一个聚焦模块中：复用 host 的认证�
 - [x] 锁定 Bollard 发布版本；直接接通本地默认/显式 endpoint、版本协商与容器列表。
 - [x] 实现小型 russh connector；协议 fixture 验证版本协商、HTTP upgrade、exec 输入/resize/关闭、响应前取消，以及真实 loopback russh stderr 隔离与通道关闭。
 - [ ] 真实 Engine 验收：Windows 本地及 SSH 目标上的日志/exec/resize、权限与断线。当前机器没有 Docker，未配置测试 SSH 主机。
-- [x] 接入独立 DockerTarget、Engine 选择和左侧 Docker 页面；不要求存在终端会话。
+- [x] 接入按 HostId 定位的 DockerTarget、共用主机选择器和左侧 Docker 页面；不要求存在终端会话。
 - [x] 完成容器列表、分组、概览和按 Engine 保存的选择/过滤状态。
 - [x] 完成主机配置变更/删除、Engine 切换、旧请求失效和显式重连。
 
-验收：本地与 SSH 使用同一套 Bollard 业务调用；独立 Docker 目标不随终端会话或主机选择变化。
+验收：本地与 SSH 使用同一套 Bollard 业务调用；Docker 随主机切换，按主机保留浏览状态，同一主机内不随终端会话变化。
 
 ### 阶段四：完成 Docker 日常操作与容器终端
 
@@ -265,17 +266,19 @@ cargo build --locked --release --bin tshell
 
 - `cargo fmt --all -- --check` 与 `cargo check --workspace --locked --all-targets --features ui-check-screenshots` 通过。
 - `cargo test --workspace --locked`：221 通过，20 忽略；忽略项需要显式远端环境。
-- 原生 `--workspace-ui-check` 通过；深/浅主题、860 x 520 窄窗口、万容器列表、日志/配置 editor 的真实主区高度、侧栏折叠和无终端会话时的 Engine 独立性均已检查。使用隔离 `TSHELL_DATA_DIR`；跳过系统剪贴板以保留用户内容。
+- 原生 `--workspace-ui-check` 通过；深/浅主题、860 x 520 窄窗口、万容器列表、日志/配置 editor 的真实主区高度、侧栏折叠、主机切换与无终端会话均已检查。使用隔离 `TSHELL_DATA_DIR`；跳过系统剪贴板以保留用户内容。
 - `cargo build --locked --release --bin tshell --target-dir target/module-check` 通过；未覆盖用户运行中的 debug/release 可执行文件。
 - 使用 `tools/package-windows.ps1 -Executable target/module-check/release/tshell.exe -OutputDirectory artifacts/module-release-package` 完成独立 Windows 发行打包；EXE、ZIP 内 EXE、更新 JSON 和 SHA256SUMS 哈希一致。
 - 详细本地报告：`tmp/modularization/final-tests.log`、`tmp/modularization/final-check.log`、`tmp/modularization/release-verified.log`、`artifacts/module-complete-ui.json`；画面在 `artifacts/module-complete-screenshots/`。这些生成产物不提交。
 - 当前机器没有 Docker Desktop/Engine，也未配置 `TSHELL_SSH_TEST_HOST`。已完成协议与 loopback SSH fixture，未将其冒充真实 Engine/SFTP/tmux 环境验收。
 
+2026-10-10 主机联动调整：Docker 共用左侧主机选择器，删除独立 Engine picker 和 `docker_target` 偏好。页隐藏时只更新目标，打开时才创建所需控件和连接；Docker 页切主机不启动 shell/tmux，同一主机内切/关闭会话不会切 Engine。原生回归覆盖显示/隐藏时的本地与 SSH 主机切换、各 Engine 的容器/详情页/过滤/日志状态恢复及原有断开行为。`cargo test --workspace --locked` 仍为 221 通过、20 忽略，release 编译检查和格式检查通过；本轮报告在 `artifacts/docker-host-follow-ui.json`，截图在 `artifacts/docker-host-follow-screenshots/`，均不提交。
+
 | 必须验证 | 场景 |
 | --- | --- |
 | 既有功能 | SSH/跳板/交互认证、tmux 服务端所有权、转发、指标、全局传输 |
 | 工作区 | 各会话目录与未保存内容恢复、Git 打开原来源文件、主题/语言/焦点即时更新 |
-| Docker 独立性 | 没有终端会话、关闭全部会话、切换终端主机、显式切 Engine |
+| Docker 主机范围 | 本地/SSH 主机切换、隐藏页面后切主机、各 Engine 状态恢复、无终端会话、同主机内切/关闭会话 |
 | 异步与 IO | 原目标确认、旧结果迟到、配置变更、stderr 隔离、取消、连接寿命与内存限额 |
 | 容器终端 | 原 Engine 固定、TTY 输入输出、resize、关闭语义与 Linux/Windows 命令 |
 | 界面 | 深色/浅色、1320 x 840 与 860 x 520、侧栏折叠、预览子窗口、原生选择/复制/滚动 |
