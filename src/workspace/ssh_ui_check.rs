@@ -50,7 +50,13 @@ pub(super) async fn check(
             root.style().size.height = Some(viewport.height.into());
             window.resize(viewport);
         })?;
-        for page in ["summary", "forward", "forward-add", "forward-socks"] {
+        for page in [
+            "summary",
+            "forward",
+            "forward-add",
+            "forward-edit",
+            "forward-socks",
+        ] {
             cx.update_window(handle.into(), |_, window, cx| -> anyhow::Result<()> {
                 app.update(cx, |app, cx| -> anyhow::Result<()> {
                     app.close_modal(window, cx);
@@ -102,6 +108,14 @@ pub(super) async fn check(
                             } else {
                                 crate::ssh_forward::ForwardKind::Local
                             };
+                        }
+                        "forward-edit" => {
+                            app.open_forward_editor(window, cx);
+                            app.edit_forward(index, 1, window, cx);
+                            anyhow::ensure!(
+                                app.editing_forward == Some((index, 1)),
+                                "edit row did not open"
+                            );
                         }
                         _ => unreachable!(),
                     }
@@ -157,7 +171,7 @@ pub(super) async fn check(
             })?;
             Ok(())
         };
-        click(point(left + px(736.), px(126.)), cx)?;
+        click(point(left + px(742.), px(126.)), cx)?;
         anyhow::ensure!(
             app.read_with(cx, |app, _| app.forward_add_form),
             "Add click did not open the draft row"
@@ -165,7 +179,7 @@ pub(super) async fn check(
         let count = app.read_with(cx, |app, _| {
             app.forwards.values().map(Vec::len).sum::<usize>()
         });
-        click(point(left + px(742.), px(190. + count as f32 * 48.)), cx)?;
+        click(point(left + px(710.), px(158. + count as f32 * 36.)), cx)?;
         anyhow::ensure!(
             app.read_with(cx, |app, _| app.forward_form && !app.forward_add_form),
             "Cancel draft click did not return to the forwarding list"
@@ -184,12 +198,12 @@ pub(super) async fn check(
                 app.forward_host_index = Some(index);
             });
         })?;
-        click(point(left + px(736.), px(126.)), cx)?;
+        click(point(left + px(742.), px(126.)), cx)?;
         anyhow::ensure!(
             app.read_with(cx, |app, _| app.forward_add_form),
             "Add click did not reopen the draft row"
         );
-        click(point(left + px(696.), px(190. + count as f32 * 48.)), cx)?;
+        click(point(left + px(678.), px(158. + count as f32 * 36.)), cx)?;
         anyhow::ensure!(
             app.read_with(cx, |app, _| app.forward_form && !app.forward_add_form),
             "Save click did not return to the forwarding list"
@@ -209,6 +223,68 @@ pub(super) async fn check(
             window.close_all_dialogs(cx);
             let first_key = forward_storage_key(app.hosts[index].config.as_ref().unwrap());
             let second_key = forward_storage_key(app.hosts[index + 1].config.as_ref().unwrap());
+            app.open_forward_editor(window, cx);
+            let original = app.forwards[&first_key][1].clone();
+            app.edit_forward(index, 1, window, cx);
+            app.forward_local_port
+                .update(cx, |input, cx| input.set_value("0", window, cx));
+            app.add_forward(window, cx);
+            anyhow::ensure!(
+                app.editing_forward == Some((index, 1))
+                    && app.forward_error.is_some()
+                    && app.forwards[&first_key][1] == original,
+                "invalid edit changed the saved rule or dismissed its inputs"
+            );
+            app.finish_forward_add(window, cx);
+            anyhow::ensure!(
+                app.forwards[&first_key][1] == original,
+                "cancel changed the saved rule"
+            );
+            if let Some(mut tunnel) = app.forward_processes.remove(&(first_key.clone(), 1)) {
+                tunnel.stop();
+            }
+            app.forwards.get_mut(&first_key).unwrap()[1].bind_host = "127.0.0.2".into();
+            app.forwards.get_mut(&first_key).unwrap()[1].target_host = "internal.invalid".into();
+            app.edit_forward(index, 1, window, cx);
+            app.add_forward(window, cx);
+            anyhow::ensure!(
+                !app.forward_processes.contains_key(&(first_key.clone(), 1)),
+                "saving an unchanged stopped rule restarted it"
+            );
+            app.edit_forward(index, 1, window, cx);
+            app.forward_local_port
+                .update(cx, |input, cx| input.set_value("18081", window, cx));
+            app.forward_target_port
+                .update(cx, |input, cx| input.set_value("8181", window, cx));
+            app.add_forward(window, cx);
+            let edited = &app.forwards[&first_key][1];
+            anyhow::ensure!(
+                app.forwards[&first_key].len() == 2
+                    && edited.local_port == 18081
+                    && edited.target_port == 8181
+                    && edited.bind_host == "127.0.0.2"
+                    && edited.target_host == "internal.invalid"
+                    && app.forward_processes.contains_key(&(first_key.clone(), 0))
+                    && app.forward_processes.contains_key(&(second_key.clone(), 0)),
+                "edit lost endpoint details, duplicated the rule or stopped an unrelated tunnel"
+            );
+            anyhow::ensure!(
+                Preferences::load().forwards == app.forwards,
+                "edited rules were not persisted"
+            );
+            app.edit_forward(index, 1, window, cx);
+            app.forward_host_index = Some(index + 1);
+            app.add_forward(window, cx);
+            anyhow::ensure!(
+                app.forwards[&first_key].len() == 1
+                    && app.forwards[&second_key].len() == 2
+                    && app.forwards[&second_key][1].local_port == 18081,
+                "changing a rule's SSH host did not move it"
+            );
+            app.edit_forward(index + 1, 1, window, cx);
+            app.forward_host_index = Some(index);
+            app.add_forward(window, cx);
+            app.close_modal(window, cx);
             app.remove_forward(index, 0, cx);
             anyhow::ensure!(
                 app.forwards[&first_key].len() == 1,

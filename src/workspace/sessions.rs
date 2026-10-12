@@ -61,9 +61,8 @@ impl AppView {
             )
             .child(
                 div().flex().justify_end().child(
-                    Button::new("save-session")
-                        .label(crate::t!("ws.save"))
-                        .primary()
+                    icon_button("save-session", IconName::Check, crate::t!("ws.save"))
+                        .text_color(rgb(self.palette.accent))
                         .on_click(cx.listener(|this, _, window, cx| this.create_tab(window, cx))),
                 ),
             )
@@ -138,15 +137,13 @@ impl AppView {
                             .truncate()
                             .child(session.name.clone()),
                     )
-                    .when(collapsed && unread, |row| {
-                        row.child(
-                            div()
-                                .size(px(5.))
-                                .flex_none()
-                                .rounded_full()
-                                .bg(rgb(p.accent)),
-                        )
-                    })
+                    .child(
+                        div()
+                            .size(px(5.))
+                            .flex_none()
+                            .rounded_full()
+                            .when(collapsed && unread, |dot| dot.bg(rgb(p.accent))),
+                    )
                     .child(
                         div()
                             .size(px(22.))
@@ -269,19 +266,11 @@ impl AppView {
                                     .line_height(relative(1.25))
                                     .child(label),
                             )
-                            .when(
+                            .child(div().size(px(5.)).flex_none().rounded_full().when(
                                 pane.notice_count
                                     > host.read_notices.get(&pane.id).copied().unwrap_or(0),
-                                |row| {
-                                    row.child(
-                                        div()
-                                            .size(px(5.))
-                                            .flex_none()
-                                            .rounded_full()
-                                            .bg(rgb(p.accent)),
-                                    )
-                                },
-                            )
+                                |dot| dot.bg(rgb(p.accent)),
+                            ))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.select_terminal(
                                     session_id.clone(),

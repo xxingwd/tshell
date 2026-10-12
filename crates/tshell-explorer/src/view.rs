@@ -154,6 +154,44 @@ impl Explorer {
             })
             .into_any_element()
     }
+    fn file_feedback(&self, content: AnyElement) -> AnyElement {
+        div()
+            .relative()
+            .size_full()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .child(content)
+            .when_some(
+                self.file_loading
+                    .clone()
+                    .filter(|_| self.open_file.is_some() && self.message.is_none()),
+                |view, message| {
+                    view.child(style::content_notice(
+                        "explorer-loading",
+                        IconName::Clock,
+                        message,
+                        self.palette.muted,
+                        self.palette,
+                    ))
+                },
+            )
+            .when_some(
+                self.message.clone().filter(|_| self.open_file.is_some()),
+                |view, message| {
+                    view.child(style::content_notice(
+                        "explorer-error",
+                        IconName::CircleAlert,
+                        message,
+                        self.palette.error,
+                        self.palette,
+                    ))
+                },
+            )
+            .into_any_element()
+    }
+
     pub fn file_surface(&self, cx: &mut Context<Self>) -> AnyElement {
         if let Some(path) = &self.open_file {
             let mut parts = Vec::new();
@@ -255,7 +293,7 @@ impl Explorer {
                         .then(|| self.editor_search_bar(cx))
                         .flatten(),
                 )
-                .child(if let Some(image) = &self.image_preview {
+                .child(div().flex_1().min_h_0().child(self.file_feedback(if let Some(image) = &self.image_preview {
                     div()
                         .flex_1()
                         .min_h_0()
@@ -342,9 +380,14 @@ impl Explorer {
                         .line_height(relative(1.5))
                         .child(gpui_kit::base::input::Editor::new(&self.file_editor))
                         .into_any_element()
-                })
+                })))
                 .into_any_element()
         } else {
+            if let Some(message) = &self.message {
+                return style::empty_state(IconName::CircleAlert, message.clone(), self.palette)
+                    .text_color(rgb(self.palette.error))
+                    .into_any_element();
+            }
             style::empty_state(
                 if self.file_loading.is_some() {
                     IconName::Clock

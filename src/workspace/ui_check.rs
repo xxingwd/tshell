@@ -4,6 +4,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use std::time::Instant;
 use tshell_explorer::SessionFileState;
 
 fn check_equal_split_bounds(app: &AppView) -> anyhow::Result<()> {
@@ -30,6 +31,129 @@ fn check_equal_split_bounds(app: &AppView) -> anyhow::Result<()> {
         anyhow::ensure!(max_height - min_height <= 1., "unequal rows: {rows:?}");
     }
     Ok(())
+}
+
+fn check_transient_layout_sizes(
+    app: &mut AppView,
+    window: &mut Window,
+    cx: &mut Context<AppView>,
+) -> anyhow::Result<()> {
+    let candidates = std::mem::take(&mut app.directory_candidates);
+    let directory_error = app.directory_error.take();
+    let message = app.message.take();
+    let theme_error = app.theme_error.take();
+    let metrics = app.metrics.take();
+    let metrics_target = app.metrics_target.clone();
+    app.metrics_target = Some(host_metrics::Target::Local);
+    let result = (|| {
+        for width in [400., 560.] {
+            let available = size(
+                AvailableSpace::Definite(px(width)),
+                AvailableSpace::MinContent,
+            );
+            let baseline = app
+                .new_session_editor(cx)
+                .layout_as_root(available, window, cx);
+            anyhow::ensure!(
+                baseline.height > px(150.),
+                "directory fixture did not measure its form"
+            );
+            for count in [3, 15, 0] {
+                app.directory_candidates = (0..count)
+                    .map(|index| format!("/fixture/directory-{index}"))
+                    .collect();
+                app.directory_error = Some("Fixture directory lookup failed. ".repeat(12));
+                anyhow::ensure!(
+                    app.new_session_editor(cx)
+                        .layout_as_root(available, window, cx)
+                        == baseline,
+                    "directory results or validation changed form size at {width}px"
+                );
+            }
+            app.directory_candidates.clear();
+            app.directory_error = None;
+            let baseline = app
+                .scheme_settings(cx)
+                .layout_as_root(available, window, cx);
+            app.theme_error = Some("Fixture theme could not be saved. ".repeat(12));
+            let failed = app
+                .scheme_settings(cx)
+                .layout_as_root(available, window, cx);
+            anyhow::ensure!(
+                failed == baseline,
+                "theme-list feedback changed its size at {width}px: {baseline:?} -> {failed:?}"
+            );
+            app.theme_error = None;
+        }
+        let available = size(
+            AvailableSpace::MinContent,
+            AvailableSpace::Definite(px(CHROME_BAR_HEIGHT)),
+        );
+        for side in [metrics_config::Side::Left, metrics_config::Side::Right] {
+            app.metrics = None;
+            let baseline = app
+                .terminal_status_strip(&app.hosts[app.active].snapshot, side)
+                .layout_as_root(available, window, cx);
+            let identities = app
+                .terminal_status_items(&app.hosts[app.active].snapshot, side)
+                .into_iter()
+                .map(|(metric, _, _)| metric)
+                .collect::<Vec<_>>();
+            for state in [
+                Some(Err("Fixture metrics request failed".to_owned())),
+                metrics.clone(),
+                None,
+            ] {
+                app.metrics = state;
+                anyhow::ensure!(
+                    app.terminal_status_strip(&app.hosts[app.active].snapshot, side)
+                        .layout_as_root(available, window, cx)
+                        .height
+                        == baseline.height,
+                    "metrics response changed status-strip height"
+                );
+                anyhow::ensure!(
+                    app.terminal_status_items(&app.hosts[app.active].snapshot, side)
+                        .into_iter()
+                        .map(|(metric, _, _)| metric)
+                        .collect::<Vec<_>>()
+                        == identities,
+                    "metrics response inserted or removed status items"
+                );
+            }
+        }
+        Ok(())
+    })();
+    app.directory_candidates = candidates;
+    app.directory_error = directory_error;
+    app.message = message;
+    app.theme_error = theme_error;
+    app.metrics = metrics;
+    app.metrics_target = metrics_target;
+    result
+}
+
+struct FeedbackLayoutProbe {
+    owner: Entity<AppView>,
+    result: std::rc::Rc<std::cell::RefCell<Option<anyhow::Result<()>>>>,
+}
+
+impl Render for FeedbackLayoutProbe {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let owner = self.owner.clone();
+        let result = self.result.clone();
+        canvas(
+            move |_, window, cx| {
+                if result.borrow().is_none() {
+                    let measured =
+                        owner.update(cx, |app, cx| check_transient_layout_sizes(app, window, cx));
+                    *result.borrow_mut() = Some(measured);
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .size_full()
+    }
 }
 
 fn check_session_switch_layout(
@@ -62,6 +186,18 @@ fn check_session_switch_layout(
     };
     let original = app.read_with(cx, |app, _cx| app.hosts[0].snapshot.active_session.clone());
     let baseline = draw_bounds(None, cx)?;
+    let original_message = app.read_with(cx, |app, _| app.message.clone());
+    for message in [
+        Some("Fixture workspace failure that must not resize the terminal.".to_owned()),
+        None,
+    ] {
+        app.update(cx, |app, _| app.message = message);
+        anyhow::ensure!(
+            draw_bounds(None, cx)? == baseline,
+            "workspace feedback changed terminal geometry"
+        );
+    }
+    app.update(cx, |app, _| app.message = original_message);
     let first = draw_bounds(
         Some(Action::NewNamedSession {
             name: "session-layout-check".into(),
@@ -207,6 +343,29 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     cx.update_window(handle.into(), |_, window, cx| {
         app.update(cx, |app, cx| app.check_initialize_tools(window, cx))
     })?;
+    let measured = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let probe = cx.open_window(
+        WindowOptions {
+            show: false,
+            focus: false,
+            ..Default::default()
+        },
+        |_, cx| {
+            cx.new(|_| FeedbackLayoutProbe {
+                owner: app.clone(),
+                result: measured.clone(),
+            })
+        },
+    )?;
+    cx.update_window(probe.into(), |_, window, cx| {
+        window.refresh();
+        window.draw(cx).clear(cx);
+        window.remove_window();
+    })?;
+    measured
+        .borrow_mut()
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("feedback layout probe did not draw"))??;
     app.update(cx, |app, cx| {
         let session = app.hosts[app.active].snapshot.session().unwrap().clone();
         let before = app.hosts[app.active].snapshot.clone();
@@ -546,6 +705,44 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             &serde_json::json!({"files": 10_000, "diff_lines": 10_000, "draw_ms": render_times}),
         )?,
     )?;
+    let git = app.read_with(cx, |app, _| app.git_entity().unwrap());
+    git.update(cx, |git, cx| {
+        git.git_scroll.scroll_to_item(4500, ScrollStrategy::Top);
+        cx.notify();
+    });
+    draw(cx)?;
+    let list_offset = git.read_with(cx, |git, _| git.git_scroll.0.borrow().base_handle.offset());
+    anyhow::ensure!(list_offset.y < px(-1000.), "Git file list did not scroll");
+    let git_root = git.update(cx, |git, cx| {
+        let root = git.cwd.clone();
+        git.cwd = Preferences::path().with_file_name("missing-git-refresh-directory");
+        git.refresh_git(cx);
+        root
+    });
+    draw(cx)?;
+    anyhow::ensure!(
+        git.read_with(cx, |git, _| git.git_scroll.0.borrow().base_handle.offset()) == list_offset,
+        "starting Git refresh moved the file list"
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while git.read_with(cx, |git, _| git.git_loading) {
+        anyhow::ensure!(Instant::now() < deadline, "Git refresh fixture timed out");
+        cx.background_executor()
+            .timer(Duration::from_millis(20))
+            .await;
+    }
+    draw(cx)?;
+    anyhow::ensure!(
+        git.read_with(cx, |git, _| git.git_error.is_some()
+            && git.git_changes.len() == 10_000
+            && git.git_scroll.0.borrow().base_handle.offset() == list_offset),
+        "failed Git refresh discarded or scrolled the file list"
+    );
+    git.update(cx, |git, cx| {
+        git.cwd = git_root;
+        git.git_error = None;
+        cx.notify();
+    });
     app.update(cx, |app, cx| {
         app.check_git(cx)
             .git_diff
@@ -803,6 +1000,63 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
                 .contains(&workbench::path_id(&app.cwd.join("src").join("workspace")))
         );
     });
+    let explorer = app.read_with(cx, |app, _| app.explorer_entity().unwrap());
+    let (selected_file, entry_count) = explorer.update(cx, |explorer, cx| {
+        let selected_file = workbench::path_id(&explorer.cwd.join("src").join("workspace.rs"));
+        let entry_count = explorer.file_tree.update(cx, |tree, cx| {
+            let index = tree.index_of(&selected_file.clone().into()).unwrap();
+            tree.set_selected_index(Some(index), cx);
+            tree.scroll_to_item(index, ScrollStrategy::Top);
+            (0..).map_while(|index| tree.entry(index)).count()
+        });
+        (selected_file, entry_count)
+    });
+    draw(cx)?;
+    let tree_offset = explorer.read_with(cx, |explorer, cx| {
+        explorer
+            .file_tree
+            .read(cx)
+            .scroll_handle()
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+    });
+    explorer.update(cx, |explorer, cx| {
+        explorer.load_files(cx);
+        let tree = explorer.file_tree.read(cx);
+        anyhow::ensure!(
+            (0..).map_while(|index| tree.entry(index)).count() == entry_count
+                && tree
+                    .selected_item()
+                    .is_some_and(|item| item.id.as_ref() == selected_file),
+            "starting Explorer refresh cleared its rows or selection"
+        );
+        cx.notify();
+        Ok::<_, anyhow::Error>(())
+    })?;
+    draw(cx)?;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while explorer.read_with(cx, |explorer, _| explorer.file_loading.is_some()) {
+        anyhow::ensure!(
+            Instant::now() < deadline,
+            "Explorer refresh fixture timed out"
+        );
+        cx.background_executor()
+            .timer(Duration::from_millis(20))
+            .await;
+    }
+    draw(cx)?;
+    explorer.read_with(cx, |explorer, cx| {
+        let tree = explorer.file_tree.read(cx);
+        anyhow::ensure!(
+            tree.selected_item()
+                .is_some_and(|item| item.id.as_ref() == selected_file)
+                && tree.scroll_handle().0.borrow().base_handle.offset() == tree_offset,
+            "Explorer refresh moved its selection or scroll position"
+        );
+        Ok::<_, anyhow::Error>(())
+    })?;
     cx.update_window(handle.into(), |_, window, cx| {
         app.update(cx, |app, cx| {
             let cargo_toml = app.cwd.join("Cargo.toml");
@@ -2117,9 +2371,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
         );
         app.update(cx, |app, cx| app.show_git(cx));
         let deadline = std::time::Instant::now() + Duration::from_secs(15);
-        while app.read_with(cx, |app, cx| {
-            app.check_git(cx).git_error.as_deref() == Some(crate::t!("git.loading").as_ref())
-        }) {
+        while app.read_with(cx, |app, cx| app.check_git(cx).git_loading) {
             anyhow::ensure!(std::time::Instant::now() < deadline, "remote Git timed out");
             cx.background_executor()
                 .timer(Duration::from_millis(25))
@@ -2715,6 +2967,58 @@ async fn check_workspace_styles(
             .timer(Duration::from_millis(30))
             .await;
         capture(&format!("{name}-sidebar"), cx)?;
+        let (original_host, original_message) = app.update(cx, |app, cx| {
+            let original = (app.active, app.message.take());
+            let config = HostDefinition {
+                id: Default::default(),
+                name: "Reconnect fixture".into(),
+                ssh: tshell_host::SshConfig {
+                    destination: "reconnect-ui-check.invalid".into(),
+                    user: "test".into(),
+                    port: None,
+                    identity_file: None,
+                },
+                tmux: false,
+                socket: None,
+            };
+            app.active = app.hosts.len();
+            app.hosts.push(Host {
+                name: config.name.clone(),
+                config: Some(config),
+                backend: None,
+                snapshot: Snapshot {
+                    connection: Connection::Closed,
+                    message: Some(
+                        crate::t!(
+                            "ws.start_failed",
+                            error = "Fixture SSH connection was closed."
+                        )
+                        .into_owned(),
+                    ),
+                    ..Default::default()
+                },
+                pending: Vec::new(),
+                views: BTreeMap::new(),
+                read_notices: BTreeMap::new(),
+                collapsed_sessions: BTreeSet::new(),
+                viewport: None,
+            });
+            cx.notify();
+            original
+        });
+        capture(&format!("{name}-connection-failure"), cx)?;
+        app.update(cx, |app, cx| {
+            app.sidebar_collapsed = true;
+            cx.notify();
+        });
+        capture(&format!("{name}-connection-failure-no-sidebar"), cx)?;
+        app.update(cx, |app, cx| {
+            app.active = original_host;
+            app.hosts.pop();
+            app.message = original_message;
+            app.sidebar_collapsed = false;
+            cx.notify();
+        });
         cx.update_window(handle.into(), |_, _, cx| {
             app.update(cx, |app, cx| {
                 app.act(Action::NewWindow, cx);
@@ -2772,6 +3076,64 @@ async fn check_workspace_styles(
                 });
             })?;
             capture(&format!("{name}-{suffix}"), cx)?;
+            if page == 1 {
+                app.update(cx, |app, cx| {
+                    app.settings_ui.recording = Some(0);
+                    app.settings_ui.notice =
+                        Some(crate::t!("shortcut.error_reserved").into_owned());
+                    cx.notify();
+                });
+                capture(&format!("{name}-shortcuts-error"), cx)?;
+                app.update(cx, |app, cx| {
+                    app.settings_ui.recording = None;
+                    app.settings_ui.notice = None;
+                    cx.notify();
+                });
+            }
+            #[cfg(windows)]
+            if page == 7 {
+                let original = app.read_with(cx, |app, _| app.updater.state.clone());
+                for (suffix, state) in [
+                    ("checking", crate::update::State::Checking),
+                    ("downloading", crate::update::State::Downloading("1.2.3".into())),
+                    ("ready", crate::update::State::Ready("1.2.3".into())),
+                    ("failed", crate::update::State::Failed("Fixture download request failed. Please retry when the connection is available.".into())),
+                ] {
+                    app.update(cx, |app, cx| { app.updater.state = state; cx.notify(); });
+                    capture(&format!("{name}-updates-{suffix}"), cx)?;
+                }
+                app.update(cx, |app, cx| {
+                    app.updater.state = original;
+                    cx.notify();
+                });
+            }
+            if page == 8 {
+                cx.update_window(handle.into(), |_, window, cx| {
+                    app.update(cx, |app, cx| app.open_theme_editor(None, window, cx));
+                })?;
+                capture(&format!("{name}-theme-editor"), cx)?;
+                let bounds = app.read_with(cx, |app, cx| {
+                    app.settings_ui.theme_editor.read(cx).input_bounds()
+                });
+                cx.update_window(handle.into(), |_, window, cx| {
+                    app.update(cx, |app, cx| {
+                        app.settings_ui
+                            .theme_editor
+                            .update(cx, |editor, cx| editor.set_value("{invalid", window, cx));
+                        app.save_theme_editor(window, cx);
+                    });
+                })?;
+                capture(&format!("{name}-theme-editor-error"), cx)?;
+                anyhow::ensure!(
+                    bounds
+                        == app.read_with(cx, |app, cx| app
+                            .settings_ui
+                            .theme_editor
+                            .read(cx)
+                            .input_bounds()),
+                    "theme error moved editor viewport"
+                );
+            }
             if page == 0 {
                 for (steps, section) in [(3, "font"), (12, "background")] {
                     for _ in 0..steps {
@@ -2813,12 +3175,41 @@ async fn check_workspace_styles(
         cx.update_window(handle.into(), |_, window, cx| {
             app.update(cx, |app, cx| {
                 app.show_add(window, cx);
+            });
+        })?;
+        capture(&format!("{name}-host-form"), cx)?;
+        let host_fields = app.read_with(cx, |app, cx| {
+            [
+                &app.label,
+                &app.destination,
+                &app.user,
+                &app.port,
+                &app.identity_file,
+            ]
+            .map(|input| input.read(cx).input_bounds())
+        });
+        cx.update_window(handle.into(), |_, window, cx| {
+            app.update(cx, |app, cx| {
                 app.destination
                     .update(cx, |input, cx| input.set_value("example.test", window, cx));
                 app.add_host(window, cx);
             });
         })?;
         capture(&format!("{name}-host-error"), cx)?;
+        anyhow::ensure!(
+            host_fields
+                == app.read_with(cx, |app, cx| {
+                    [
+                        &app.label,
+                        &app.destination,
+                        &app.user,
+                        &app.port,
+                        &app.identity_file,
+                    ]
+                    .map(|input| input.read(cx).input_bounds())
+                }),
+            "host validation moved form fields"
+        );
         cx.update_window(handle.into(), |_, window, cx| {
             app.update(cx, |app, cx| {
                 app.close_modal(window, cx);
@@ -2826,6 +3217,16 @@ async fn check_workspace_styles(
             });
         })?;
         capture(&format!("{name}-new-session"), cx)?;
+        let directory_bounds = app.read_with(cx, |app, cx| app.tab_path.read(cx).input_bounds());
+        app.update(cx, |app, cx| {
+            app.directory_error = Some(crate::t!("ws.directory_missing").into_owned());
+            cx.notify();
+        });
+        capture(&format!("{name}-new-session-error"), cx)?;
+        anyhow::ensure!(
+            directory_bounds == app.read_with(cx, |app, cx| app.tab_path.read(cx).input_bounds()),
+            "directory validation moved session controls"
+        );
         cx.update_window(handle.into(), |_, window, cx| {
             app.update(cx, |app, cx| {
                 app.close_modal(window, cx);
@@ -2841,7 +3242,31 @@ async fn check_workspace_styles(
                     }),
                 };
                 app.git_entity().unwrap().update(cx, |git, _cx| {
-                    git.git_changes = vec![change.clone()];
+                    git.git_changes = vec![
+                        change.clone(),
+                        git::GitChange {
+                            path: app.cwd.join("docs/git-workspace.md"),
+                            stats: Some(git::Stats {
+                                added: 38,
+                                removed: 12,
+                            }),
+                            ..change.clone()
+                        },
+                        git::GitChange {
+                            status: "??".into(),
+                            path: app.cwd.join("notes.md"),
+                            stats: None,
+                            ..change.clone()
+                        },
+                        git::GitChange {
+                            path: app.cwd.join("locales/en.yml"),
+                            stats: Some(git::Stats {
+                                added: 12_345,
+                                removed: 9_876,
+                            }),
+                            ..change.clone()
+                        },
+                    ];
                 });
                 app.git_entity().unwrap().update(cx, |git, _cx| {
                     git.git_error = None;
@@ -2890,6 +3315,86 @@ async fn check_workspace_styles(
             });
         })?;
         capture(&format!("{name}-git"), cx)?;
+        let git = app.read_with(cx, |app, _cx| app.git_entity().unwrap());
+        let (original_cwd, selected_path, change_count) = git.update(cx, |git, cx| {
+            let original = (
+                git.cwd.clone(),
+                git.git_diff.as_ref().unwrap().change.path.clone(),
+                git.git_changes.len(),
+            );
+            git.cwd = Preferences::path().with_file_name("missing-git-directory");
+            git.refresh_git(cx);
+            original
+        });
+        anyhow::ensure!(
+            git.read_with(cx, |git, _| git
+                .git_diff
+                .as_ref()
+                .is_some_and(|diff| diff.change.path == selected_path)),
+            "refresh removed selected diff before response"
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while git.read_with(cx, |git, _| git.git_loading) {
+            anyhow::ensure!(Instant::now() < deadline, "Git failure fixture timed out");
+            cx.background_executor()
+                .timer(Duration::from_millis(20))
+                .await;
+        }
+        anyhow::ensure!(
+            git.read_with(cx, |git, _| git.git_error.is_some()
+                && git.git_changes.len() == change_count
+                && git
+                    .git_diff
+                    .as_ref()
+                    .is_some_and(|diff| diff.change.path == selected_path)),
+            "failed refresh discarded existing Git content"
+        );
+        git.update(cx, |git, cx| {
+            git.cwd = original_cwd;
+            git.git_error = None;
+            cx.notify();
+        });
+        for state in [1, 2, 0] {
+            app.update(cx, |app, cx| {
+                app.git_entity().unwrap().update(cx, |git, cx| {
+                    git.git_loading = state == 1;
+                    git.diff_loading = state == 1;
+                    git.git_error = (state == 2).then(|| {
+                        "Fixture Git refresh failed. Existing changes remain visible.".to_owned()
+                    });
+                    cx.notify();
+                });
+                cx.notify();
+            });
+            capture(&format!("{name}-git-refresh-{state}"), cx)?;
+        }
+        let (saved_changes, saved_diff) = app.update(cx, |app, cx| {
+            app.git_entity().unwrap().update(cx, |git, cx| {
+                let saved = (std::mem::take(&mut git.git_changes), git.git_diff.take());
+                cx.notify();
+                saved
+            })
+        });
+        for state in [1, 2] {
+            app.update(cx, |app, cx| {
+                app.git_entity().unwrap().update(cx, |git, cx| {
+                    git.git_loading = state == 1;
+                    git.git_error = (state == 2)
+                        .then(|| "Fixture Git request failed. Retry using Refresh.".to_owned());
+                    cx.notify();
+                });
+            });
+            capture(&format!("{name}-git-empty-{state}"), cx)?;
+        }
+        app.update(cx, |app, cx| {
+            app.git_entity().unwrap().update(cx, |git, cx| {
+                git.git_loading = false;
+                git.git_error = None;
+                git.git_changes = saved_changes;
+                git.git_diff = saved_diff;
+                cx.notify();
+            });
+        });
         cx.update_window(handle.into(), |_, window, cx| {
             app.update(cx, |app, cx| {
                 app.page = Page::Explorer;
@@ -2906,6 +3411,137 @@ async fn check_workspace_styles(
             });
         })?;
         capture(&format!("{name}-editor"), cx)?;
+        let bounds = app.read_with(cx, |app, cx| {
+            app.check_explorer(cx).file_editor.read(cx).input_bounds()
+        });
+        for empty in [false, true] {
+            let saved_path = app.update(cx, |app, cx| {
+                app.explorer_entity().unwrap().update(cx, |explorer, _| {
+                    if empty {
+                        explorer.open_file.take()
+                    } else {
+                        explorer.open_file.clone()
+                    }
+                })
+            });
+            for state in [1, 2, 0] {
+                app.update(cx, |app, cx| {
+                    app.explorer_entity().unwrap().update(cx, |explorer, cx| {
+                        explorer.file_loading =
+                            (state == 1).then(|| crate::t!("file.reading_file").into_owned());
+                        explorer.message = (state == 2).then(|| {
+                            "Fixture file request failed. The open document remains available."
+                                .to_owned()
+                        });
+                        cx.notify();
+                    });
+                    cx.notify();
+                });
+                capture(
+                    &format!(
+                        "{name}-editor-{}-{state}",
+                        if empty { "empty" } else { "refresh" }
+                    ),
+                    cx,
+                )?;
+                if !empty {
+                    anyhow::ensure!(
+                        bounds
+                            == app.read_with(cx, |app, cx| app
+                                .check_explorer(cx)
+                                .file_editor
+                                .read(cx)
+                                .input_bounds()),
+                        "file feedback moved editor viewport"
+                    );
+                }
+            }
+            app.update(cx, |app, cx| {
+                app.explorer_entity().unwrap().update(cx, |explorer, cx| {
+                    explorer.open_file = saved_path;
+                    cx.notify();
+                })
+            });
+        }
+    }
+    Ok(())
+}
+
+fn check_docker_feedback(
+    app: &Entity<AppView>,
+    window: &mut Window,
+    cx: &mut App,
+    name: &str,
+) -> anyhow::Result<()> {
+    let docker = app.read(cx).docker.clone();
+    let baseline = docker.read(cx).check_feedback_bounds(cx);
+    for state in [0, 1, 2] {
+        if !docker.update(cx, |docker, cx| {
+            docker.check_config_document_state(state, window, cx)
+        }) {
+            break;
+        }
+        window.refresh();
+        let _ = window.draw(cx);
+        anyhow::ensure!(
+            docker.read(cx).check_feedback_bounds(cx) == baseline,
+            "Docker {name} document arrival or dirty state moved its editor"
+        );
+    }
+    for state in [1, 2, 0] {
+        docker.update(cx, |docker, cx| docker.check_feedback_state(state, cx));
+        window.refresh();
+        let _ = window.draw(cx);
+        anyhow::ensure!(
+            docker.read(cx).check_feedback_bounds(cx) == baseline,
+            "Docker {name} state {state} shifted fixed controls or content bounds"
+        );
+        #[cfg(feature = "ui-check-screenshots")]
+        if state != 0
+            && let Some(directory) = std::env::var_os("TSHELL_UI_SCREENSHOT_DIR")
+        {
+            window
+                .render_to_image()?
+                .save(PathBuf::from(directory).join(format!("{name}-state-{state}.png")))?;
+        }
+    }
+    if docker.update(cx, |docker, cx| {
+        docker.check_feedback_empty_collection(true, window, cx)
+    }) {
+        window.refresh();
+        let _ = window.draw(cx);
+        let empty_baseline = docker.read(cx).check_feedback_bounds(cx);
+        anyhow::ensure!(
+            empty_baseline
+                .first()
+                .map(|bounds| (bounds.origin.y, bounds.size.height))
+                == baseline
+                    .first()
+                    .map(|bounds| (bounds.origin.y, bounds.size.height)),
+            "Docker empty {name} shifted search input vertically"
+        );
+        for state in [1, 2, 0] {
+            docker.update(cx, |docker, cx| docker.check_feedback_state(state, cx));
+            window.refresh();
+            let _ = window.draw(cx);
+            anyhow::ensure!(
+                docker.read(cx).check_feedback_bounds(cx).first() == empty_baseline.first(),
+                "Docker empty {name} state {state} shifted search input"
+            );
+            #[cfg(feature = "ui-check-screenshots")]
+            if state != 0
+                && let Some(directory) = std::env::var_os("TSHELL_UI_SCREENSHOT_DIR")
+            {
+                window.render_to_image()?.save(
+                    PathBuf::from(directory).join(format!("{name}-empty-state-{state}.png")),
+                )?;
+            }
+        }
+        docker.update(cx, |docker, cx| {
+            docker.check_feedback_empty_collection(false, window, cx);
+        });
+        window.refresh();
+        let _ = window.draw(cx);
     }
     Ok(())
 }
@@ -3025,6 +3661,7 @@ async fn check_docker_workspace(
                 window.refresh();
                 let _ = window.draw(cx);
                 app.read(cx).docker.read(cx).check_layout(cx);
+                check_docker_feedback(&app, window, cx, &format!("docker-{_name}-{tab}"))?;
                 #[cfg(feature = "ui-check-screenshots")]
                 if let Some(directory) = std::env::var_os("TSHELL_UI_SCREENSHOT_DIR") {
                     window
@@ -3063,6 +3700,12 @@ async fn check_docker_workspace(
                 window.refresh();
                 let _ = window.draw(cx);
                 app.read(cx).docker.read(cx).check_layout(cx);
+                check_docker_feedback(
+                    &app,
+                    window,
+                    cx,
+                    &format!("docker-{_name}-resource-{resource}"),
+                )?;
                 window.dispatch_event(
                     PlatformInput::MouseDown(MouseDownEvent {
                         position: point(px(420.), px(400.)),
@@ -3150,6 +3793,12 @@ async fn check_docker_workspace(
                     )?;
                 }
                 focus.focus(window, cx);
+                check_docker_feedback(
+                    &app,
+                    window,
+                    cx,
+                    &format!("docker-{_name}-table-{collection}"),
+                )?;
                 window.dispatch_keystroke(Keystroke::parse("home").unwrap(), cx);
                 app.read(cx)
                     .docker

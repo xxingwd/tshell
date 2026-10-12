@@ -2,7 +2,7 @@ extern crate gpui_kit as gpui;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::list::ListItem;
 use gpui_kit::component::{
-    Disableable, Icon, Selectable, Sizable,
+    Icon, Selectable, Sizable,
     button::{Button, ButtonGroup, ButtonVariants},
     menu::{DropdownMenu, PopupMenuItem},
 };
@@ -29,7 +29,10 @@ pub struct GitView {
     pub git_diff_mode: DiffMode,
     pub git_diff_compact: bool,
     pub git_changes: Vec<git::GitChange>,
+    pub git_scroll: UniformListScrollHandle,
     pub git_error: Option<String>,
+    pub git_loading: bool,
+    pub diff_loading: bool,
     pub palette: Palette,
     pub terminal_palette: Palette,
     pub font_family: String,
@@ -60,7 +63,10 @@ impl GitView {
             git_diff_mode: DiffMode::SideBySide,
             git_diff_compact: true,
             git_changes: Vec::new(),
+            git_scroll: UniformListScrollHandle::new(),
             git_error: None,
+            git_loading: false,
+            diff_loading: false,
         }
     }
     pub fn refresh_git(&mut self, cx: &mut Context<Self>) {
@@ -68,9 +74,8 @@ impl GitView {
         let request = self.git_request;
         let root = self.cwd.clone();
         let host = self.host.clone();
-        self.git_error = Some(crate::t!("git.loading").to_string());
-        self.git_diff = None;
-        self.git_diff_request += 1;
+        self.git_loading = true;
+        self.git_error = None;
         cx.spawn(async move |view, cx| {
             let source = host.clone();
             let result = cx
@@ -82,15 +87,27 @@ impl GitView {
                     if this.git_request != request {
                         return None;
                     }
+                    this.git_loading = false;
                     match result {
                         Ok(changes) => {
+                            if let Some(selected) = this.git_diff.as_ref() {
+                                let selected_path = selected.change.path.clone();
+                                if let Some(change) =
+                                    changes.iter().find(|change| change.path == selected_path)
+                                {
+                                    this.load_git_diff(change.clone(), false, cx);
+                                } else {
+                                    this.git_diff = None;
+                                    this.diff_loading = false;
+                                    this.git_diff_request += 1;
+                                }
+                            }
                             this.git_changes = changes.clone();
                             this.git_error = None;
                             cx.notify();
                             Some(changes)
                         }
                         Err(error) => {
-                            this.git_changes.clear();
                             this.git_error = Some(crate::i18n::format_error(&error));
                             cx.notify();
                             None

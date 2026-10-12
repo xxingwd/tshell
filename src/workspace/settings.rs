@@ -843,19 +843,19 @@ impl AppView {
                     .border_color(rgb(self.palette.border))
                     .child(gpui_kit::base::input::Editor::new(
                         &self.settings_ui.theme_editor,
-                    )),
+                    ))
+                    .relative()
+                    .overflow_hidden()
+                    .when_some(self.settings_ui.theme_edit_error.clone(), |view, error| {
+                        view.child(style::content_notice(
+                            "theme-editor-feedback",
+                            IconName::CircleAlert,
+                            error,
+                            self.palette.error,
+                            self.palette,
+                        ))
+                    }),
             )
-            .when_some(self.settings_ui.theme_edit_error.clone(), |view, error| {
-                view.child(
-                    div()
-                        .min_w_0()
-                        .max_h(px(72.))
-                        .overflow_y_scrollbar()
-                        .text_size(px(12.))
-                        .text_color(rgb(self.palette.error))
-                        .child(error),
-                )
-            })
             .child(
                 div()
                     .flex()
@@ -863,24 +863,32 @@ impl AppView {
                     .justify_end()
                     .gap_2()
                     .child(
-                        Button::new("cancel-theme-edit")
-                            .label(crate::t!("explorer.cancel"))
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                        icon_button(
+                            "cancel-theme-edit",
+                            IconName::X,
+                            crate::t!("explorer.cancel"),
+                        )
+                        .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
-                        Button::new("save-theme-edit")
-                            .primary()
-                            .label(crate::t!("settings.save_theme"))
-                            .on_click(
-                                cx.listener(|app, _, window, cx| app.save_theme_editor(window, cx)),
-                            ),
+                        icon_button(
+                            "save-theme-edit",
+                            IconName::Check,
+                            crate::t!("settings.save_theme"),
+                        )
+                        .text_color(rgb(self.palette.accent))
+                        .on_click(
+                            cx.listener(|app, _, window, cx| app.save_theme_editor(window, cx)),
+                        ),
                     ),
             )
             .into_any_element()
     }
 
-    fn scheme_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn scheme_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         div()
+            .w_full()
+            .min_w_0()
             .flex()
             .flex_col()
             .gap_2()
@@ -931,14 +939,22 @@ impl AppView {
                         cx.listener(|app, _, window, cx| app.open_theme_editor(None, window, cx)),
                     ),
             )
-            .when_some(self.theme_error.clone(), |view, error| {
-                view.child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(rgb(self.palette.error))
-                        .child(error),
-                )
-            })
+            .child(
+                div()
+                    .id("theme-list-feedback")
+                    .h(px(18.))
+                    .flex_shrink_0()
+                    .min_w_0()
+                    .text_size(px(12.))
+                    .text_color(rgb(self.palette.error))
+                    .when_some(self.theme_error.clone(), |view, error| {
+                        let tooltip = error.clone();
+                        view.truncate().child(error).tooltip(move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(tooltip.clone())
+                                .build(window, cx)
+                        })
+                    }),
+            )
             .into_any_element()
     }
 
@@ -1652,9 +1668,6 @@ impl AppView {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .when_some(self.settings_ui.notice.clone(), |v, notice| {
-                        v.child(div().text_color(rgb(p.error)).child(notice))
-                    })
                     .children(
                         shortcuts::BINDINGS
                             .iter()
@@ -1675,8 +1688,17 @@ impl AppView {
                                     .items_center()
                                     .gap_2()
                                     .py_1()
-                                    .min_h(px(36.))
-                                    .child(div().flex_1().child(binding.label()))
+                                    .h(px(44.))
+                                    .flex_shrink_0()
+                                    .child(div().flex_1().min_w_0().flex().flex_col()
+                                        .child(binding.label())
+                                        .child(div().h(px(16.)).when_some(self.settings_ui.notice.clone().filter(|_| recording), |label, notice| {
+                                            let tooltip = notice.clone();
+                                            label.child(div().id(("shortcut-error", index))
+                                                .text_size(px(11.)).text_color(rgb(p.error)).truncate()
+                                                .child(notice)
+                                                .tooltip(move |window, cx| gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)))
+                                        })))
                                     .child(
                                         Button::new(("shortcut", index))
                                             .small()
@@ -1734,13 +1756,11 @@ impl AppView {
                                             ),
                                         p,
                                     ))
-                                    .when(self.settings_ui.window_size_error, |view| {
-                                        view.child(
-                                            div()
+                                    .child(
+                                            div().min_h(px(18.))
                                                 .text_color(rgb(p.error))
-                                                .child(crate::t!("settings.window_size_invalid")),
-                                        )
-                                    }),
+                                                .when(self.settings_ui.window_size_error, |view| view.child(crate::t!("settings.window_size_invalid"))),
+                                    ),
                             )
                             .child(setting_row(
                                 crate::t!("settings.show_top_title").to_string(),

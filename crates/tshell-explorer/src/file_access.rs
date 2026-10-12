@@ -15,6 +15,7 @@ impl Explorer {
             return;
         }
         self.tree_request += 1;
+        self.message = None;
         let request = self.tree_request;
         let root = self.cwd.clone();
         let expanded: BTreeSet<_> = {
@@ -25,11 +26,7 @@ impl Explorer {
                 .map(|entry| entry.item().id.to_string())
                 .collect()
         };
-        self.pending_file_paths = Some(Vec::new());
-        self.file_tree
-            .update(cx, |tree, cx| tree.set_items(Vec::new(), cx));
         self.tree_loading.clear();
-        self.tree_loaded.clear();
         let host = self.remote_files();
         self.file_loading = Some(crate::t!("file.reading_directory").to_string());
         cx.spawn(async move |view, cx| {
@@ -51,6 +48,7 @@ impl Explorer {
                 }
                 match result {
                     Ok(node) => {
+                        this.tree_loaded.clear();
                         node.loaded_directories(&mut this.tree_loaded);
                         let mut items = node.item(true, this.host.is_some()).children;
                         restore_expansion(&mut items, &expanded);
@@ -230,6 +228,7 @@ impl Explorer {
         cx: &mut Context<Self>,
     ) {
         let original_text = self.file_editor.read(cx).value().to_string();
+        self.message = None;
         self.file_request += 1;
         let request = self.file_request;
         let host = if local { None } else { self.remote_files() };
@@ -305,10 +304,7 @@ impl Explorer {
                         Notification::warning(crate::t!("file.changed_again")),
                         cx,
                     ),
-                    Err(error) => window.push_notification(
-                        Notification::error(crate::i18n::format_error(&error)),
-                        cx,
-                    ),
+                    Err(error) => this.message = Some(crate::i18n::format_error(&error)),
                 }
                 cx.notify();
             });
@@ -328,6 +324,7 @@ impl Explorer {
             return;
         }
         self.file_saving = true;
+        self.message = None;
         let host = if self.document_local {
             None
         } else {
@@ -377,10 +374,16 @@ impl Explorer {
                             cx,
                         );
                     }
-                    Err(error) => window.push_notification(
-                        Notification::error(crate::i18n::format_error(&error)),
-                        cx,
-                    ),
+                    Err(error) => {
+                        if this.file_request == request {
+                            this.message = Some(crate::i18n::format_error(&error));
+                        } else {
+                            window.push_notification(
+                                Notification::error(crate::i18n::format_error(&error)),
+                                cx,
+                            );
+                        }
+                    }
                 }
                 cx.notify();
             });

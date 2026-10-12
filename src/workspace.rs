@@ -591,6 +591,7 @@ pub struct AppView {
     forward_kind: crate::ssh_forward::ForwardKind,
     forward_form: bool,
     forward_add_form: bool,
+    editing_forward: Option<(usize, usize)>,
     // The dialog builder runs inside AppView's render and cannot borrow its owner again.
     forward_dialog_height: std::rc::Rc<std::cell::Cell<f32>>,
     forward_host_index: Option<usize>,
@@ -638,7 +639,7 @@ impl Render for ModalContent {
     }
 }
 
-use tshell_ui::controls::{button, icon_button};
+use tshell_ui::controls::icon_button;
 
 const PANE_STROKE: f32 = 1.;
 
@@ -977,6 +978,7 @@ impl AppView {
             forward_kind: crate::ssh_forward::ForwardKind::Local,
             forward_form: false,
             forward_add_form: false,
+            editing_forward: None,
             forward_focus: cx.focus_handle(),
             forward_dialog_height: std::rc::Rc::new(std::cell::Cell::new(180.)),
             forward_host_index: None,
@@ -1013,6 +1015,18 @@ impl AppView {
             cx.subscribe_in(input, window, |this, _, event, window, cx| {
                 if this.settings_ui.host_form && matches!(event, InputEvent::PressEnter { .. }) {
                     this.add_host(window, cx);
+                }
+            })
+            .detach();
+        }
+        for input in [&this.forward_local_port, &this.forward_target_port] {
+            cx.subscribe_in(input, window, |this, _, event, window, cx| {
+                if this.forward_form && this.forward_add_form {
+                    match event {
+                        InputEvent::PressEnter { .. } => this.add_forward(window, cx),
+                        InputEvent::Change => cx.notify(),
+                        _ => {}
+                    }
                 }
             })
             .detach();
@@ -1703,6 +1717,7 @@ impl AppView {
         self.settings_ui.host_form = false;
         self.forward_form = false;
         self.forward_add_form = false;
+        self.editing_forward = None;
         self.forward_host_index = None;
         self.forward_error = None;
         self.forward_kind = crate::ssh_forward::ForwardKind::Local;
@@ -1770,7 +1785,7 @@ impl AppView {
                 ModalKind::Forward => forward_dialog_height.get(),
                 ModalKind::NewTab => 360.,
             };
-            let height = height.min((f32::from(window.viewport_size().height) - 180.).max(180.));
+            let height = height.min((f32::from(window.viewport_size().height) - 180.).max(64.));
             let width: f32 = match kind {
                 ModalKind::Settings => 960.,
                 ModalKind::Host => 560.,
@@ -1856,15 +1871,16 @@ impl AppView {
     }
     fn refresh_forward_dialog_height(&self) {
         let count: usize = self.forwards.values().map(Vec::len).sum();
-        self.forward_dialog_height.set(
-            (count as f32 * 48. + if self.forward_add_form { 116. } else { 64. }).clamp(160., 380.),
-        );
+        let draft = usize::from(self.forward_add_form && self.editing_forward.is_none());
+        self.forward_dialog_height
+            .set((68. + (count + draft) as f32 * 36.).clamp(68., 320.));
     }
 
     fn open_forward_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings = false;
         self.command_palette = false;
         self.forward_form = true;
+        self.editing_forward = None;
         self.forward_add_form = self.forwards.values().all(Vec::is_empty);
         self.forward_host_index = self.hosts.iter().position(|host| host.config.is_some());
         self.forward_kind = crate::ssh_forward::ForwardKind::Local;
@@ -1884,11 +1900,13 @@ impl AppView {
     fn add_forward(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(index) = self.forward_host_index else {
             self.forward_error = Some(crate::t!("ssh.forward_no_host").to_string());
+            self.refresh_forward_dialog_height();
             cx.notify();
             return;
         };
         let Some(config) = self.hosts.get(index).and_then(|host| host.config.clone()) else {
             self.forward_error = Some(crate::t!("ssh.forward_no_host").to_string());
+            self.refresh_forward_dialog_height();
             cx.notify();
             return;
         };
@@ -1903,6 +1921,7 @@ impl AppView {
         };
         let Some(local_port) = parse_port(&self.forward_local_port) else {
             self.forward_error = Some(crate::t!("ssh.forward_invalid_port").to_string());
+            self.refresh_forward_dialog_height();
             self.forward_local_port
                 .update(cx, |input, cx| input.focus(window, cx));
             cx.notify();
@@ -1914,24 +1933,63 @@ impl AppView {
             port
         } else {
             self.forward_error = Some(crate::t!("ssh.forward_invalid_port").to_string());
+            self.refresh_forward_dialog_height();
             self.forward_target_port
                 .update(cx, |input, cx| input.focus(window, cx));
             cx.notify();
             return;
         };
+        let original = self.editing_forward.and_then(|(host_index, rule_index)| {
+            let config = self.hosts.get(host_index)?.config.as_ref()?;
+            self.forwards
+                .get(&forward_storage_key(config))?
+                .get(rule_index)
+                .cloned()
+        });
         let forward = crate::ssh_forward::LocalForward {
             kind: self.forward_kind,
-            bind_host: "127.0.0.1".into(),
+            bind_host: original
+                .as_ref()
+                .map_or_else(|| "127.0.0.1".into(), |rule| rule.bind_host.clone()),
             local_port,
-            target_host: "localhost".into(),
+            target_host: original
+                .as_ref()
+                .map_or_else(|| "localhost".into(), |rule| rule.target_host.clone()),
             target_port,
         };
         if let Err(error) = forward.validate() {
             self.forward_error = Some(crate::i18n::format_error(&error));
+            self.refresh_forward_dialog_height();
             cx.notify();
             return;
         }
         let key = forward_storage_key(&config);
+        if let Some((host_index, rule_index)) = self.editing_forward {
+            let same_host = self.forward_host_index == Some(host_index);
+            if same_host && original.as_ref() == Some(&forward) {
+                self.finish_forward_add(window, cx);
+                return;
+            }
+            // Replace in place so unrelated tunnels retain their identities and state.
+            if same_host {
+                if let Some(mut tunnel) = self.forward_processes.remove(&(key.clone(), rule_index))
+                {
+                    tunnel.stop();
+                }
+                if let Some(rule) = self
+                    .forwards
+                    .get_mut(&key)
+                    .and_then(|rules| rules.get_mut(rule_index))
+                {
+                    *rule = forward;
+                    self.save(cx);
+                    self.start_forward(&config, rule_index);
+                    self.finish_forward_add(window, cx);
+                }
+                return;
+            }
+            self.remove_forward(host_index, rule_index, cx);
+        }
         let (rule_index, added) = {
             let rules = self.forwards.entry(key).or_default();
             if let Some(index) = rules.iter().position(|rule| rule == &forward) {
@@ -1950,10 +2008,45 @@ impl AppView {
 
     fn finish_forward_add(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.forward_add_form = false;
+        self.editing_forward = None;
         self.forward_error = None;
         self.refresh_forward_dialog_height();
         // The dialog's close action must not target an input removed with the draft row.
         window.focus(&self.forward_focus, cx);
+        cx.notify();
+    }
+
+    fn edit_forward(
+        &mut self,
+        host_index: usize,
+        rule_index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(rule) = self
+            .hosts
+            .get(host_index)
+            .and_then(|host| host.config.as_ref())
+            .and_then(|config| self.forwards.get(&forward_storage_key(config)))
+            .and_then(|rules| rules.get(rule_index))
+            .cloned()
+        else {
+            return;
+        };
+        self.editing_forward = Some((host_index, rule_index));
+        self.forward_add_form = true;
+        self.forward_host_index = Some(host_index);
+        self.forward_kind = rule.kind;
+        self.forward_error = None;
+        self.forward_local_port.update(cx, |input, cx| {
+            input.set_value(rule.local_port.to_string(), window, cx)
+        });
+        self.forward_target_port.update(cx, |input, cx| {
+            input.set_value(rule.target_port.to_string(), window, cx)
+        });
+        self.refresh_forward_dialog_height();
+        self.forward_local_port
+            .update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
 
@@ -2098,60 +2191,180 @@ impl AppView {
         cx.notify();
     }
 
+    fn forward_row() -> Div {
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .h(px(36.))
+            .flex_shrink_0()
+            .px_2()
+    }
+
     fn forward_editor(&mut self, cx: &mut Context<Self>) -> AnyElement {
         use crate::ssh_forward::{ForwardKind, Phase};
+        self.refresh_forward_dialog_height();
         let p = self.palette;
-        let hosts: Vec<_> = self
-            .hosts
-            .iter()
-            .enumerate()
-            .filter_map(|(index, host)| {
-                host.config
-                    .as_ref()
-                    .map(|config| (index, host.name.clone(), config.clone()))
-            })
-            .collect();
-        let rules: Vec<_> = hosts
-            .iter()
-            .flat_map(|(host_index, name, config)| {
-                let key = forward_storage_key(config);
-                self.forwards
-                    .get(&key)
-                    .into_iter()
-                    .flatten()
-                    .enumerate()
-                    .map(move |(index, rule)| {
-                        (*host_index, name.clone(), key.clone(), index, rule.clone())
-                    })
-            })
-            .collect();
-        let kind_label = |kind| match kind {
-            ForwardKind::Local => crate::t!("ssh.forward_local").to_string(),
-            ForwardKind::Remote => crate::t!("ssh.forward_remote").to_string(),
-            ForwardKind::Dynamic => crate::t!("ssh.forward_dynamic").to_string(),
-        };
-        let selected = self.forward_host_index;
-        let selected_name = hosts
-            .iter()
-            .find(|(index, _, _)| Some(*index) == selected)
-            .map(|(_, name, _)| name.clone())
-            .unwrap_or_else(|| crate::t!("ssh.forward_select_host").to_string());
-        let kind = self.forward_kind;
-        let owner = cx.entity().downgrade();
-        let host_owner = owner.clone();
-        let body = div()
-            .id("forward-editor-scroll")
-            .flex_1()
+        let mut rows = Vec::new();
+        let mut row_index: usize = 0;
+        for host_index in 0..self.hosts.len() {
+            let Some(config) = self.hosts[host_index].config.clone() else {
+                continue;
+            };
+            let key = forward_storage_key(&config);
+            let rules = self.forwards.get(&key).cloned().unwrap_or_default();
+            for (rule_index, rule) in rules.iter().enumerate() {
+                if self.editing_forward == Some((host_index, rule_index)) {
+                    rows.push(self.forward_draft_row(cx));
+                    row_index += 1;
+                    continue;
+                }
+                let tunnel = self.forward_processes.get(&(key.clone(), rule_index));
+                let phase = tunnel
+                    .map(|tunnel| tunnel.phase())
+                    .unwrap_or(Phase::Stopped);
+                let active = tunnel.is_some_and(|tunnel| tunnel.is_active());
+                let counters = tunnel.map(|tunnel| tunnel.counters()).unwrap_or_default();
+                let status = match &phase {
+                    Phase::Connecting => crate::t!("ws.connecting"),
+                    Phase::Running => crate::t!("ssh.forward_running"),
+                    Phase::Failed(_) => crate::t!("ssh.forward_failed"),
+                    Phase::Stopped => crate::t!("ssh.forward_stopped"),
+                }
+                .to_string();
+                let failed = matches!(&phase, Phase::Failed(_));
+                let detail = match phase {
+                    Phase::Failed(error) => tshell_ui::i18n::format_failure(&error),
+                    _ => format!(
+                        "{} · {}",
+                        rule.label(),
+                        crate::t!(
+                            "ssh.forward_bytes",
+                            sent = counters.0,
+                            received = counters.1
+                        )
+                    ),
+                };
+                rows.push(
+                    Self::forward_row()
+                        .border_b_1()
+                        .border_color(rgb(p.border))
+                        .child(
+                            div()
+                                .w(px(88.))
+                                .flex_shrink_0()
+                                .child(Self::forward_kind_label(rule.kind)),
+                        )
+                        .child(
+                            div()
+                                .w(px(160.))
+                                .flex_shrink_0()
+                                .truncate()
+                                .child(self.hosts[host_index].name.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .child(rule.local_port.to_string()),
+                        )
+                        .child(div().flex_1().min_w_0().truncate().when(
+                            rule.kind != ForwardKind::Dynamic && rule.target_port != 0,
+                            |column| column.child(rule.target_port.to_string()),
+                        ))
+                        .child(
+                            div()
+                                .id(("forward-state", row_index))
+                                .w(px(64.))
+                                .flex_shrink_0()
+                                .text_size(px(12.))
+                                .text_color(rgb(if failed {
+                                    p.error
+                                } else if active {
+                                    p.accent
+                                } else {
+                                    p.muted
+                                }))
+                                .child(status)
+                                .tooltip(move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(detail.clone())
+                                        .build(window, cx)
+                                }),
+                        )
+                        .child(
+                            div()
+                                .w(px(92.))
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    icon_button(
+                                        ("toggle-forward", row_index),
+                                        if active {
+                                            IconName::Square
+                                        } else {
+                                            IconName::Play
+                                        },
+                                        if active {
+                                            crate::t!("ssh.forward_stop")
+                                        } else {
+                                            crate::t!("ssh.forward_start")
+                                        },
+                                    )
+                                    .disabled(self.forward_add_form)
+                                    .on_click(cx.listener(
+                                        move |app, _, window, cx| {
+                                            app.toggle_forward(host_index, rule_index, window, cx)
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    icon_button(
+                                        ("edit-forward", row_index),
+                                        IconName::Pencil,
+                                        crate::t!("settings.edit"),
+                                    )
+                                    .disabled(self.forward_add_form)
+                                    .on_click(cx.listener(
+                                        move |app, _, window, cx| {
+                                            app.edit_forward(host_index, rule_index, window, cx)
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    icon_button(
+                                        ("remove-forward", row_index),
+                                        IconName::Trash,
+                                        crate::t!("ws.remove"),
+                                    )
+                                    .disabled(self.forward_add_form)
+                                    .on_click(cx.listener(
+                                        move |app, _, _, cx| {
+                                            app.remove_forward(host_index, rule_index, cx)
+                                        },
+                                    )),
+                                ),
+                        )
+                        .into_any_element(),
+                );
+                row_index += 1;
+            }
+        }
+        if self.forward_add_form && self.editing_forward.is_none() {
+            rows.push(self.forward_draft_row(cx));
+        }
+        div()
+            .size_full()
             .min_h_0()
-            .overflow_y_scrollbar()
+            .track_focus(&self.forward_focus)
             .flex()
             .flex_col()
-            .gap_1()
+            .text_size(px(13.))
             .child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .px_2()
+                Self::forward_row()
+                    .h(px(28.))
                     .text_size(px(12.))
                     .text_color(rgb(p.muted))
                     .child(
@@ -2166,265 +2379,205 @@ impl AppView {
                             .flex_shrink_0()
                             .child(crate::t!("ssh.forward_ssh_host")),
                     )
-                    .child(div().flex_1().child(crate::t!("ssh.forward_ports")))
                     .child(
                         div()
-                            .w(px(142.))
+                            .flex_1()
+                            .min_w_0()
+                            .child(crate::t!("ssh.forward_listen_port")),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(crate::t!("ssh.forward_target_port")),
+                    )
+                    .child(
+                        div()
+                            .w(px(64.))
                             .flex_shrink_0()
                             .child(crate::t!("ssh.forward_state")),
-                    ),
-            )
-            .children(rules.iter().enumerate().map(
-                |(row_index, (host_index, name, key, rule_index, rule))| {
-                    let tunnel = self.forward_processes.get(&(key.clone(), *rule_index));
-                    let phase = tunnel
-                        .map(|tunnel| tunnel.phase())
-                        .unwrap_or(Phase::Stopped);
-                    let active = tunnel.is_some_and(|tunnel| tunnel.is_active());
-                    let counters = tunnel.map(|tunnel| tunnel.counters()).unwrap_or_default();
-                    let status = match &phase {
-                        Phase::Connecting => crate::t!("ws.connecting"),
-                        Phase::Running => crate::t!("ssh.forward_running"),
-                        Phase::Failed(_) => crate::t!("ssh.forward_failed"),
-                        Phase::Stopped => crate::t!("ssh.forward_stopped"),
-                    }
-                    .to_string();
-                    let detail = match phase {
-                        Phase::Failed(error) => tshell_ui::i18n::format_failure(&error),
-                        _ => format!(
-                            "{} · {}",
-                            rule.label(),
-                            crate::t!(
-                                "ssh.forward_bytes",
-                                sent = counters.0,
-                                received = counters.1
-                            )
-                        ),
-                    };
-                    let ports = match rule.kind {
-                        ForwardKind::Dynamic => rule.local_port.to_string(),
-                        _ => format!("{} → {}", rule.local_port, rule.target_port),
-                    };
-                    let host_index = *host_index;
-                    let rule_index = *rule_index;
-                    let toggle_owner = owner.clone();
-                    let remove_owner = owner.clone();
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .min_h(px(44.))
-                        .px_2()
-                        .border_b_1()
-                        .border_color(rgb(p.border))
-                        .child(
-                            div()
-                                .w(px(88.))
-                                .flex_shrink_0()
-                                .text_size(px(12.))
-                                .child(kind_label(rule.kind)),
-                        )
-                        .child(
-                            div()
-                                .w(px(160.))
-                                .flex_shrink_0()
-                                .truncate()
-                                .child(name.clone()),
-                        )
-                        .child(div().flex_1().min_w_0().truncate().child(ports))
-                        .child(
-                            div()
-                                .id(("forward-state", row_index))
-                                .w(px(58.))
-                                .flex_shrink_0()
-                                .text_size(px(11.))
-                                .text_color(rgb(match tunnel.map(|tunnel| tunnel.phase()) {
-                                    Some(Phase::Failed(_)) => p.error,
-                                    _ if active => p.accent,
-                                    _ => p.muted,
-                                }))
-                                .child(status)
-                                .tooltip(move |window, cx| {
-                                    gpui_kit::component::tooltip::Tooltip::new(detail.clone())
-                                        .build(window, cx)
-                                }),
-                        )
-                        .child(
-                            Button::new(("toggle-forward", row_index))
-                                .small()
-                                .ghost()
-                                .label(if active {
-                                    crate::t!("ssh.forward_stop")
-                                } else {
-                                    crate::t!("ssh.forward_start")
-                                })
-                                .on_click(move |_, window, cx| {
-                                    let _ = toggle_owner.update(cx, |app, cx| {
-                                        app.toggle_forward(host_index, rule_index, window, cx)
-                                    });
-                                }),
-                        )
-                        .child(
+                    )
+                    .child(
+                        div().w(px(92.)).flex_shrink_0().flex().justify_end().child(
                             icon_button(
-                                ("remove-forward", row_index),
-                                IconName::Trash,
-                                crate::t!("ws.remove"),
+                                "show-add-forward",
+                                IconName::Plus,
+                                crate::t!("ssh.forward_add"),
                             )
-                            .on_click(move |_, _, cx| {
-                                let _ = remove_owner.update(cx, |app, cx| {
-                                    app.remove_forward(host_index, rule_index, cx)
-                                });
-                            }),
-                        )
-                        .into_any_element()
-                },
-            ))
-            .when(self.forward_add_form, |view| {
-                view.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .min_h(px(44.))
-                        .px_2()
-                        .child(
-                            Button::new("forward-kind")
-                                .small()
-                                .w(px(88.))
-                                .label(kind_label(kind))
-                                .dropdown_caret(true)
-                                .dropdown_menu(move |mut menu, _, _| {
-                                    for next_kind in [
-                                        ForwardKind::Local,
-                                        ForwardKind::Remote,
-                                        ForwardKind::Dynamic,
-                                    ] {
-                                        let owner = owner.clone();
-                                        let label = match next_kind {
-                                            ForwardKind::Local => crate::t!("ssh.forward_local"),
-                                            ForwardKind::Remote => crate::t!("ssh.forward_remote"),
-                                            ForwardKind::Dynamic => {
-                                                crate::t!("ssh.forward_dynamic")
-                                            }
-                                        };
-                                        menu = menu.item(
-                                            PopupMenuItem::new(label.into_owned())
-                                                .checked(kind == next_kind)
-                                                .on_click(move |_, _, cx| {
-                                                    let _ = owner.update(cx, |app, cx| {
-                                                        app.forward_kind = next_kind;
-                                                        cx.notify();
-                                                    });
-                                                }),
-                                        );
-                                    }
-                                    menu
-                                }),
-                        )
-                        .child(
-                            Button::new("forward-host")
-                                .small()
-                                .w(px(160.))
-                                .min_w_0()
-                                .child(div().min_w_0().truncate().child(selected_name))
-                                .dropdown_caret(true)
-                                .dropdown_menu(move |mut menu, _, _| {
-                                    for (index, name, _) in &hosts {
-                                        let index = *index;
-                                        let owner = host_owner.clone();
-                                        menu = menu.item(
-                                            PopupMenuItem::new(name.clone())
-                                                .checked(selected == Some(index))
-                                                .on_click(move |_, _, cx| {
-                                                    let _ = owner.update(cx, |app, cx| {
-                                                        app.forward_host_index = Some(index);
-                                                        cx.notify();
-                                                    });
-                                                }),
-                                        );
-                                    }
-                                    menu
-                                }),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .child(
-                                    Input::new(&self.forward_local_port).small().aria_label(
-                                        crate::t!("ssh.forward_listen_port").to_string(),
-                                    ),
-                                )
-                                .when(kind != ForwardKind::Dynamic, |row| {
-                                    row.child(div().text_color(rgb(p.muted)).child("→")).child(
-                                        Input::new(&self.forward_target_port).small().aria_label(
-                                            crate::t!("ssh.forward_target_port").to_string(),
-                                        ),
-                                    )
-                                }),
-                        )
-                        .child(
-                            Button::new("add-forward")
-                                .small()
-                                .primary()
-                                .label(crate::t!("ssh.forward_save"))
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| this.add_forward(window, cx)),
-                                ),
-                        )
-                        .child(
-                            icon_button(
-                                "cancel-add-forward",
-                                IconName::X,
-                                crate::t!("ssh.forward_cancel"),
-                            )
+                            .disabled(self.forward_add_form)
                             .on_click(cx.listener(
-                                |this, _, window, cx| {
-                                    this.finish_forward_add(window, cx);
+                                |app, _, window, cx| {
+                                    app.forward_add_form = true;
+                                    app.editing_forward = None;
+                                    app.forward_error = None;
+                                    app.forward_kind = ForwardKind::Local;
+                                    app.forward_host_index =
+                                        app.hosts.iter().position(|host| host.config.is_some());
+                                    app.forward_local_port.update(cx, |input, cx| {
+                                        input.set_value("8080", window, cx)
+                                    });
+                                    app.forward_target_port
+                                        .update(cx, |input, cx| input.set_value("80", window, cx));
+                                    app.refresh_forward_dialog_height();
+                                    app.forward_local_port
+                                        .update(cx, |input, cx| input.focus(window, cx));
+                                    cx.notify();
                                 },
                             )),
                         ),
-                )
-            })
-            .when_some(self.forward_error.clone(), |view, error| {
-                view.child(style::notice(IconName::CircleAlert, error, p.error))
-            });
-        div()
-            .size_full()
-            .min_h_0()
-            .track_focus(&self.forward_focus)
-            .flex()
-            .flex_col()
-            .gap_3()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .flex_shrink_0()
-                    .child(
-                        Button::new("show-add-forward")
-                            .ghost()
-                            .small()
-                            .icon(IconName::Plus)
-                            .label(crate::t!("ssh.forward_add"))
-                            .disabled(self.forward_add_form)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.forward_add_form = true;
-                                this.forward_error = None;
-                                this.forward_host_index =
-                                    this.hosts.iter().position(|host| host.config.is_some());
-                                this.refresh_forward_dialog_height();
-                                this.forward_local_port
-                                    .update(cx, |input, cx| input.focus(window, cx));
-                                cx.notify();
-                            })),
                     ),
             )
-            .child(body)
+            .child(
+                div()
+                    .id("forward-editor-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .flex()
+                    .flex_col()
+                    .children(rows)
+                    .when_some(self.forward_error.clone(), |view, error| {
+                        view.child(style::notice(IconName::CircleAlert, error, p.error))
+                    }),
+            )
+            .into_any_element()
+    }
+
+    fn forward_kind_label(kind: crate::ssh_forward::ForwardKind) -> SharedString {
+        use crate::ssh_forward::ForwardKind;
+        match kind {
+            ForwardKind::Local => crate::t!("ssh.forward_local"),
+            ForwardKind::Remote => crate::t!("ssh.forward_remote"),
+            ForwardKind::Dynamic => crate::t!("ssh.forward_dynamic"),
+        }
+        .into_owned()
+        .into()
+    }
+
+    fn forward_draft_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::ssh_forward::ForwardKind;
+        let kind = self.forward_kind;
+        let selected = self.forward_host_index;
+        let hosts: Vec<_> = self
+            .hosts
+            .iter()
+            .enumerate()
+            .filter(|(_, host)| host.config.is_some())
+            .map(|(index, host)| (index, host.name.clone()))
+            .collect();
+        let selected_name = hosts
+            .iter()
+            .find(|(index, _)| Some(*index) == selected)
+            .map(|(_, name)| name.clone())
+            .unwrap_or_else(|| crate::t!("ssh.forward_select_host").to_string());
+        let owner = cx.entity().downgrade();
+        let host_owner = owner.clone();
+        Self::forward_row()
+            .child(
+                Button::new("forward-kind")
+                    .small()
+                    .h(px(style::CONTROL_HEIGHT))
+                    .w(px(88.))
+                    .accessibility_label(crate::t!("ssh.forward_type"))
+                    .label(Self::forward_kind_label(kind))
+                    .dropdown_caret(true)
+                    .dropdown_menu(move |mut menu, _, _| {
+                        for next_kind in [
+                            ForwardKind::Local,
+                            ForwardKind::Remote,
+                            ForwardKind::Dynamic,
+                        ] {
+                            let owner = owner.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(Self::forward_kind_label(next_kind))
+                                    .checked(kind == next_kind)
+                                    .on_click(move |_, _, cx| {
+                                        let _ = owner.update(cx, |app, cx| {
+                                            app.forward_kind = next_kind;
+                                            cx.notify();
+                                        });
+                                    }),
+                            );
+                        }
+                        menu
+                    }),
+            )
+            .child(
+                Button::new("forward-host")
+                    .small()
+                    .h(px(style::CONTROL_HEIGHT))
+                    .w(px(160.))
+                    .min_w_0()
+                    .accessibility_label(crate::t!("ssh.forward_ssh_host"))
+                    .child(div().min_w_0().truncate().child(selected_name))
+                    .dropdown_caret(true)
+                    .dropdown_menu(move |mut menu, _, _| {
+                        for (index, name) in &hosts {
+                            let index = *index;
+                            let owner = host_owner.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(name.clone())
+                                    .checked(selected == Some(index))
+                                    .on_click(move |_, _, cx| {
+                                        let _ = owner.update(cx, |app, cx| {
+                                            app.forward_host_index = Some(index);
+                                            cx.notify();
+                                        });
+                                    }),
+                            );
+                        }
+                        menu
+                    }),
+            )
+            .child(
+                div().flex_1().min_w_0().child(
+                    Input::new(&self.forward_local_port)
+                        .small()
+                        .h(px(style::CONTROL_HEIGHT))
+                        .aria_label(crate::t!("ssh.forward_listen_port").to_string()),
+                ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .when(kind != ForwardKind::Dynamic, |column| {
+                        column.child(
+                            Input::new(&self.forward_target_port)
+                                .small()
+                                .h(px(style::CONTROL_HEIGHT))
+                                .aria_label(crate::t!("ssh.forward_target_port").to_string()),
+                        )
+                    }),
+            )
+            .child(div().w(px(64.)).flex_shrink_0())
+            .child(
+                div()
+                    .w(px(92.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        icon_button(
+                            "add-forward",
+                            IconName::Check,
+                            crate::t!("ssh.forward_save"),
+                        )
+                        .text_color(rgb(self.palette.accent))
+                        .on_click(cx.listener(|app, _, window, cx| app.add_forward(window, cx))),
+                    )
+                    .child(
+                        icon_button(
+                            "cancel-add-forward",
+                            IconName::X,
+                            crate::t!("ssh.forward_cancel"),
+                        )
+                        .on_click(
+                            cx.listener(|app, _, window, cx| app.finish_forward_add(window, cx)),
+                        ),
+                    ),
+            )
             .into_any_element()
     }
 
@@ -3842,9 +3995,8 @@ impl AppView {
         &self,
         snapshot: &Snapshot,
         side: metrics_config::Side,
-    ) -> Vec<(String, String)> {
+    ) -> Vec<(metrics_config::Metric, String, String)> {
         let host = &self.hosts[self.active];
-        let mut resource_error_shown = false;
         let format_latency = |value: Option<Duration>| {
             value
                 .map(|duration| format!("{:.1} ms", duration.as_secs_f64() * 1000.))
@@ -3854,43 +4006,57 @@ impl AppView {
             .0
             .iter()
             .filter(|item| item.enabled && item.side() == side)
-            .filter_map(|item| match item.metric {
-                metric if metric.is_resource() => match &self.metrics {
-                    Some(Ok(stats)) => stats.item(metric),
-                    Some(Err(error)) if self.metrics_target.is_some() && !resource_error_shown => {
-                        resource_error_shown = true;
-                        Some((
-                            crate::t!("ws.resource_unavailable").to_string(),
-                            error.clone(),
-                        ))
+            .filter_map(|item| {
+                let placeholder = || {
+                    (
+                        format!("{} --", item.metric.label()),
+                        item.metric.label().into_owned(),
+                    )
+                };
+                let content = match item.metric {
+                    metric if metric.is_resource() => match &self.metrics {
+                        Some(Ok(stats)) => Some(stats.item(metric).unwrap_or_else(placeholder)),
+                        Some(Err(error)) if self.metrics_target.is_some() => Some((
+                            placeholder().0,
+                            format!("{}: {}", crate::t!("ws.resource_unavailable"), error),
+                        )),
+                        _ => Some(placeholder()),
+                    },
+                    metrics_config::Metric::Geometry => Some(
+                        snapshot
+                            .window()
+                            .map(|window| {
+                                let label = crate::t!(
+                                    "ws.pane_summary",
+                                    cols = window.cols,
+                                    rows = window.rows
+                                )
+                                .to_string();
+                                (label.clone(), label)
+                            })
+                            .unwrap_or_else(placeholder),
+                    ),
+                    metrics_config::Metric::SshRtt if host.config.is_some() => {
+                        let label = format!(
+                            "{} {}",
+                            item.metric.label(),
+                            format_latency(self.connection_latency.ssh)
+                        );
+                        Some((label, crate::t!("metrics.ssh_rtt_detail").to_string()))
+                    }
+                    metrics_config::Metric::TmuxRtt
+                        if matches!(host.backend, Some(Backend::Tmux(_))) =>
+                    {
+                        let label = format!(
+                            "{} {}",
+                            item.metric.label(),
+                            format_latency(self.connection_latency.tmux)
+                        );
+                        Some((label, crate::t!("metrics.tmux_rtt_detail").to_string()))
                     }
                     _ => None,
-                },
-                metrics_config::Metric::Geometry => snapshot.window().map(|window| {
-                    let label =
-                        crate::t!("ws.pane_summary", cols = window.cols, rows = window.rows)
-                            .to_string();
-                    (label.clone(), label)
-                }),
-                metrics_config::Metric::SshRtt if host.config.is_some() => {
-                    let label = format!(
-                        "{} {}",
-                        item.metric.label(),
-                        format_latency(self.connection_latency.ssh)
-                    );
-                    Some((label, crate::t!("metrics.ssh_rtt_detail").to_string()))
-                }
-                metrics_config::Metric::TmuxRtt
-                    if matches!(host.backend, Some(Backend::Tmux(_))) =>
-                {
-                    let label = format!(
-                        "{} {}",
-                        item.metric.label(),
-                        format_latency(self.connection_latency.tmux)
-                    );
-                    Some((label, crate::t!("metrics.tmux_rtt_detail").to_string()))
-                }
-                _ => None,
+                };
+                content.map(|(label, detail)| (item.metric, label, detail))
             })
             .collect()
     }
@@ -3908,18 +4074,22 @@ impl AppView {
                 self.terminal_status_items(snapshot, side)
                     .into_iter()
                     .enumerate()
-                    .map(|(index, (label, detail))| {
+                    .map(|(index, (metric, label, detail))| {
                         div()
-                            .id(("status-item", index))
+                            .id(("status-item", metric as usize))
                             .min_w_0()
+                            .when(metric != metrics_config::Metric::System, |item| {
+                                item.flex_shrink_0()
+                            })
                             .flex()
                             .items_center()
+                            .overflow_hidden()
                             .when(index > 0, |item| {
                                 item.child(
                                     div()
                                         .w(px(1.))
                                         .h(px(9.))
-                                        .mx(px(8.))
+                                        .mx(px(4.))
                                         .flex_shrink_0()
                                         .bg(rgba((self.terminal_palette.muted << 8) | 45)),
                                 )
@@ -4065,12 +4235,12 @@ impl AppView {
                 .text_size(px(12.))
                 .line_height(line_height)
                 .text_color(rgb(self.terminal_palette.muted))
-                .left(self.terminal_status_strip(snapshot, metrics_config::Side::Left))
+                .child(self.terminal_status_strip(snapshot, metrics_config::Side::Left))
                 .right(
                     div()
                         .flex()
                         .items_center()
-                        .gap_3()
+                        .gap_2()
                         .child(self.terminal_status_strip(snapshot, metrics_config::Side::Right))
                         .when_some(self.forward_status_button(cx), |row, button| {
                             row.child(button)
@@ -4150,13 +4320,14 @@ impl AppView {
                         )
                     })
                     .child(
-                        Button::new("select-workspace-directory")
-                            .small()
-                            .label(crate::t!("ws.open"))
-                            .disabled(self.session_directory(cx).is_none())
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.create_tab(window, cx)),
-                            ),
+                        icon_button(
+                            "select-workspace-directory",
+                            IconName::Check,
+                            crate::t!("ws.open"),
+                        )
+                        .text_color(rgb(p.accent))
+                        .disabled(self.session_directory(cx).is_none())
+                        .on_click(cx.listener(|this, _, window, cx| this.create_tab(window, cx))),
                     ),
             )
             .child(
@@ -4164,7 +4335,8 @@ impl AppView {
                     .id("directory-completions")
                     .flex()
                     .flex_col()
-                    .max_h(px(240.))
+                    .h(px(150.))
+                    .flex_shrink_0()
                     .overflow_y_scrollbar()
                     .children(
                         self.directory_candidates
@@ -4207,22 +4379,26 @@ impl AppView {
                             }),
                     ),
             )
-            .when_some(self.directory_error.clone(), |view, error| {
-                view.child(
-                    div()
-                        .text_color(rgb(p.muted))
-                        .text_size(px(11.))
-                        .child(error),
-                )
-            })
-            .when_some(self.message.clone(), |view, message| {
-                view.child(
-                    div()
-                        .text_color(rgb(p.error))
-                        .text_size(px(11.))
-                        .child(message),
-                )
-            })
+            .child(
+                div()
+                    .id("directory-feedback")
+                    .h(px(32.))
+                    .flex_shrink_0()
+                    .min_w_0()
+                    .overflow_y_scroll()
+                    .text_size(px(11.))
+                    .text_color(rgb(if self.message.is_some() {
+                        p.error
+                    } else {
+                        p.muted
+                    }))
+                    .when_some(
+                        self.message
+                            .clone()
+                            .or_else(|| self.directory_error.clone()),
+                        |view, message| view.child(message),
+                    ),
+            )
             .into_any_element()
     }
     fn host_validation_error(
@@ -4252,13 +4428,20 @@ impl AppView {
         let color = self.palette.error;
         Field::new()
             .label(label.into())
-            .when_some(error, |field, error| {
-                field.description_fn(move |_, _| {
-                    div()
-                        .text_size(px(12.))
-                        .text_color(rgb(color))
-                        .child(error.clone())
-                })
+            .description_fn(move |_, _| {
+                div()
+                    .id(("host-field-error", field as usize))
+                    .h(px(16.))
+                    .min_w_0()
+                    .text_size(px(12.))
+                    .text_color(rgb(color))
+                    .when_some(error.clone(), |view, error| {
+                        let tooltip = error.clone();
+                        view.truncate().child(error).tooltip(move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(tooltip.clone())
+                                .build(window, cx)
+                        })
+                    })
             })
     }
 
@@ -4377,16 +4560,12 @@ impl AppView {
                     .border_t_1()
                     .border_color(rgb(p.border))
                     .child(
-                        Button::new("cancel-editor")
-                            .small()
-                            .h(px(style::CONTROL_HEIGHT))
-                            .label(crate::t!("ws.cancel"))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.cancel_host_editor(window, cx)
-                            })),
+                        icon_button("cancel-editor", IconName::X, crate::t!("ws.cancel")).on_click(
+                            cx.listener(|this, _, window, cx| this.cancel_host_editor(window, cx)),
+                        ),
                     )
                     .child(
-                        button(
+                        icon_button(
                             "save-editor",
                             IconName::Check,
                             if self.editing_host.is_some() {
@@ -4395,7 +4574,7 @@ impl AppView {
                                 crate::t!("ws.add_host")
                             },
                         )
-                        .primary()
+                        .text_color(rgb(p.accent))
                         .on_click(cx.listener(|this, _, window, cx| this.add_host(window, cx))),
                     ),
             )
@@ -4459,7 +4638,8 @@ impl Render for AppView {
             .filter(|_| !self.settings_ui.host_form)
             .or_else(|| snapshot.message.clone())
             .filter(|_| self.page != Page::Docker);
-        let can_reconnect = snapshot.message.is_some()
+        let can_reconnect = snapshot.connection == Connection::Closed
+            && snapshot.message.is_some()
             && self.hosts[self.active].config.is_some()
             && !self.settings_ui.host_form;
         let body = if self.page == Page::Terminal {
@@ -4567,31 +4747,47 @@ impl Render for AppView {
             .flex()
             .flex_col()
             .bg(content_background)
-            .when_some(message, |view, message| {
-                view.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_3()
-                        .px_4()
-                        .py_2()
-                        .child(style::notice(IconName::CircleAlert, message, p.error).flex_1())
-                        .when(can_reconnect, |view| {
-                            view.child(
-                                Button::new("reconnect-host")
-                                    .small()
-                                    .label(crate::t!("shortcut.reconnect"))
-                                    .on_click(cx.listener(|this, _, _, cx| this.reconnect(cx))),
-                            )
-                        }),
-                )
-            })
             .child(
                 div()
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .flex()
-                    .child(div().flex_1().min_w_0().child(body)),
+                    .overflow_hidden()
+                    .child(div().flex_1().min_w_0().child(body))
+                    .when_some(message, |view, message| {
+                        if can_reconnect {
+                            view.child(
+                                div()
+                                    .id("workspace-connection-failure")
+                                    .absolute()
+                                    .inset_0()
+                                    .occlude()
+                                    .bg(rgb(p.panel))
+                                    .child(
+                                        style::empty_state(IconName::CircleAlert, message, p)
+                                            .text_color(rgb(p.error))
+                                            .child(
+                                                Button::new("reconnect-host")
+                                                    .small()
+                                                    .icon(IconName::RefreshCw)
+                                                    .label(crate::t!("shortcut.reconnect"))
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.reconnect(cx)
+                                                    })),
+                                            ),
+                                    ),
+                            )
+                        } else {
+                            view.child(style::content_notice(
+                                "workspace-feedback",
+                                IconName::CircleAlert,
+                                message,
+                                p.error,
+                                p,
+                            ))
+                        }
+                    }),
             )
             .when(!self.zen && self.show_status_bar, |view| {
                 view.child(self.status_bar(&snapshot, window, cx))

@@ -64,11 +64,48 @@ does not create a terminal session. See
 - Host forms separate connection and authentication fields. Invalid submissions
   attach the error to the corresponding field and focus that input. The footer
   remains outside the scroll area, including at the 860 x 520 minimum viewport.
+  Add and edit use the same form and compact check/cancel icon controls. Session
+  creation/rename and theme editing also use check icons for confirmation, with
+  localized tooltips and accessible names. Authentication and host-key trust
+  keep explicit text actions so their consequences remain clear.
 - Explorer and Git use the same navigation row dimensions. Editor search uses
   icon commands; Git diff layout and context use segmented choices showing the
   current selection. Below 720 pixels of Git content width, the context choice
   becomes a dropdown and Open File uses an icon with a tooltip. Changing context
   resets the diff's vertical scroll.
+- Loading, empty and request-failure feedback belongs to the owning content area.
+  An empty Docker table shows its state below the persistent search and column
+  headers. Refreshing existing tables, logs and editors uses a content overlay;
+  feedback does not resize controls, list viewports or terminal grids. Long
+  notices wrap and can scroll within the content bounds.
+  Connection failures show their message and Reconnect action together in the
+  center of the main content area, with navigation and terminal geometry intact.
+  Git keeps the selected diff and toolbar while refreshing, and reloads the diff
+  after a successful status request. A failed refresh retains the previous list.
+  Explorer reports read, save and directory failures in its content area without
+  moving its editor toolbar. With no document open, failures replace the empty
+  prompt. Shortcut conflicts use a fixed space beside the recording control;
+  window-size validation also reserves its feedback space.
+  Theme-editor failures stay inside the editor,
+  update actions precede their status text, and forwarding reserves feedback
+  space so validation cannot change the dialog height. Field validation remains
+  attached to its input.
+- Explorer refreshes keep the existing tree, expanded directories and selection
+  until a successful replacement arrives. Git uses a persistent file-list scroll
+  handle across requests. Its compact count area and session unread dots reserve
+  their width so asynchronous updates cannot shorten adjacent names.
+- New-session directory completion reserves a 150-pixel scrollable result area
+  and a 32-pixel scrollable validation area, including when either is empty.
+  Theme-list errors use a fixed single-line slot with the full message in a
+  tooltip. Docker configuration pages keep Save/Discard controls present and
+  disabled when unavailable, and reserve the source-file row before loading.
+- Enabled terminal metrics keep stable identities and status-bar height across
+  pending, successful and failed requests. Each item follows its content width;
+  separators have 4 pixels of padding on each side, with no reserved space after
+  the text. Left and right groups retain their configured alignment. At narrow
+  widths, the left group takes the remaining space and truncates the system name
+  before numeric values; the right group stays at the trailing edge. Missing
+  values use `--`; request errors and full details remain available in tooltips.
 - Tab navigation in interface views emphasizes the focused control's existing
   border; mouse clicks restore the ordinary border. There is no outer focus ring,
   and terminal Tab input retains its terminal behavior. Focus never changes layout.
@@ -142,6 +179,12 @@ global transfer queue, split shortcuts, and close redistribution in an isolated
 `TSHELL_DATA_DIR`. Feature checks exercise
 Git selection/system clipboard copy across virtual rows, terminal search keys
 and focus, link versus TUI mouse input, and notification pane targeting.
+The same check compares Docker search, table and editor bounds across loaded,
+loading and failure states, including empty results in both window sizes, and
+verifies that workspace errors do not resize terminal panes.
+It also checks directory/theme feedback sizes, status metric identities and height,
+retained Explorer selection/scroll, Git list scrolling during failed refreshes, and Docker editor
+bounds before document arrival and across clean/dirty states.
 
 To also capture native renders, build with `--features ui-check-screenshots`
 and set `TSHELL_UI_SCREENSHOT_DIR` before running the check. Workspace captures

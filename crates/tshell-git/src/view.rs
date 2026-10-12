@@ -386,20 +386,29 @@ impl GitView {
     pub fn open_git_diff(
         &mut self,
         change: GitChange,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.load_git_diff(change, true, cx);
+    }
+
+    pub(crate) fn load_git_diff(&mut self, change: GitChange, reset: bool, cx: &mut Context<Self>) {
         self.git_diff_request += 1;
         let request = self.git_diff_request;
         let host = self.host.clone();
-        self.git_diff = Some(DiffView {
-            change: change.clone(),
-            scroll: UniformListScrollHandle::new(),
-            horizontal: std::array::from_fn(|_| ScrollHandle::new()),
-            selection: std::array::from_fn(|_| DiffSelection::new(cx)),
-            content: Err(crate::t!("git.reading_diff").to_string()),
-        });
-        cx.spawn_in(window, async move |view, cx| {
+        self.diff_loading = true;
+        if reset {
+            self.git_diff = Some(DiffView {
+                change: change.clone(),
+                scroll: UniformListScrollHandle::new(),
+                horizontal: std::array::from_fn(|_| ScrollHandle::new()),
+                selection: std::array::from_fn(|_| DiffSelection::new(cx)),
+                content: Err(crate::t!("git.reading_diff").to_string()),
+            });
+        } else if let Some(diff) = &mut self.git_diff {
+            diff.change = change.clone();
+        }
+        cx.spawn(async move |view, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
@@ -412,6 +421,7 @@ impl GitView {
                 if this.git_diff_request != request {
                     return;
                 }
+                this.diff_loading = false;
                 if let Some(diff) = &mut this.git_diff {
                     diff.content = result;
                 }
@@ -496,28 +506,45 @@ impl GitView {
                     )
                     .child(
                         div()
+                            .id(("git-stats", index))
                             .flex()
+                            .w(px(56.))
                             .flex_shrink_0()
                             .justify_end()
-                            .gap(px(5.))
+                            .gap(px(4.))
                             .text_size(px(11.))
-                            .children(change.stats.map(|stats| {
-                                div()
-                                    .flex()
-                                    .gap(px(5.))
-                                    .child(
-                                        div()
-                                            .text_color(rgb(p.ansi[1]))
-                                            .child(format!("−{}", stats.removed)),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_color(rgb(p.ansi[2]))
-                                            .child(format!("+{}", stats.added)),
-                                    )
+                            .font_features(FontFeatures(std::sync::Arc::new(vec![(
+                                "tnum".into(),
+                                1,
+                            )])))
+                            .children(change.stats.into_iter().flat_map(|stats| {
+                                [
+                                    (p.ansi[1], format!("−{}", stats.removed)),
+                                    (p.ansi[2], format!("+{}", stats.added)),
+                                ]
+                                .into_iter()
+                                .map(|(color, count)| {
+                                    div()
+                                        .max_w(px(26.))
+                                        .min_w_0()
+                                        .text_right()
+                                        .truncate()
+                                        .text_color(rgb(color))
+                                        .child(count)
+                                })
                             }))
                             .when(change.stats.is_none(), |row| {
                                 row.child(div().text_color(rgb(p.muted)).child("—"))
+                            })
+                            .tooltip({
+                                let counts = change
+                                    .stats
+                                    .map(|stats| format!("−{}  +{}", stats.removed, stats.added))
+                                    .unwrap_or_else(|| "—".to_owned());
+                                move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(counts.clone())
+                                        .build(window, cx)
+                                }
                             }),
                     ),
             )
@@ -528,8 +555,21 @@ impl GitView {
 
     pub fn git_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = self.palette;
+        let feedback = self
+            .git_error
+            .clone()
+            .map(|message| (IconName::CircleAlert, message, p.error))
+            .or_else(|| {
+                self.git_loading.then(|| {
+                    (
+                        IconName::Clock,
+                        crate::t!("git.loading").into_owned(),
+                        p.muted,
+                    )
+                })
+            });
         let changes = uniform_list(
-            ("git-files", self.git_request),
+            "git-files",
             self.git_changes.len(),
             cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
                 range
@@ -537,35 +577,46 @@ impl GitView {
                     .collect()
             }),
         )
-        .size_full();
+        .size_full()
+        .track_scroll(&self.git_scroll);
         div()
             .size_full()
             .flex()
             .flex_col()
             .pt_1()
-            .when_some(self.git_error.clone(), |panel, error| {
-                panel.child(div().px_3().py_2().text_color(rgb(p.muted)).child(error))
-            })
-            .when(
-                self.git_changes.is_empty() && self.git_error.is_none(),
-                |panel| {
-                    panel.child(
-                        div()
-                            .px_3()
-                            .py_2()
-                            .text_size(px(12.))
-                            .text_color(rgb(p.muted))
-                            .child(crate::t!("git.clean")),
-                    )
-                },
-            )
             .child(
                 div()
+                    .relative()
                     .flex_1()
                     .min_h_0()
                     .overflow_hidden()
                     .px_1()
-                    .child(changes),
+                    .child(if self.git_changes.is_empty() {
+                        let (icon, message, color) = feedback.clone().unwrap_or_else(|| {
+                            (
+                                IconName::GitBranch,
+                                crate::t!("git.clean").into_owned(),
+                                p.muted,
+                            )
+                        });
+                        style::empty_state(icon, message, p)
+                            .text_color(rgb(color))
+                            .into_any_element()
+                    } else {
+                        changes.into_any_element()
+                    })
+                    .when_some(
+                        feedback.filter(|_| !self.git_changes.is_empty()),
+                        |view, (icon, message, color)| {
+                            view.child(style::content_notice(
+                                "git-list-feedback",
+                                icon,
+                                message,
+                                color,
+                                p,
+                            ))
+                        },
+                    ),
             )
             .into_any_element()
     }
@@ -882,19 +933,39 @@ impl GitView {
         let narrow = width < px(720.);
         let owner = cx.entity().downgrade();
         let Some(diff) = &self.git_diff else {
-            return style::empty_state(
-                IconName::GitBranch,
-                crate::t!("git.select_file").into_owned(),
-                p,
-            )
-            .into_any_element();
+            let (icon, message, color) = if let Some(error) = &self.git_error {
+                (IconName::CircleAlert, error.clone(), p.error)
+            } else if self.git_loading {
+                (
+                    IconName::Clock,
+                    crate::t!("git.loading").into_owned(),
+                    p.muted,
+                )
+            } else {
+                (
+                    IconName::GitBranch,
+                    crate::t!("git.select_file").into_owned(),
+                    p.muted,
+                )
+            };
+            return style::empty_state(icon, message, p)
+                .text_color(rgb(color))
+                .into_any_element();
         };
         let path = diff.change.path.clone();
         let title = git::relative_path(&path, &diff.change.root, self.host.is_some());
         let content = match &diff.content {
-            Err(message) => style::notice(IconName::CircleAlert, message.clone(), p.error)
-                .p_3()
-                .into_any_element(),
+            Err(message) => style::empty_state(
+                if self.diff_loading {
+                    IconName::Clock
+                } else {
+                    IconName::CircleAlert
+                },
+                message.clone(),
+                p,
+            )
+            .text_color(rgb(if self.diff_loading { p.muted } else { p.error }))
+            .into_any_element(),
             Ok(content) if content.rows.is_empty() => {
                 style::empty_state(IconName::FileCode, content.notice.clone(), p).into_any_element()
             }
@@ -1045,10 +1116,21 @@ impl GitView {
             )
             .child(
                 div()
+                    .relative()
                     .flex_1()
                     .min_h_0()
+                    .overflow_hidden()
                     .bg(rgb(self.terminal_palette.terminal))
-                    .child(content),
+                    .child(content)
+                    .when(self.diff_loading && diff.content.is_ok(), |view| {
+                        view.child(style::content_notice(
+                            "git-diff-loading",
+                            IconName::Clock,
+                            crate::t!("git.reading_diff").into_owned(),
+                            p.muted,
+                            p,
+                        ))
+                    }),
             )
             .into_any_element()
     }

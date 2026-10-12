@@ -78,15 +78,6 @@ impl AppView {
                             .text_color(rgb(self.palette.muted)),
                     ),
             )
-            .child(style::notice(
-                icon,
-                status,
-                if failed {
-                    self.palette.error
-                } else {
-                    self.palette.text
-                },
-            ))
             .child(
                 div()
                     .flex()
@@ -120,6 +111,15 @@ impl AppView {
                         )
                     }),
             )
+            .child(style::notice(
+                icon,
+                status,
+                if failed {
+                    self.palette.error
+                } else {
+                    self.palette.text
+                },
+            ))
             .into_any_element()
     }
 
