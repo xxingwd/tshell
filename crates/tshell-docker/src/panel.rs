@@ -18,7 +18,10 @@ use gpui_kit::component::{
 use gpui_kit::{prelude::*, *};
 #[cfg(debug_assertions)]
 use std::collections::HashMap;
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::Duration,
+};
 use tshell_host::{Failure, HostId};
 use tshell_ui::appearance::Palette;
 #[derive(Clone)]
@@ -37,6 +40,14 @@ pub(crate) enum Tab {
     Overview,
     Logs,
     Inspect,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum SidebarGroup {
+    Containers,
+    Compose,
+    Images,
+    Storage,
+    Engine,
 }
 pub(crate) struct Engine {
     pub target: Target,
@@ -151,12 +162,25 @@ pub struct DockerView {
     preview_worker: Option<Worker>,
     project_worker: Option<Worker>,
     pending_form: Option<(Target, Resource, crate::actions::Action)>,
+    pub(crate) sidebar_expanded: BTreeSet<SidebarGroup>,
     #[cfg(debug_assertions)]
     fixture: bool,
     _updates: Task<()>,
 }
 impl EventEmitter<Event> for DockerView {}
 impl DockerView {
+    pub(crate) fn collection_loading(&self) -> bool {
+        self.resource_worker.is_some() || self.project_worker.is_some()
+    }
+
+    pub(crate) fn preview_loading(&self) -> bool {
+        self.preview_worker.is_some()
+    }
+
+    pub(crate) fn detail_loading(&self) -> bool {
+        self.detail_worker.is_some()
+    }
+
     pub(crate) fn discard_document(
         &mut self,
         target: Target,
@@ -285,6 +309,13 @@ impl DockerView {
             preview_worker: None,
             project_worker: None,
             pending_form: None,
+            sidebar_expanded: [
+                SidebarGroup::Containers,
+                SidebarGroup::Compose,
+                SidebarGroup::Images,
+            ]
+            .into_iter()
+            .collect(),
             #[cfg(debug_assertions)]
             fixture: false,
             _updates: updates,
@@ -1952,6 +1983,149 @@ pub(crate) fn is_running(container: &ContainerSummary) -> bool {
 
 #[cfg(debug_assertions)]
 impl DockerView {
+    pub fn check_feedback_state(&mut self, state: usize, cx: &mut Context<Self>) {
+        let engine = self.engine_mut().expect("Docker fixture Engine");
+        engine.loading = state == 1;
+        engine.error = (state == 2).then(|| failure(anyhow::anyhow!("Fixture Engine request failed. Existing content remains available while the request is retried.")));
+        engine.logs_loading = state == 1;
+        engine.logs_error = engine.error.clone();
+        cx.notify();
+    }
+
+    pub fn check_feedback_bounds(&self, cx: &App) -> Vec<Bounds<Pixels>> {
+        let engine = self.engine().expect("Docker fixture Engine");
+        if self.collection_visible() {
+            let collection = engine.resources.collection.unwrap();
+            let query = if collection == crate::browser::Collection::Containers {
+                &engine.query
+            } else {
+                &engine.resources.queries[&collection.page()]
+            };
+            return vec![
+                query.read(cx).input_bounds(),
+                engine.resources.table_scrolls[&collection]
+                    .0
+                    .borrow()
+                    .base_handle
+                    .bounds(),
+            ];
+        }
+        if engine.resources.page == ResourcePage::Containers {
+            return match engine.tab {
+                Tab::Logs => vec![
+                    engine.logs_query.read(cx).input_bounds(),
+                    engine.logs_editor.read(cx).input_bounds(),
+                ],
+                Tab::Inspect => vec![engine.inspect_editor.read(cx).input_bounds()],
+                Tab::Overview => Vec::new(),
+            };
+        }
+        let resource = engine.resources.selection().unwrap();
+        if let Some(document) = engine.resources.document(resource) {
+            vec![document.editor.read(cx).input_bounds()]
+        } else if engine.resources.raw() || matches!(resource, Resource::Events | Resource::Daemon)
+        {
+            vec![engine.resources.editor.read(cx).input_bounds()]
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn check_config_document_state(
+        &mut self,
+        state: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(engine) = self.engine_mut() else {
+            return false;
+        };
+        if engine.resources.output_visible {
+            return false;
+        }
+        let Some(resource) = engine.resources.selection().cloned() else {
+            return false;
+        };
+        let path = match &resource {
+            Resource::Project(name) if engine.resources.raw() => engine
+                .resources
+                .projects
+                .iter()
+                .find(|project| &project.name == name)
+                .and_then(|project| project.files.first().cloned()),
+            Resource::Daemon => engine
+                .resources
+                .daemon
+                .as_ref()
+                .map(|source| source.path.clone()),
+            _ => return false,
+        };
+        let Some(path) = path else { return false };
+        let Some(document) = engine.resources.documents.get(&path) else {
+            return false;
+        };
+        if state == 0 {
+            engine.resources.active_files.remove(&resource);
+            engine.resources.preview.remove(&resource.inspect_key());
+        } else {
+            engine.resources.active_files.insert(resource, path);
+            let mut text = document.file.original.clone().unwrap_or_default();
+            if state == 2 {
+                text.push('\n');
+            }
+            document
+                .editor
+                .update(cx, |editor, cx| editor.set_value(text, window, cx));
+        }
+        engine.loading = state == 0;
+        cx.notify();
+        true
+    }
+
+    pub fn check_compact_sidebar(&mut self, compact: bool, cx: &mut Context<Self>) {
+        self.sidebar_expanded = if compact {
+            BTreeSet::new()
+        } else {
+            [
+                SidebarGroup::Containers,
+                SidebarGroup::Compose,
+                SidebarGroup::Images,
+            ]
+            .into()
+        };
+        cx.notify();
+    }
+
+    pub fn check_feedback_empty_collection(
+        &mut self,
+        empty: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.collection_visible() {
+            return false;
+        }
+        let engine = self.engine_mut().unwrap();
+        let collection = engine.resources.collection.unwrap();
+        let query = if collection == crate::browser::Collection::Containers {
+            &engine.query
+        } else {
+            &engine.resources.queries[&collection.page()]
+        };
+        query.update(cx, |query, cx| {
+            query.set_value(
+                if empty {
+                    "fixture-no-matching-resource"
+                } else {
+                    ""
+                },
+                window,
+                cx,
+            )
+        });
+        true
+    }
+
     pub fn check_layout(&self, cx: &App) {
         let engine = self.engine().expect("Docker fixture Engine");
         if engine.resources.page != ResourcePage::Containers {

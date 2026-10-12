@@ -1,8 +1,8 @@
 use crate::actions::Action;
 use crate::{
-    DockerView, i18n,
+    DockerView,
     panel::{container_name, is_running},
-    resources::{Resource, service_name},
+    resources::{Resource, image_references, service_name, short_id},
     t,
 };
 use gpui_kit::assets::IconName;
@@ -19,6 +19,32 @@ use tshell_ui::controls::icon_button;
 enum Destination {
     Collection(crate::browser::Collection),
     Detail(Resource),
+}
+#[derive(Clone)]
+struct SidebarNode {
+    key: SharedString,
+    label: SharedString,
+    icon: IconName,
+    depth: u8,
+    destination: Destination,
+    group: Option<crate::panel::SidebarGroup>,
+}
+const SIDEBAR_PREVIEW_LIMIT: usize = 50;
+fn push_sidebar_group(
+    nodes: &mut Vec<SidebarNode>,
+    group: crate::panel::SidebarGroup,
+    destination: Destination,
+    icon: IconName,
+    key: &'static str,
+) {
+    nodes.push(SidebarNode {
+        key: SharedString::from(key),
+        label: SharedString::from(t!(key).into_owned()),
+        icon,
+        depth: 0,
+        destination,
+        group: Some(group),
+    });
 }
 impl Destination {
     fn active(&self, engine: &crate::panel::Engine) -> bool {
@@ -52,61 +78,214 @@ impl Destination {
 impl DockerView {
     pub fn sidebar(&self, _width: f32, cx: &mut Context<Self>) -> AnyElement {
         use crate::browser::Collection;
-        let entries = vec![
-            (
-                Destination::Collection(Collection::Containers),
-                IconName::Box,
-                Collection::Containers.key(),
-            ),
-            (
-                Destination::Collection(Collection::Projects),
-                IconName::Layers,
-                Collection::Projects.key(),
-            ),
-            (
-                Destination::Collection(Collection::Images),
-                IconName::Image,
-                Collection::Images.key(),
-            ),
-            (
-                Destination::Collection(Collection::Volumes),
-                IconName::HardDrive,
-                Collection::Volumes.key(),
-            ),
-            (
-                Destination::Collection(Collection::Networks),
-                IconName::Network,
-                Collection::Networks.key(),
-            ),
-            (
-                Destination::Detail(Resource::Info),
-                IconName::Info,
-                "docker.engine_info",
-            ),
-            (
-                Destination::Detail(Resource::Disk),
-                IconName::HardDrive,
-                "docker.storage",
-            ),
-            (
-                Destination::Detail(Resource::Events),
-                IconName::ScrollText,
-                "docker.events",
-            ),
-            (
-                Destination::Detail(Resource::Daemon),
-                IconName::Settings,
-                "docker.engine_config",
-            ),
-        ];
         let Some(engine) = self.engine() else {
             return div().into_any_element();
         };
+        let mut nodes = Vec::new();
+        push_sidebar_group(
+            &mut nodes,
+            crate::panel::SidebarGroup::Containers,
+            Destination::Collection(Collection::Containers),
+            IconName::Box,
+            Collection::Containers.key(),
+        );
+        if self
+            .sidebar_expanded
+            .contains(&crate::panel::SidebarGroup::Containers)
+        {
+            for container in engine.containers.iter().take(SIDEBAR_PREVIEW_LIMIT) {
+                let Some(id) = container.id.clone() else {
+                    continue;
+                };
+                nodes.push(SidebarNode {
+                    key: SharedString::from(format!("container-{id}")),
+                    label: SharedString::from(container_name(container)),
+                    icon: if is_running(container) {
+                        IconName::Play
+                    } else {
+                        IconName::Square
+                    },
+                    depth: 1,
+                    destination: Destination::Detail(Resource::Container(id)),
+                    group: None,
+                });
+            }
+            if engine.containers.len() > SIDEBAR_PREVIEW_LIMIT {
+                nodes.push(SidebarNode {
+                    key: SharedString::from("containers-open-all"),
+                    label: SharedString::from(t!("docker.open_all").into_owned()),
+                    icon: IconName::List,
+                    depth: 1,
+                    destination: Destination::Collection(Collection::Containers),
+                    group: None,
+                });
+            }
+        }
+        push_sidebar_group(
+            &mut nodes,
+            crate::panel::SidebarGroup::Compose,
+            Destination::Collection(Collection::Projects),
+            IconName::Layers,
+            Collection::Projects.key(),
+        );
+        if self
+            .sidebar_expanded
+            .contains(&crate::panel::SidebarGroup::Compose)
+        {
+            for project in &engine.resources.projects {
+                nodes.push(SidebarNode {
+                    key: SharedString::from(format!("project-{}", project.name)),
+                    label: SharedString::from(project.name.clone()),
+                    icon: IconName::Layers,
+                    depth: 1,
+                    destination: Destination::Detail(Resource::Project(project.name.clone())),
+                    group: None,
+                });
+                for container in engine
+                    .containers
+                    .iter()
+                    .filter(|container| {
+                        container
+                            .labels
+                            .as_ref()
+                            .and_then(|labels| labels.get("com.docker.compose.project"))
+                            == Some(&project.name)
+                    })
+                    .take(SIDEBAR_PREVIEW_LIMIT)
+                {
+                    let Some(id) = container.id.clone() else {
+                        continue;
+                    };
+                    nodes.push(SidebarNode {
+                        key: SharedString::from(format!("service-{id}")),
+                        label: SharedString::from(service_name(container)),
+                        icon: if is_running(container) {
+                            IconName::Play
+                        } else {
+                            IconName::Square
+                        },
+                        depth: 2,
+                        destination: Destination::Detail(Resource::Container(id)),
+                        group: None,
+                    });
+                }
+            }
+        }
+        push_sidebar_group(
+            &mut nodes,
+            crate::panel::SidebarGroup::Images,
+            Destination::Collection(Collection::Images),
+            IconName::Image,
+            Collection::Images.key(),
+        );
+        if self
+            .sidebar_expanded
+            .contains(&crate::panel::SidebarGroup::Images)
+        {
+            let by_id: std::collections::BTreeMap<_, _> = engine
+                .resources
+                .images
+                .iter()
+                .map(|image| (image.id.as_str(), image))
+                .collect();
+            for reference in image_references(&engine.resources.images) {
+                let Some(image) = by_id.get(reference.id.as_str()) else {
+                    continue;
+                };
+                let label = reference
+                    .tag
+                    .clone()
+                    .unwrap_or_else(|| format!("<none>:<none>  {}", short_id(&image.id)));
+                nodes.push(SidebarNode {
+                    key: SharedString::from(format!("image-{}-{}", reference.id, label)),
+                    label: SharedString::from(label),
+                    icon: IconName::Image,
+                    depth: 1,
+                    destination: Destination::Detail(Resource::Image(reference)),
+                    group: None,
+                });
+            }
+        }
+        push_sidebar_group(
+            &mut nodes,
+            crate::panel::SidebarGroup::Storage,
+            Destination::Collection(Collection::Volumes),
+            IconName::HardDrive,
+            "docker.more",
+        );
+        if self
+            .sidebar_expanded
+            .contains(&crate::panel::SidebarGroup::Storage)
+        {
+            nodes.push(SidebarNode {
+                key: SharedString::from("volumes"),
+                label: SharedString::from(t!("docker.volumes").into_owned()),
+                icon: IconName::HardDrive,
+                depth: 1,
+                destination: Destination::Collection(Collection::Volumes),
+                group: None,
+            });
+            nodes.push(SidebarNode {
+                key: SharedString::from("networks"),
+                label: SharedString::from(t!("docker.networks").into_owned()),
+                icon: IconName::Network,
+                depth: 1,
+                destination: Destination::Collection(Collection::Networks),
+                group: None,
+            });
+        }
+        push_sidebar_group(
+            &mut nodes,
+            crate::panel::SidebarGroup::Engine,
+            Destination::Detail(Resource::Info),
+            IconName::Info,
+            "docker.engine_info",
+        );
+        if self
+            .sidebar_expanded
+            .contains(&crate::panel::SidebarGroup::Engine)
+        {
+            nodes.extend([
+                SidebarNode {
+                    key: SharedString::from("engine-info"),
+                    label: SharedString::from(t!("docker.engine_info").into_owned()),
+                    icon: IconName::Info,
+                    depth: 1,
+                    destination: Destination::Detail(Resource::Info),
+                    group: None,
+                },
+                SidebarNode {
+                    key: SharedString::from("engine-storage"),
+                    label: SharedString::from(t!("docker.storage").into_owned()),
+                    icon: IconName::HardDrive,
+                    depth: 1,
+                    destination: Destination::Detail(Resource::Disk),
+                    group: None,
+                },
+                SidebarNode {
+                    key: SharedString::from("engine-events"),
+                    label: SharedString::from(t!("docker.events").into_owned()),
+                    icon: IconName::ScrollText,
+                    depth: 1,
+                    destination: Destination::Detail(Resource::Events),
+                    group: None,
+                },
+                SidebarNode {
+                    key: SharedString::from("engine-config"),
+                    label: SharedString::from(t!("docker.engine_config").into_owned()),
+                    icon: IconName::Settings,
+                    depth: 1,
+                    destination: Destination::Detail(Resource::Daemon),
+                    group: None,
+                },
+            ]);
+        }
         let focus = engine.resources.focus.clone();
-        let navigation: Vec<_> = entries.iter().map(|(entry, _, _)| entry.clone()).collect();
+        let navigation: Vec<_> = nodes.iter().map(|node| node.destination.clone()).collect();
+        let count = nodes.len();
+        let palette = self.palette;
         div()
             .id("docker-menu")
-            .role(Role::TabList)
             .size_full()
             .flex()
             .flex_col()
@@ -134,52 +313,86 @@ impl DockerView {
                     cx.stop_propagation();
                 }
             }))
-            .children(
-                entries
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, (entry, icon, key))| {
-                        let active = entry.active(engine);
-                        div()
-                            .id(("docker-menu-entry", index))
-                            .role(Role::Tab)
-                            .aria_label(t!(key).into_owned())
-                            .aria_selected(active)
-                            .when(active, |entry| entry.aria_active_descendant())
-                            .h(px(32.))
-                            .w_full()
-                            .px_3()
-                            .flex_shrink_0()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .cursor_pointer()
-                            .text_size(px(13.))
-                            .when(index == 3 || index == 5, |entry| entry.mt_2())
-                            .when(active, |entry| entry.bg(rgb(self.palette.selected)))
-                            .hover(|entry| entry.bg(rgb(self.palette.row_hover())))
-                            .child(
-                                Icon::new(icon)
-                                    .size(px(14.))
-                                    .text_color(rgb(self.palette.muted)),
-                            )
-                            .child(
+            .child(
+                uniform_list(
+                    "docker-menu-tree",
+                    count,
+                    cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                        range
+                            .map(|index| {
+                                let node = nodes[index].clone();
+                                let active = this
+                                    .engine()
+                                    .is_some_and(|engine| node.destination.active(engine));
+                                let group = node.group;
+                                let destination = node.destination.clone();
+                                let label = node.label.clone();
+                                let tooltip_label = label.clone();
+                                let key = node.key.clone();
+                                let expanded = group
+                                    .is_some_and(|group| this.sidebar_expanded.contains(&group));
                                 div()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .truncate()
-                                    .child(t!(key).into_owned()),
-                            )
-                            .tooltip(move |window, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new(t!(key).into_owned())
-                                    .build(window, cx)
+                                    .id(key)
+                                    .h(px(30.))
+                                    .w_full()
+                                    .pl(px(8. + f32::from(node.depth) * 16.))
+                                    .pr_2()
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .cursor_pointer()
+                                    .text_size(px(12.))
+                                    .when(active, |row| row.bg(rgb(palette.selected)))
+                                    .hover(|row| row.bg(rgb(palette.row_hover())))
+                                    .child(
+                                        Icon::new(if group.is_some() {
+                                            if expanded {
+                                                IconName::ChevronDown
+                                            } else {
+                                                IconName::ChevronRight
+                                            }
+                                        } else {
+                                            node.icon
+                                        })
+                                        .size(px(14.))
+                                        .text_color(rgb(palette.muted)),
+                                    )
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .flex_1()
+                                            .truncate()
+                                            .text_color(rgb(if active {
+                                                palette.text
+                                            } else {
+                                                palette.muted
+                                            }))
+                                            .child(label),
+                                    )
+                                    .tooltip(move |window, cx| {
+                                        gpui_kit::component::tooltip::Tooltip::new(
+                                            tooltip_label.clone(),
+                                        )
+                                        .build(window, cx)
+                                    })
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        if let Some(group) = group {
+                                            if !this.sidebar_expanded.remove(&group) {
+                                                this.sidebar_expanded.insert(group);
+                                            }
+                                            destination.open(this, window, cx);
+                                            cx.notify();
+                                        } else {
+                                            destination.open(this, window, cx);
+                                        }
+                                    }))
+                                    .into_any_element()
                             })
-                            .on_click(
-                                cx.listener(move |this, _, window, cx| {
-                                    entry.open(this, window, cx)
-                                }),
-                            )
+                            .collect()
                     }),
+                )
+                .size_full(),
             )
             .into_any_element()
     }
@@ -194,28 +407,33 @@ impl DockerView {
         let Some(engine) = self.engine() else {
             return surface.into_any_element();
         };
-        if let Some(error) = &engine.error {
-            surface = surface.child(
-                div()
-                    .px_3()
-                    .py_2()
-                    .text_size(px(12.))
-                    .text_color(rgb(p.ansi[1]))
-                    .child(i18n::format_failure(error)),
-            );
-        }
         let Some(resource) = engine.resources.selection() else {
             if engine.resources.output_visible && engine.resources.output_resource.is_none() {
                 return surface
-                    .child(Editor::new(&engine.resources.output))
+                    .child(self.content_feedback(
+                        "docker-resource-output-feedback",
+                        Editor::new(&engine.resources.output).into_any_element(),
+                        engine.loading,
+                        engine.error.as_ref(),
+                        false,
+                    ))
                     .into_any_element();
             }
             return surface
-                .child(tshell_ui::controls::empty_state(
-                    IconName::MousePointer,
-                    t!("docker.select_resource").into_owned(),
-                    p,
-                ))
+                .child(
+                    self.content_feedback(
+                        "docker-resource-empty-feedback",
+                        tshell_ui::controls::empty_state(
+                            IconName::MousePointer,
+                            t!("docker.select_resource").into_owned(),
+                            p,
+                        )
+                        .into_any_element(),
+                        engine.loading,
+                        engine.error.as_ref(),
+                        true,
+                    ),
+                )
                 .into_any_element();
         };
         let document = engine.resources.document(resource);
@@ -242,40 +460,57 @@ impl DockerView {
                 .when(matches!(resource, Resource::Project(_)), |bar| {
                     bar.child(self.service_selector(resource, cx))
                 })
-                .when_some(document, |bar, document| {
-                    let target = engine.target.clone();
-                    let resource = resource.clone();
-                    bar.child(
-                        icon_button("docker-save-document", IconName::Save, t!("editor.save"))
-                            .disabled(!document.dirty(cx) || engine.busy.is_some())
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_action(
-                                    target.clone(),
-                                    Some(resource.clone()),
-                                    Action::Save,
-                                    window,
-                                    cx,
+                .when(
+                    matches!(resource, Resource::Project(_) | Resource::Daemon),
+                    |bar| {
+                        let target = engine.target.clone();
+                        let resource = resource.clone();
+                        bar.child(
+                            icon_button("docker-save-document", IconName::Save, t!("editor.save"))
+                                .disabled(
+                                    !document.is_some_and(|document| document.dirty(cx))
+                                        || engine.busy.is_some(),
                                 )
-                            })),
-                    )
-                })
-                .when(document.is_some_and(|document| document.dirty(cx)), |bar| {
-                    let target = engine.target.clone();
-                    let resource = resource.clone();
-                    bar.child(
-                        icon_button(
-                            "docker-discard-document",
-                            IconName::Undo2,
-                            t!("docker.discard_changes"),
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.open_action(
+                                        target.clone(),
+                                        Some(resource.clone()),
+                                        Action::Save,
+                                        window,
+                                        cx,
+                                    )
+                                })),
                         )
-                        .disabled(engine.busy.is_some())
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                this.discard_document(target.clone(), resource.clone(), window, cx)
-                            },
-                        )),
-                    )
-                })
+                    },
+                )
+                .when(
+                    matches!(resource, Resource::Project(_) | Resource::Daemon),
+                    |bar| {
+                        let target = engine.target.clone();
+                        let resource = resource.clone();
+                        bar.child(
+                            icon_button(
+                                "docker-discard-document",
+                                IconName::Undo2,
+                                t!("docker.discard_changes"),
+                            )
+                            .disabled(
+                                !document.is_some_and(|document| document.dirty(cx))
+                                    || engine.busy.is_some(),
+                            )
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    this.discard_document(
+                                        target.clone(),
+                                        resource.clone(),
+                                        window,
+                                        cx,
+                                    )
+                                },
+                            )),
+                        )
+                    },
+                )
                 .when(*resource != Resource::Daemon, |bar| {
                     let resource = resource.clone();
                     bar.child(
@@ -359,8 +594,8 @@ impl DockerView {
                 .min_h_0()
                 .child(Editor::new(&engine.resources.output))
                 .into_any_element()
-        } else if let Some(document) =
-            document.filter(|_| *resource == Resource::Daemon || engine.resources.raw())
+        } else if *resource == Resource::Daemon
+            || (engine.resources.raw() && matches!(resource, Resource::Project(_)))
         {
             div()
                 .size_full()
@@ -369,10 +604,11 @@ impl DockerView {
                 .flex_col()
                 .child(self.file_selector(resource, document, cx))
                 .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .child(Editor::new(&document.editor)),
+                    div().flex_1().min_h_0().child(Editor::new(
+                        document
+                            .map(|document| &document.editor)
+                            .unwrap_or(&engine.resources.editor),
+                    )),
                 )
                 .into_any_element()
         } else if engine.resources.raw() || *resource == Resource::Events {
@@ -536,14 +772,31 @@ impl DockerView {
                     .flex_1()
                     .min_h_0()
                     .text_size(px(self.font_size.clamp(12., 17.)))
-                    .child(content),
+                    .child(
+                        self.content_feedback(
+                            "docker-resource-feedback",
+                            content,
+                            engine.loading || self.preview_loading(),
+                            engine.error.as_ref(),
+                            !engine.resources.output_visible
+                                && document.is_none()
+                                && !matches!(
+                                    resource,
+                                    Resource::Project(_) | Resource::Events | Resource::Daemon
+                                )
+                                && !engine
+                                    .resources
+                                    .preview
+                                    .contains_key(&resource.inspect_key()),
+                        ),
+                    ),
             )
             .into_any_element()
     }
     fn file_selector(
         &self,
         resource: &Resource,
-        document: &crate::documents::Document,
+        document: Option<&crate::documents::Document>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Some(engine) = self.engine() else {
@@ -557,9 +810,19 @@ impl DockerView {
                 .find(|project| &project.name == name)
                 .map(|project| project.files.clone())
                 .unwrap_or_default(),
-            _ => vec![document.file.path.clone()],
+            Resource::Daemon => engine
+                .resources
+                .daemon
+                .as_ref()
+                .map(|source| vec![source.path.clone()])
+                .unwrap_or_default(),
+            _ => Vec::new(),
         };
-        let active = document.file.path.clone();
+        let active = document
+            .map(|document| document.file.path.clone())
+            .or_else(|| engine.resources.active_files.get(resource).cloned())
+            .or_else(|| files.first().cloned())
+            .unwrap_or_else(|| engine.resources.name(resource));
         if files.len() <= 1 {
             let path = active.clone();
             return div()
@@ -582,6 +845,8 @@ impl DockerView {
         Button::new("docker-config-file")
             .ghost()
             .small()
+            .h(px(28.))
+            .flex_shrink_0()
             .w_full()
             .min_w_0()
             .justify_start()

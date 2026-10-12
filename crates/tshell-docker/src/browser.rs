@@ -1,7 +1,6 @@
 use crate::{
     DockerView, ResourcePage,
     actions::Action,
-    i18n,
     panel::{Engine, container_name},
     resources::{Resource, format_image_size, image_references, short_id},
     t,
@@ -589,26 +588,6 @@ impl DockerView {
                         .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
                     ),
             )
-            .when_some(engine.error.as_ref(), |table, error| {
-                table.child(
-                    div()
-                        .px_3()
-                        .py_1()
-                        .text_size(px(12.))
-                        .text_color(rgb(palette.ansi[1]))
-                        .child(i18n::format_failure(error)),
-                )
-            })
-            .when(engine.loading, |table| {
-                table.child(
-                    div()
-                        .px_3()
-                        .py_1()
-                        .text_size(px(12.))
-                        .text_color(rgb(palette.muted))
-                        .child(t!("docker.loading").into_owned()),
-                )
-            })
             .child(
                 div()
                     .h(px(30.))
@@ -690,16 +669,22 @@ impl DockerView {
                             }
                         }
                     }))
-                    .child(if count == 0 {
-                        tshell_ui::controls::empty_state(
-                            IconName::Search,
-                            t!("docker.no_resources").into_owned(),
-                            palette,
-                        )
-                        .into_any_element()
-                    } else {
-                        list.into_any_element()
-                    }),
+                    .child(self.content_feedback(
+                        "docker-table-feedback",
+                        if count == 0 {
+                            tshell_ui::controls::empty_state(
+                                IconName::Search,
+                                t!("docker.no_resources").into_owned(),
+                                palette,
+                            )
+                            .into_any_element()
+                        } else {
+                            list.into_any_element()
+                        },
+                        engine.loading || self.collection_loading(),
+                        engine.error.as_ref(),
+                        count == 0,
+                    )),
             )
             .into_any_element()
     }

@@ -22,17 +22,21 @@ xterm.js or OpenSSH feature parity.
   keyboard-driven commands, equal column/row splits, floating/focus modes, and persisted
   interface preferences.
 - Compact native controls, concise labels with on-demand help, compact responsive settings,
-  keyboard focus feedback, field-level host validation, and adaptive Git diff controls. See
+  keyboard focus feedback, field-level host validation, adaptive Git diff controls,
+  and content-area loading/error feedback that keeps toolbars stable. Refreshes
+  retain file/Git lists and scroll positions; directory completion, document
+  controls reserve their space, and status metrics follow their content width. See
   [workspace interface](docs/workspace-interface.md).
 - Explorer and read-only Git views for local and remote working directories.
   Remote files use SFTP and remote Git commands; no remote Python or mount is
   required. Inline and side-by-side diffs support text selection/copy and
   character-level change highlighting. See [Git workspace](docs/git-workspace.md).
-- A Docker workspace for local and saved SSH Engines, with a functional sidebar
-  menu, complete container lists, separate image-tag rows and adaptable previews.
-  It supports resource operations, logs, container terminals, editable Compose
-  YAML and conflict-aware daemon JSON with backup/restore, independently of
-  terminal sessions. See [Docker workspace](docs/docker-workspace.md).
+- A Docker workspace for local and saved SSH Engines, with an expandable
+  container/Compose/image tree, complete container lists, separate image-tag
+  rows and adaptable previews. It supports resource operations, logs, an inline
+  temporary container terminal, editable Compose YAML and conflict-aware daemon
+  JSON with backup/restore, independently of terminal sessions. See [Docker
+  workspace](docs/docker-workspace.md).
 - A built-in editor for UTF-8 text files, background syntax highlighting,
   search, and conflict-aware remote saves.
 - A global SFTP transfer queue with concurrent uploads/downloads, directory
@@ -49,7 +53,8 @@ xterm.js or OpenSSH feature parity.
   and dark slots, then select light, dark, or automatic mode. Automatic mode
   reads the Windows light/dark setting only.
   Form dialogs use one title and consistent spacing and surfaces that follow
-  the active scheme; confirmation prompts remain compact. Fonts, line height,
+  the active scheme; small form actions use icons with localized tooltips.
+  Confirmation prompts remain compact. Fonts, line height,
   programming ligatures, opacity, acrylic background, and interface language
   are configurable. Appearance settings are grouped by theme, font, window,
   and background rather than by individual control.
@@ -63,8 +68,9 @@ xterm.js or OpenSSH feature parity.
   See [terminal tools](docs/terminal-tools.md).
 - Linux host metrics (CPU, memory, and root filesystem usage) over the existing
   SSH connection, with no sudo or Python requirement.
-- Native local, remote, and SOCKS5 SSH forwarding in a global list. Add rules
-  inline with a type, SSH host, and ports; saved rules start when TShell launches.
+- Native local, remote, and SOCKS5 SSH forwarding in a compact global list. Add
+  and edit rules inline with the same type, SSH host, and port controls and icon
+  actions; saved rules start when TShell launches.
   An icon in the bottom status bar opens the forwarding list. See
   [SSH port forwarding](docs/ssh-forwarding.md).
 - Windows x64 packaging and an opt-in-background update path backed by release

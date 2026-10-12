@@ -9,6 +9,39 @@ use gpui_kit::component::{Disableable, Selectable, Sizable, input::Input};
 use gpui_kit::{prelude::*, *};
 use tshell_ui::controls::icon_button;
 impl DockerView {
+    pub(crate) fn content_feedback(
+        &self,
+        id: &'static str,
+        content: AnyElement,
+        loading: bool,
+        error: Option<&tshell_host::Failure>,
+        empty: bool,
+    ) -> AnyElement {
+        let p = self.palette;
+        let feedback = error
+            .map(|error| (IconName::CircleAlert, i18n::format_failure(error), p.error))
+            .or_else(|| {
+                loading.then(|| (IconName::Clock, t!("docker.loading").into_owned(), p.muted))
+            });
+        if empty && let Some((icon, message, color)) = feedback.as_ref() {
+            return tshell_ui::controls::empty_state(*icon, message.clone(), p)
+                .text_color(rgb(*color))
+                .into_any_element();
+        }
+        div()
+            .relative()
+            .size_full()
+            .min_h_0()
+            .min_w_0()
+            .overflow_hidden()
+            .child(content)
+            .when_some(feedback, |view, (icon, message, color)| {
+                view.child(tshell_ui::controls::content_notice(
+                    id, icon, message, color, p,
+                ))
+            })
+            .into_any_element()
+    }
     pub fn status(&self) -> String {
         self.target()
             .map(|target| source(target))
@@ -258,38 +291,33 @@ impl DockerView {
                 ))
                 .into_any_element();
         };
-        if let Some(error) = &engine.error {
-            surface = surface.child(
-                div()
-                    .px_3()
-                    .py_2()
-                    .text_size(px(12.))
-                    .text_color(rgb(p.ansi[1]))
-                    .child(i18n::format_failure(error)),
-            );
-        }
-        if engine.loading {
-            surface = surface.child(
-                div()
-                    .px_3()
-                    .py_1()
-                    .text_size(px(12.))
-                    .text_color(rgb(p.muted))
-                    .child(t!("docker.loading").into_owned()),
-            );
-        }
         let Some(id) = &engine.selected else {
             if engine.resources.output_visible && engine.resources.output_resource.is_none() {
                 return surface
-                    .child(Editor::new(&engine.resources.output))
+                    .child(self.content_feedback(
+                        "docker-container-output-feedback",
+                        Editor::new(&engine.resources.output).into_any_element(),
+                        engine.loading,
+                        engine.error.as_ref(),
+                        false,
+                    ))
                     .into_any_element();
             }
             return surface
-                .child(tshell_ui::controls::empty_state(
-                    IconName::Box,
-                    t!("docker.select_container").into_owned(),
-                    p,
-                ))
+                .child(
+                    self.content_feedback(
+                        "docker-container-empty-feedback",
+                        tshell_ui::controls::empty_state(
+                            IconName::Box,
+                            t!("docker.select_container").into_owned(),
+                            p,
+                        )
+                        .into_any_element(),
+                        engine.loading,
+                        engine.error.as_ref(),
+                        true,
+                    ),
+                )
                 .into_any_element();
         };
         let selected = engine
@@ -533,37 +561,31 @@ impl DockerView {
                                 )),
                             ),
                     )
-                    .when(engine.logs_loading, |view| {
-                        view.child(
-                            div()
-                                .px_3()
-                                .text_size(px(12.))
-                                .child(t!("docker.loading").into_owned()),
-                        )
-                    })
-                    .when_some(engine.logs_error.as_ref(), |view, error| {
-                        view.child(
-                            div()
-                                .px_3()
-                                .py_1()
-                                .text_size(px(12.))
-                                .text_color(rgb(p.ansi[1]))
-                                .child(i18n::format_failure(error)),
-                        )
-                    })
                     .child(
                         div()
                             .flex_1()
                             .min_h_0()
                             .font_family(self.font_family.clone())
                             .text_size(px(self.font_size.clamp(12., 17.)))
-                            .child(Editor::new(&engine.logs_editor)),
+                            .child(self.content_feedback(
+                                "docker-log-feedback",
+                                Editor::new(&engine.logs_editor).into_any_element(),
+                                engine.logs_loading,
+                                engine.logs_error.as_ref(),
+                                engine.log.is_empty(),
+                            )),
                     )
                     .into_any_element(),
             }
         };
         surface
-            .child(div().flex_1().min_h_0().flex().flex_col().child(content))
+            .child(div().flex_1().min_h_0().child(self.content_feedback(
+                "docker-container-feedback",
+                content,
+                engine.loading || self.detail_loading(),
+                engine.error.as_ref(),
+                engine.detail.is_none() && tab != Tab::Logs && !engine.resources.output_visible,
+            )))
             .into_any_element()
     }
 }

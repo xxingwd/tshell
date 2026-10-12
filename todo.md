@@ -361,3 +361,19 @@ cargo build --locked --release --bin tshell
 - [x] aidev 只读对照：CLI/API 的完整容器 ID 集合一致（1 个）；有标签的镜像引用 + 完整 ID 集合一致（52 条）。API 返回的 34 条无标签项按本次要求保留在列表底部。
 
 报告：`artifacts/docker-menu-ui.json`、`artifacts/docker-aidev-readonly-comparison.json`；截图：`artifacts/docker-menu-screenshots/`；日志：`tmp/modularization/docker-menu-*.log`。生成产物不提交。首轮 workspace 测试的原有文件备份用例遇到一次 Windows 拒绝访问；该用例及完整 workspace 重跑均通过，未调整文件 IO 语义。aidev 未执行写操作；资源修改、Compose 与 daemon 恢复仍待真实环境验收。
+
+## 12. Docker 树形导航与内嵌临时终端
+
+2026-10-12 按实际 Docker 工作流收敛交互：左侧改为可展开的资源树，主区保留
+表格与详情，资源不在两个区域重复渲染。容器、Compose 项目 / service、镜像标签
+均可从树中直接定位；Volumes、Networks、Engine 信息、存储、事件和 daemon 配置
+收进 Storage / Engine 二级分组。树使用虚拟列表，容器数量增长时仍保持稳定。
+
+- [x] 组节点点击同时展开 / 收起并打开主区集合；叶节点直接打开资源详情。超大分支保留有限预览并提供“打开全部”。
+- [x] Compose 项目按 Docker labels 展开 service；镜像标签沿用完整身份和无标签排序。
+- [x] Storage / Engine 二级菜单收纳 Volume、Network、Engine 信息、磁盘、事件和配置。
+- [x] Docker 容器终端复用应用现有 `Session` / `TerminalView`，在 Docker 主区底部临时抽屉打开。
+- [x] 关闭抽屉释放临时 exec 会话，不切换全局 Terminal 页，不创建普通可恢复 shell 会话。
+- [ ] 在真实 Linux / Windows 容器和远程 Engine 上验收抽屉 resize、TTY 输入输出及关闭后的 exec 生命周期。
+
+实现与行为见 [Docker workspace](docs/docker-workspace.md)。

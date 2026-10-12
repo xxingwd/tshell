@@ -29,6 +29,9 @@ impl LogBuffer {
     pub fn text(&self) -> String {
         String::from_utf8_lossy(&self.bytes.iter().copied().collect::<Vec<_>>()).into_owned()
     }
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
     pub fn clear(&mut self) {
         self.bytes.clear();
         self.lines = 0;

@@ -8,10 +8,17 @@ modes, operation output and file drafts for the application lifetime.
 
 ## Navigation and resources
 
-Clicking Docker turns the existing lower sidebar into a functional menu:
-Containers, Compose, Images, Volumes, Networks, Engine information, Storage,
-Events and Engine config. Icons and labels mark the current page; arrow keys and
-Home/End navigate the menu. Resource lists appear only in the main pane.
+Clicking Docker turns the existing lower sidebar into a compact resource tree.
+Containers, Compose and Images expand to their live children; Compose projects
+expand to services, and untagged images stay at the bottom of the image branch.
+Storage groups Volumes and Networks, while Engine groups information, disk,
+events and daemon configuration. A group click both expands it and opens its
+main-pane list; a leaf opens its detail view. The tree uses a virtualized,
+bounded preview for very large branches and provides Open all to reach the full
+main-pane list, so later groups remain reachable while the main pane keeps every
+container. It uses the same host-specific snapshot as the main pane.
+Arrow keys and Home/End navigate the visible tree. Resource lists appear only
+in the main pane, so a selected leaf is not duplicated as a second full table.
 
 The main pane opens a virtual table for containers, Compose projects, images,
 volumes and networks. Search, creation and refresh belong to the table toolbar.
@@ -21,6 +28,17 @@ back button returns to the list. Logs, YAML, JSON and output use the full pane.
 Arrow keys and Home/End select rows, Enter expands details and Escape closes the
 adjacent preview. Columns adapt to available width; truncated values retain
 full-value tooltips. Each host keeps its selection, table scroll and preview.
+Loading and request failures stay in the table or detail content area. Search,
+column headers, detail actions and log controls keep their position. Empty lists
+show a centered state; refreshes retain existing content with a notice inside
+its bounds.
+Container detail, resource-list and document-preview requests also expose their
+own pending state, so an initial read shows feedback even after Engine listing
+has completed.
+Configuration editors reserve their source-file row before the document arrives.
+Save and Discard remain in fixed toolbar positions; they are disabled until a
+document is loaded and modified. Loading and clean/dirty transitions keep the
+editor viewport unchanged.
 
 Container listing requests `all=true`; with an empty search it includes running,
 exited, paused and Compose-managed containers from the current Engine, regardless
@@ -94,12 +112,13 @@ existing terminals keep their original target.
 
 The terminal button creates Bollard attached TTY exec using `/bin/sh` for Linux or
 `cmd.exe` for Windows; users can edit the command arguments. Input/output uses the
-existing terminal parser/renderer and resize uses the Engine API. Terminals have
-explicit `Docker · Engine · container` session names. The same endpoint/container
-can add tabs to the same temporary session; different sources remain separate.
-These sessions are not restored as ordinary shells. Closing exec does not stop or
-remove the container. Existing terminals never retarget on host switches, and
-Explorer/Git remain host tools rather than container filesystem browsers.
+existing application `Session` and `TerminalView` parser/renderer and resize uses
+the Engine API. The terminal stays in Docker as a temporary bottom drawer, so the
+resource list or detail remains visible behind it and the global terminal page is
+not changed. A new exec replaces the previous drawer; closing it drops the
+temporary session without stopping or removing the container. Existing terminals
+never retarget on host switches, and Explorer/Git remain host tools rather than
+container filesystem browsers.
 
 ## Compose files
 
