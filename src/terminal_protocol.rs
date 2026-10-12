@@ -1,5 +1,4 @@
 //! Terminal query replies and opt-in colour-scheme notifications.
-mod capabilities;
 mod colors;
 use crate::appearance::PaletteTerminalTheme;
 use crate::terminal::Listener;
@@ -11,7 +10,6 @@ use alacritty_terminal::{
         ansi::{NamedColor, Processor, Rgb},
     },
 };
-pub(crate) use colors::{ColorOverride, ExtraColors};
 use parking_lot::Mutex;
 use std::{
     collections::VecDeque,
@@ -23,7 +21,6 @@ pub struct TerminalTheme {
     pub foreground: u32,
     pub background: u32,
     pub cursor: u32,
-    pub selection: u32,
     pub ansi: [u32; 16],
 }
 
@@ -74,23 +71,18 @@ pub fn set_default_theme(theme: TerminalTheme) {
 pub struct ProtocolState {
     pub theme: TerminalTheme,
     pub subscribed: bool,
-    pub(crate) extra: ExtraColors,
-    stack: colors::ColorStack,
 }
 impl Default for ProtocolState {
     fn default() -> Self {
         Self {
             theme: default_theme(),
             subscribed: false,
-            extra: ExtraColors::default(),
-            stack: colors::ColorStack::default(),
         }
     }
 }
 pub type Replies = Arc<Mutex<VecDeque<Event>>>;
 struct Probe<'a> {
     state: &'a mut ProtocolState,
-    capability_query: &'a mut capabilities::CapabilityQuery,
     boundary: bool,
     visual: bool,
     replies: Vec<Vec<u8>>,
@@ -99,9 +91,6 @@ struct Probe<'a> {
 enum ColorCommand {
     Canceled,
     Osc(Vec<Vec<u8>>, &'static str),
-    Push(Vec<usize>),
-    Pop(Vec<usize>),
-    ReportStack,
 }
 impl Perform for Probe<'_> {
     fn print(&mut self, _: char) {
@@ -110,27 +99,20 @@ impl Perform for Probe<'_> {
     fn execute(&mut self, byte: u8) {
         self.visual = true;
         if matches!(byte, 0x18 | 0x1a) {
-            self.capability_query.start(false);
             self.replies.clear();
             if self.command.is_some() {
                 self.command = Some(ColorCommand::Canceled);
             }
         }
     }
-    fn hook(&mut self, params: &Params, intermediate: &[u8], ignore: bool, action: char) {
+    fn hook(&mut self, _: &Params, _: &[u8], _: bool, _: char) {
         self.visual = true;
-        self.capability_query.start(
-            !ignore && intermediate == b"+" && action == 'q' && params.iter().all(|p| p == [0]),
-        );
     }
-    fn put(&mut self, byte: u8) {
+    fn put(&mut self, _: u8) {
         self.visual = true;
-        self.capability_query.put(byte);
     }
     fn unhook(&mut self) {
         self.visual = true;
-        self.replies.extend(self.capability_query.finish());
-        self.boundary = true;
     }
     fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
         self.visual |= !matches!(params.first(), Some(&b"0" | &b"2"));
@@ -153,15 +135,7 @@ impl Perform for Probe<'_> {
         self.boundary = true;
         let mut values = params.iter();
         let first = values.next();
-        if intermediate == b"#" && params.iter().all(|p| p.len() == 1) {
-            let slots = params.iter().map(|p| usize::from(p[0])).collect();
-            self.command = match action {
-                'P' => Some(ColorCommand::Push(slots)),
-                'Q' => Some(ColorCommand::Pop(slots)),
-                'R' => Some(ColorCommand::ReportStack),
-                _ => None,
-            };
-        } else if intermediate == b"?" && matches!(action, 'h' | 'l') {
+        if intermediate == b"?" && matches!(action, 'h' | 'l') {
             if params.iter().any(|p| p == [2031]) {
                 self.state.subscribed = action == 'h';
             }
@@ -187,8 +161,6 @@ impl Perform for Probe<'_> {
         self.visual |= !(intermediate.is_empty() && byte == b'\\');
         if !ignore && intermediate.is_empty() && byte == b'c' {
             self.state.subscribed = false;
-            self.state.extra = ExtraColors::default();
-            self.state.stack = colors::ColorStack::default();
         }
         self.boundary = true;
     }
@@ -200,7 +172,6 @@ impl Perform for Probe<'_> {
 pub struct OutputParser {
     terminal: Processor,
     probe: vte::Parser,
-    capability_query: capabilities::CapabilityQuery,
 }
 impl OutputParser {
     /// Live output can arrive while tmux is restoring a captured grid. Keep its
@@ -210,7 +181,6 @@ impl OutputParser {
         while offset < bytes.len() {
             let mut probe = Probe {
                 state,
-                capability_query: &mut self.capability_query,
                 boundary: false,
                 visual: false,
                 replies: Vec::new(),
@@ -234,7 +204,6 @@ impl OutputParser {
         while offset < bytes.len() {
             let mut probe = Probe {
                 state,
-                capability_query: &mut self.capability_query,
                 boundary: false,
                 visual: false,
                 replies: Vec::new(),
@@ -256,21 +225,8 @@ impl OutputParser {
                 let replies = match command {
                     ColorCommand::Canceled => Vec::new(),
                     ColorCommand::Osc(params, terminator) => {
-                        colors::osc(&params, terminator, term, probe.state)
+                        colors::osc(&params, terminator, term, probe.state.theme)
                     }
-                    ColorCommand::Push(slots) => {
-                        for slot in slots {
-                            colors::push(slot, term, probe.state);
-                        }
-                        Vec::new()
-                    }
-                    ColorCommand::Pop(slots) => {
-                        for slot in slots {
-                            colors::pop(slot, term, probe.state);
-                        }
-                        Vec::new()
-                    }
-                    ColorCommand::ReportStack => vec![colors::report_stack(probe.state)],
                 };
                 if respond {
                     output.replies.extend(replies);

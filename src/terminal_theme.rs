@@ -18,7 +18,7 @@ pub fn paired_theme(id: &str, light: bool) -> Option<&'static str> {
     }
 }
 
-pub(crate) fn palette(colors: TerminalTheme) -> Palette {
+pub(crate) fn palette(colors: TerminalTheme, selection: u32) -> Palette {
     let mut palette = Palette::new(if colors.light() {
         ThemeMode::Light
     } else {
@@ -28,8 +28,8 @@ pub(crate) fn palette(colors: TerminalTheme) -> Palette {
     palette.terminal = colors.background;
     palette.text = colors.foreground;
     palette.accent = colors.cursor;
-    palette.selected = colors.selection;
-    palette.selection = colors.selection;
+    palette.selected = selection;
+    palette.selection = selection;
     palette.ansi = colors.ansi;
     palette
 }

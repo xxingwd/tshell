@@ -10,7 +10,6 @@ impl PaletteTerminalTheme for Palette {
             foreground: self.text,
             background: self.terminal,
             cursor: self.accent,
-            selection: self.selection,
             ansi: self.ansi,
         }
     }

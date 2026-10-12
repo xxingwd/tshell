@@ -617,9 +617,7 @@ impl Session {
         let mut previous = self.render_snapshot.lock();
         let mut term = self.term.lock();
         let revision = self.revision.load(Ordering::Acquire);
-        let mut next = RenderSnapshot::capture(&mut term, revision, &previous);
-        next.extra_colors = self.protocol.lock().extra;
-        let next = Arc::new(next);
+        let next = Arc::new(RenderSnapshot::capture(&mut term, revision, &previous));
         *previous = next.clone();
         drop(term);
         drop(previous);

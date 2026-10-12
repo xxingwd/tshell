@@ -100,7 +100,6 @@ pub(crate) struct RenderSnapshot {
     pub selection: Option<SelectionRange>,
     pub cursor: Option<RenderCursor>,
     pub colors: Colors,
-    pub extra_colors: crate::terminal_protocol::ExtraColors,
     pub copied_rows: usize,
 }
 
@@ -112,7 +111,6 @@ impl RenderSnapshot {
             && self.display_offset == other.display_offset
             && self.selection == other.selection
             && self.cursor == other.cursor
-            && self.extra_colors == other.extra_colors
             && self.rows.len() == other.rows.len()
             && self
                 .rows
@@ -183,7 +181,6 @@ impl RenderSnapshot {
             selection,
             cursor,
             colors,
-            extra_colors: Default::default(),
             copied_rows,
         }
     }

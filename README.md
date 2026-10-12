@@ -61,8 +61,8 @@ xterm.js or OpenSSH feature parity.
 - xterm-compatible keyboard, paste, selection, ANSI/256-color/true-color SGR,
   custom box glyphs, cursor styles, OSC 7 working-directory metadata, OSC 52
   clipboard writes, and native OSC 9/777 notifications.
-- Terminal colour queries, overrides and resets, live theme reports, selection
-  colours and palette stacks for TUI integration. See [colour control](docs/terminal-colors.md)
+- Terminal palette, foreground/background and cursor colour queries, overrides
+  and resets, plus live theme reports for TUI integration. See [colour control](docs/terminal-colors.md)
   for supported xterm/Kitty extensions and their limits.
 - Search the active terminal's screen and retained history with match counts,
   case/regex options, and previous/next navigation. Ctrl-click OSC 8 links,

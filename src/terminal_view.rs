@@ -5,8 +5,7 @@ use crate::{
     input::{MouseReport, encode_focus, encode_key, encode_mouse, mouse_reporting},
     terminal::Session,
     terminal_render::{
-        PaintSpan, build_selected_row, expand_wide_selection, hit_test, push_span, resolve_color,
-        selected_colors, selection_spans,
+        PaintSpan, build_row, expand_wide_selection, hit_test, resolve_color, selection_spans,
     },
     terminal_snapshot::{Anchor, RenderCommand, RenderCursor, RenderMailbox, RenderSnapshot},
 };
@@ -76,14 +75,11 @@ pub(crate) fn init(cx: &mut App) {
 struct PaintedText {
     col: usize,
     #[cfg(debug_assertions)]
-    color: Hsla,
-    #[cfg(debug_assertions)]
     columns: usize,
     shaped: ShapedLine,
 }
 struct PaintedRow {
     source: Arc<[Cell]>,
-    selection: Option<(usize, usize)>,
     text: Vec<PaintedText>,
     glyphs: Vec<crate::terminal_glyphs::GlyphCell>,
     decorations: Vec<crate::terminal_decorations::Decoration>,
@@ -141,12 +137,9 @@ pub struct TerminalView {
     #[cfg(debug_assertions)]
     cache_row_paint: bool,
     #[cfg(debug_assertions)]
-    painted_selection: Vec<PaintSpan>,
-    #[cfg(debug_assertions)]
     painted_cursor_color: u32,
     painted_palette: Palette,
     painted_colors: Colors,
-    painted_extra_colors: crate::terminal_protocol::ExtraColors,
     focus_subscriptions: Vec<Subscription>,
     cursor_focused: bool,
     cursor_visible: bool,
@@ -239,12 +232,9 @@ impl TerminalView {
             #[cfg(debug_assertions)]
             cache_row_paint: true,
             #[cfg(debug_assertions)]
-            painted_selection: Vec::new(),
-            #[cfg(debug_assertions)]
             painted_cursor_color: palette.accent,
             painted_palette: palette,
             painted_colors: Colors::default(),
-            painted_extra_colors: Default::default(),
             focus_subscriptions: Vec::new(),
             cursor_focused: false,
             cursor_visible: false,
@@ -741,24 +731,11 @@ impl TerminalView {
         }
     }
 
-    fn shape_row(
-        &self,
-        source: Arc<[Cell]>,
-        selection: Option<(usize, usize)>,
-        window: &mut Window,
-    ) -> PaintedRow {
-        let plan = build_selected_row(
-            &source,
-            self.palette,
-            &self.snapshot.colors,
-            selection,
-            self.snapshot.extra_colors,
-        );
+    fn shape_row(&self, source: Arc<[Cell]>, window: &mut Window) -> PaintedRow {
+        let plan = build_row(&source, self.palette, &self.snapshot.colors);
         let mut text = Vec::with_capacity(plan.text.len());
         for run in plan.text {
             let style = self.text_run(&run.text, run.fg, run.flags);
-            #[cfg(debug_assertions)]
-            let color = style.color;
             let shaped = window.text_system().shape_line(
                 run.text.clone().into(),
                 px(self.font_size),
@@ -778,8 +755,6 @@ impl TerminalView {
                 text.push(PaintedText {
                     col: run.col,
                     #[cfg(debug_assertions)]
-                    color,
-                    #[cfg(debug_assertions)]
                     columns: run.columns,
                     shaped,
                 });
@@ -796,8 +771,6 @@ impl TerminalView {
                     text.push(PaintedText {
                         col: run.col + offset,
                         #[cfg(debug_assertions)]
-                        color,
-                        #[cfg(debug_assertions)]
                         columns: 1,
                         shaped,
                     });
@@ -806,7 +779,6 @@ impl TerminalView {
         }
         PaintedRow {
             source,
-            selection,
             text,
             glyphs: plan.glyphs,
             decorations: plan.decorations,
@@ -850,20 +822,7 @@ impl TerminalView {
         let style_changed = font_changed
             || self.painted_ligatures != self.ligatures
             || self.painted_palette != self.palette
-            || self.painted_extra_colors != self.snapshot.extra_colors
             || (0..COUNT).any(|i| self.painted_colors[i] != self.snapshot.colors[i]);
-        let mut selection = selection_spans(
-            self.snapshot.selection,
-            self.snapshot.rows.len(),
-            self.snapshot.cols,
-            self.snapshot.display_offset,
-            self.palette.selection,
-        );
-        expand_wide_selection(&mut selection, &self.snapshot.rows);
-        let recolor_selection = self.snapshot.extra_colors.selection_foreground
-            != crate::terminal_protocol::ColorOverride::Theme
-            || self.snapshot.extra_colors.selection_background
-                == crate::terminal_protocol::ColorOverride::Dynamic;
         let mut rebuilt = 0;
         self.painted_ligatures = self.ligatures;
         let rows = self
@@ -872,23 +831,14 @@ impl TerminalView {
             .iter()
             .enumerate()
             .map(|(row, source)| {
-                let selected = if recolor_selection {
-                    selection
-                        .iter()
-                        .find(|span| span.row == row)
-                        .map(|span| (span.col, span.col + span.columns))
-                } else {
-                    None
-                };
                 if !style_changed
                     && let Some(painted) = self.painted_rows.get(row)
                     && Arc::ptr_eq(source, &painted.source)
-                    && painted.selection == selected
                 {
                     return painted.clone();
                 }
                 rebuilt += 1;
-                Arc::new(self.shape_row(source.clone(), selected, window))
+                Arc::new(self.shape_row(source.clone(), window))
             })
             .collect::<Vec<_>>();
         // Immutable row entities are reactive cache boundaries. A changed row
@@ -922,28 +872,17 @@ impl TerminalView {
         self.painted_rows = rows.clone();
         self.painted_palette = self.palette;
         self.painted_colors = self.snapshot.colors;
-        self.painted_extra_colors = self.snapshot.extra_colors;
         if let Some(cursor) = self.snapshot.cursor {
             self.cursor = (cursor.row, cursor.col);
         }
-        let palette = self.palette;
-        let colors = &self.snapshot.colors;
-        let extra = self.snapshot.extra_colors;
-        let selection = selection
-            .into_iter()
-            .flat_map(|span| {
-                let cells = &self.snapshot.rows[span.row];
-                (span.col..(span.col + span.columns).min(cells.len())).map(move |col| PaintSpan {
-                    col,
-                    columns: 1,
-                    color: selected_colors(&cells[col], palette, colors, extra).0,
-                    ..span
-                })
-            })
-            .fold(Vec::new(), |mut spans, span| {
-                push_span(&mut spans, span);
-                spans
-            });
+        let mut selection = selection_spans(
+            self.snapshot.selection,
+            rows.len(),
+            self.snapshot.cols,
+            self.snapshot.display_offset,
+            self.palette.selection,
+        );
+        expand_wide_selection(&mut selection, &self.snapshot.rows);
         tracing::trace!(target: "tshell::render", micros = started.elapsed().as_micros() as u64,
             rebuilt_rows = rebuilt, copied_rows = self.snapshot.copied_rows, "prepare");
         let mut text_elements = Vec::with_capacity(rows.len());
@@ -1027,7 +966,6 @@ impl TerminalView {
         let started = Instant::now();
         #[cfg(debug_assertions)]
         {
-            self.painted_selection.clone_from(&frame.selection);
             self.painted_cursor_color = frame.cursor_color;
         }
         if !self.background_inherited || frame.background != self.palette.terminal {

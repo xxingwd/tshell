@@ -45,8 +45,8 @@ GPUI 的应用中。终端引擎使用 Rust 原生实现和 `alacritty_terminal`
   不为每个控件单独建组。
 - 参考 xterm 的键盘、粘贴、选区、ANSI/256 色/真彩色 SGR、自定义框线字形、
   光标样式、OSC 7 工作目录元数据、OSC 52 剪贴板写入和 OSC 9/777 原生通知。
-- 面向 TUI 的终端颜色查询、覆盖与重置、主题变化通知、选区配色和调色板栈。
-  支持的 xterm/Kitty 扩展及限制见 [颜色控制](docs/terminal-colors.md)。
+- 面向 TUI 的常用调色板、前景/背景和光标颜色查询、设置与重置，以及主题变化通知。
+  支持范围及限制见 [颜色控制](docs/terminal-colors.md)。
 - 当前分屏的屏幕与保留历史输出搜索，提供匹配数、大小写/正则选项和上下一处。
   Ctrl 点击可打开 OSC 8 链接、URL 与文件路径，SSH 路径按输出所属主机打开。
   Windows 通知点击可在应用运行时定位原分屏。详见 [终端工具](docs/terminal-tools.md)。

@@ -86,6 +86,6 @@ const cases = inputs.map(commands => {
 });
 await writeFile(new URL('../tests/fixtures/xterm-color-protocol.json', import.meta.url),
   JSON.stringify({ sources: sources.map(({ text, ...metadata }) => metadata),
-    theme: { foreground: 0x102030, background: 0xfafafa, cursor: 0xff00ff, selection: 0x445566, ansi },
+    theme: { foreground: 0x102030, background: 0xfafafa, cursor: 0xff00ff, ansi },
     cases }, null, 2) + '\n');
 console.log(`Generated ${cases.length} colour protocol cases`);
