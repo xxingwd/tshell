@@ -53,6 +53,7 @@ pub(crate) fn resolve_color(value: Color, palette: Palette, colors: &Colors) -> 
         Color::Spec(rgb) => ((rgb.r as u32) << 16) | ((rgb.g as u32) << 8) | rgb.b as u32,
         Color::Named(NamedColor::Background) => palette.terminal,
         Color::Named(NamedColor::Foreground | NamedColor::BrightForeground) => palette.text,
+        Color::Named(NamedColor::Cursor) => palette.accent,
         Color::Named(NamedColor::DimForeground) => dim(
             resolve_color(Color::Named(NamedColor::Foreground), palette, colors),
             resolve_color(Color::Named(NamedColor::Background), palette, colors),
@@ -198,6 +199,67 @@ pub(crate) fn build_row(cells: &[Cell], palette: Palette, colors: &Colors) -> Ro
     }
     plan.text.retain(|run| !run.text.is_empty());
     plan
+}
+
+/// Resolve dynamic selection colours from the displayed cell, including inverse
+/// and ANSI bold promotion. Theme defaults preserve TShell's existing selection ink.
+pub(crate) fn selected_colors(
+    cell: &Cell,
+    palette: Palette,
+    colors: &Colors,
+    extra: crate::terminal_protocol::ExtraColors,
+) -> (u32, Option<u32>) {
+    use crate::terminal_protocol::ColorOverride;
+    let (front, back) = if cell.flags.contains(Flags::INVERSE) {
+        (cell.bg, cell.fg)
+    } else {
+        (cell.fg, cell.bg)
+    };
+    let background = match extra.selection_background {
+        ColorOverride::Theme => palette.selection,
+        ColorOverride::Dynamic => {
+            foreground_color(front, cell.flags.contains(Flags::BOLD), palette, colors)
+        }
+        ColorOverride::Rgb(rgb) => rgb,
+    };
+    let foreground = match extra.selection_foreground {
+        ColorOverride::Theme if extra.selection_background != ColorOverride::Dynamic => None,
+        ColorOverride::Theme | ColorOverride::Dynamic => Some(resolve_color(back, palette, colors)),
+        ColorOverride::Rgb(rgb) => Some(rgb),
+    };
+    (background, foreground)
+}
+
+pub(crate) fn build_selected_row(
+    cells: &[Cell],
+    palette: Palette,
+    colors: &Colors,
+    selection: Option<(usize, usize)>,
+    extra: crate::terminal_protocol::ExtraColors,
+) -> RowPlan {
+    let Some((start, end)) = selection else {
+        return build_row(cells, palette, colors);
+    };
+    let mut selected = cells.to_vec();
+    for col in start..end.min(cells.len()) {
+        if let Some(fg) = selected_colors(&cells[col], palette, colors, extra).1 {
+            // Selection ink is explicit, so bold must not promote it a second time.
+            selected[col].flags.remove(Flags::INVERSE | Flags::DIM);
+            let rgb = alacritty_terminal::vte::ansi::Rgb {
+                r: (fg >> 16) as u8,
+                g: (fg >> 8) as u8,
+                b: fg as u8,
+            };
+            selected[col].fg = Color::Spec(rgb);
+            // Keep original cell backgrounds below the independent selection layer.
+            selected[col].bg = if cells[col].flags.contains(Flags::INVERSE) {
+                cells[col].fg
+            } else {
+                cells[col].bg
+            };
+        }
+    }
+    build_row(&selected, palette, colors)
 }
 
 pub(crate) fn hit_test(

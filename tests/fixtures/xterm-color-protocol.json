@@ -1,0 +1,353 @@
+{
+  "sources": [
+    {
+      "url": "https://raw.githubusercontent.com/xtermjs/xterm.js/6.0.0/src/common/InputHandler.ts",
+      "sha256": "b03afd5d38dd708440699e81135f1735626d55ffdf24621fbd54cfbc41320925"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/xtermjs/xterm.js/6.0.0/src/browser/CoreBrowserTerminal.ts",
+      "sha256": "15c1149d38db18e9aa2c4a896e6c69c5cc40fb73a3fa01bb0602828cae3210a1"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/xtermjs/xterm.js/6.0.0/src/common/input/XParseColor.ts",
+      "sha256": "5e38ed3de064c3ca09a8d22a8125d21f7f2f99ac7fcbc88cc7e555357b3a39e7"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/xtermjs/xterm.js/6.0.0/src/common/Types.ts",
+      "sha256": "ad4fc729fa168148668992a00c80b8fa21a04061b5ce34a6a817c5c143319bec"
+    }
+  ],
+  "theme": {
+    "foreground": 1056816,
+    "background": 16448250,
+    "cursor": 16711935,
+    "selection": 4478310,
+    "ansi": [
+      0,
+      724239,
+      1448478,
+      2172717,
+      2896956,
+      3621195,
+      4345434,
+      5069673,
+      5793912,
+      6518151,
+      7242390,
+      7966629,
+      8690868,
+      9415107,
+      10139346,
+      10863585
+    ]
+  },
+  "cases": [
+    {
+      "commands": [
+        [
+          10,
+          "?"
+        ],
+        [
+          11,
+          "?"
+        ],
+        [
+          12,
+          "?"
+        ],
+        [
+          4,
+          "0;?;15;?;16;?;231;?;232;?;255;?"
+        ]
+      ],
+      "replies": [
+        "\u001b]10;rgb:1010/2020/3030\u001b\\",
+        "\u001b]11;rgb:fafa/fafa/fafa\u001b\\",
+        "\u001b]12;rgb:ffff/0000/ffff\u001b\\",
+        "\u001b]4;0;rgb:0000/0000/0000\u001b\\",
+        "\u001b]4;15;rgb:a5a5/c3c3/e1e1\u001b\\",
+        "\u001b]4;16;rgb:0000/0000/0000\u001b\\",
+        "\u001b]4;231;rgb:ffff/ffff/ffff\u001b\\",
+        "\u001b]4;232;rgb:0808/0808/0808\u001b\\",
+        "\u001b]4;255;rgb:eeee/eeee/eeee\u001b\\"
+      ]
+    },
+    {
+      "commands": [
+        [
+          4,
+          "1;#112233;1;?;1;#abcdef;1;?"
+        ]
+      ],
+      "replies": [
+        "\u001b]4;1;rgb:1111/2222/3333\u001b\\",
+        "\u001b]4;1;rgb:abab/cdcd/efef\u001b\\"
+      ]
+    },
+    {
+      "commands": [
+        [
+          10,
+          "#123;?;?"
+        ],
+        [
+          10,
+          "?;?;?"
+        ]
+      ],
+      "replies": [
+        "\u001b]11;rgb:fafa/fafa/fafa\u001b\\",
+        "\u001b]12;rgb:ffff/0000/ffff\u001b\\",
+        "\u001b]10;rgb:1010/2020/3030\u001b\\",
+        "\u001b]11;rgb:fafa/fafa/fafa\u001b\\",
+        "\u001b]12;rgb:ffff/0000/ffff\u001b\\"
+      ]
+    },
+    {
+      "commands": [
+        [
+          11,
+          "#111222333;#444455556666"
+        ],
+        [
+          11,
+          "?;?"
+        ]
+      ],
+      "replies": [
+        "\u001b]11;rgb:1111/2222/3333\u001b\\",
+        "\u001b]12;rgb:4444/5555/6666\u001b\\"
+      ]
+    },
+    {
+      "commands": [
+        [
+          4,
+          "2;#112233;3;#abcdef"
+        ],
+        [
+          104,
+          "2"
+        ],
+        [
+          4,
+          "2;?;3;?"
+        ],
+        [
+          104,
+          ""
+        ],
+        [
+          4,
+          "3;?"
+        ]
+      ],
+      "replies": [
+        "\u001b]4;2;rgb:1616/1a1a/1e1e\u001b\\",
+        "\u001b]4;3;rgb:abab/cdcd/efef\u001b\\",
+        "\u001b]4;3;rgb:2121/2727/2d2d\u001b\\"
+      ]
+    },
+    {
+      "commands": [
+        [
+          10,
+          "#aabbcc"
+        ],
+        [
+          11,
+          "#112233"
+        ],
+        [
+          12,
+          "#778899"
+        ],
+        [
+          110,
+          ""
+        ],
+        [
+          111,
+          ""
+        ],
+        [
+          112,
+          ""
+        ],
+        [
+          10,
+          "?;?;?"
+        ]
+      ],
+      "replies": [
+        "\u001b]10;rgb:1010/2020/3030\u001b\\",
+        "\u001b]11;rgb:fafa/fafa/fafa\u001b\\",
+        "\u001b]12;rgb:ffff/0000/ffff\u001b\\"
+      ]
+    },
+    {
+      "commands": [
+        [
+          4,
+          "256;#112233;999;?;-1;?;bad;?;1;?;orphan"
+        ]
+      ],
+      "replies": [
+        "\u001b]4;1;rgb:0b0b/0d0d/0f0f\u001b\\"
+      ]
+    },
+    {
+      "commands": [
+        [
+          104,
+          "bad;256;-1;"
+        ],
+        [
+          10,
+          "?;?;?"
+        ]
+      ],
+      "replies": [
+        "\u001b]10;rgb:1010/2020/3030\u001b\\",
+        "\u001b]11;rgb:fafa/fafa/fafa\u001b\\",
+        "\u001b]12;rgb:ffff/0000/ffff\u001b\\"
+      ]
+    },
+    {
+      "commands": [
+        [
+          10,
+          "rgb:f/e/d"
+        ],
+        [
+          10,
+          "?"
+        ]
+      ],
+      "replies": [
+        "\u001b]10;rgb:ffff/eeee/dddd\u001b\\"
+      ]
+    },
+    {
+      "commands": [
+        [
+          10,
+          "rgb:abc/def/123"
+        ],
+        [
+          10,
+          "?"
+        ]
+      ],
+      "replies": [
+        "\u001b]10;rgb:abab/dede/1212\u001b\\"
+      ]
+    },
+    {
+      "commands": [
+        [
+          10,
+          "rgb:1234/5678/9abc"
+        ],
+        [
+          10,
+          "?"
+        ]
+      ],
+      "replies": [
+        "\u001b]10;rgb:1212/5656/9a9a\u001b\\"
+      ]
+    },
+    {
+      "commands": [
+        [
+          10,
+          "RGB:ABC/DEF/123"
+        ],
+        [
+          10,
+          "?"
+        ]
+      ],
+      "replies": [
+        "\u001b]10;rgb:abab/dede/1212\u001b\\"
+      ]
+    },
+    {
+      "commands": [
+        [
+          10,
+          "#aBcDeF"
+        ],
+        [
+          10,
+          "?"
+        ]
+      ],
+      "replies": [
+        "\u001b]10;rgb:abab/cdcd/efef\u001b\\"
+      ]
+    },
+    {
+      "commands": [
+        [
+          10,
+          "rgb:1/22/333"
+        ],
+        [
+          10,
+          "?"
+        ]
+      ],
+      "replies": [
+        "\u001b]10;rgb:1010/2020/3030\u001b\\"
+      ]
+    },
+    {
+      "commands": [
+        [
+          10,
+          "#zzzzzz"
+        ],
+        [
+          10,
+          "?"
+        ]
+      ],
+      "replies": [
+        "\u001b]10;rgb:1010/2020/3030\u001b\\"
+      ]
+    },
+    {
+      "commands": [
+        [
+          10,
+          "#1234"
+        ],
+        [
+          10,
+          "?"
+        ]
+      ],
+      "replies": [
+        "\u001b]10;rgb:1010/2020/3030\u001b\\"
+      ]
+    },
+    {
+      "commands": [
+        [
+          10,
+          "red"
+        ],
+        [
+          10,
+          "?"
+        ]
+      ],
+      "replies": [
+        "\u001b]10;rgb:1010/2020/3030\u001b\\"
+      ]
+    }
+  ]
+}

@@ -4,6 +4,9 @@ pub(crate) mod links;
 pub(crate) mod search;
 mod ssh;
 use crate::terminal_protocol::{OutputParser, ProtocolState, Replies, TerminalTheme};
+#[cfg(test)]
+#[path = "terminal_protocol/tests.rs"]
+mod color_protocol_tests;
 use crate::terminal_snapshot::{RenderCommand, RenderSnapshot, apply_commands};
 use alacritty_terminal::{
     event::{Event, EventListener},
@@ -614,7 +617,9 @@ impl Session {
         let mut previous = self.render_snapshot.lock();
         let mut term = self.term.lock();
         let revision = self.revision.load(Ordering::Acquire);
-        let next = Arc::new(RenderSnapshot::capture(&mut term, revision, &previous));
+        let mut next = RenderSnapshot::capture(&mut term, revision, &previous);
+        next.extra_colors = self.protocol.lock().extra;
+        let next = Arc::new(next);
         *previous = next.clone();
         drop(term);
         drop(previous);
@@ -663,7 +668,7 @@ impl Session {
     pub fn set_theme(&self, theme: TerminalTheme) {
         let notify = {
             let mut state = self.protocol.lock();
-            let notify = state.subscribed && state.theme.light() != theme.light();
+            let notify = state.subscribed && state.theme != theme;
             state.theme = theme;
             notify
         };

@@ -105,7 +105,7 @@ clipping remains unchanged. Selection and scrollback behavior are unchanged.
 
 This baseline is a compatibility direction, not a claim that the complete xterm.js implementation has been ported. Keep future fixes anchored to source behavior and add independent cases.
 
-- Theme reports CSI 996/2031 and native tmux control integration are existing extensions. tmux still owns query replies and pane state; its version affects capabilities.
+- [Terminal colour control](terminal-colors.md) documents OSC queries/set/reset, palette notifications, selection colours, XTGETTCAP, Kitty OSC 21 and palette stacks. OSC 4/10/11/12 and resets have a focused pinned xterm.js fixture; the additional controls are deliberate extensions. tmux still owns query replies and pane state; its version affects capabilities.
 - OSC 0/2 titles are workspace metadata: pure title output updates the latest title and notifies the workspace through a bounded metadata channel, without advancing the screen revision or waking the terminal renderer. Mixed output and other OSC/CSI/ESC sequences still use normal visual invalidation. This is a scheduling optimization, not a change to the title bytes accepted by the terminal parser.
 - The Alacritty parser/grid remains the engine. Every VT sequence, DA/DECRQM reply and Unicode version has not yet been differentially tested against xterm. Differences such as overline/blink attributes require separate parser/state support.
 - Font rasterization and decoration baseline metrics use the native text system. Pixel-identical browser output, full custom powerline/Braille/legacy-computing glyph coverage and overlapping-glyph rescaling are not yet established.

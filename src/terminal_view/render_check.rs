@@ -37,6 +37,7 @@ pub(crate) fn run_render_check(output: std::path::PathBuf) -> bool {
 }
 
 async fn render_check_inner(cx: &mut AsyncApp) -> anyhow::Result<serde_json::Value> {
+    check_protocol_colors(cx).await?;
     check_full_mailbox_selection(cx).await?;
     check_drag_release(cx).await?;
     use alacritty_terminal::index::{Column, Line, Point as GridPoint, Side};
@@ -154,9 +155,9 @@ async fn render_check_inner(cx: &mut AsyncApp) -> anyhow::Result<serde_json::Val
                 })
                 .collect::<Vec<_>>()
                 .into();
-            let off = view.shape_row(cells.clone(), window);
+            let off = view.shape_row(cells.clone(), None, window);
             view.ligatures = true;
-            let on = view.shape_row(cells, window);
+            let on = view.shape_row(cells, None, window);
             let glyphs = |row: &PaintedRow| {
                 row.text
                     .iter()
@@ -480,7 +481,7 @@ async fn render_check_inner(cx: &mut AsyncApp) -> anyhow::Result<serde_json::Val
     }
     draw_times.sort_unstable();
     Ok(serde_json::json!({
-        "passed": true, "custom_tui_glyphs_checked": true, "ligature_font_checked": std::env::var_os("TSHELL_LIGATURE_TEST_FONT").is_some(), "grid": "200x60", "selection_frames": 120,
+        "passed": true, "color_protocol_checked": true, "custom_tui_glyphs_checked": true, "ligature_font_checked": std::env::var_os("TSHELL_LIGATURE_TEST_FONT").is_some(), "grid": "200x60", "selection_frames": 120,
         "viewport_pixels": [f32::from(initial_geometry.2.width), f32::from(initial_geometry.2.height)],
         "initial_painted_text_rows": initial_geometry.0,
         "pointer_events_coalesced": 1000, "selection_shaped_rows": 0,
@@ -495,6 +496,99 @@ async fn render_check_inner(cx: &mut AsyncApp) -> anyhow::Result<serde_json::Val
         "sparse_updates": sparse_updates,
         "includes_gpu_presentation": false,
     }))
+}
+
+async fn check_protocol_colors(cx: &mut AsyncApp) -> anyhow::Result<()> {
+    use alacritty_terminal::index::{Column, Line, Point as GridPoint, Side};
+    use std::collections::VecDeque;
+    let session = Session::remote("%protocol-colors".into(), 3, 20, Arc::new(|_| Ok(())));
+    session.remote_output(b"\x1b]17;#123456\x07\x1b]19;#abcdef\x07\x1b]12;#112233\x07AAAA\r\nBBBB");
+    let (snapshot, _) = session.render_snapshot(VecDeque::from([
+        RenderCommand::Begin(
+            Anchor {
+                point: GridPoint::new(Line(0), Column(1)),
+                side: Side::Left,
+            },
+            SelectionType::Simple,
+        ),
+        RenderCommand::Extend(Anchor {
+            point: GridPoint::new(Line(0), Column(2)),
+            side: Side::Right,
+        }),
+    ]));
+    let source = session.clone();
+    let handle = cx.open_window(
+        WindowOptions {
+            show: false,
+            focus: false,
+            window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                point(px(0.), px(0.)),
+                size(px(400.), px(120.)),
+            ))),
+            ..Default::default()
+        },
+        move |_, cx| {
+            cx.new(|cx| {
+                let mut view = TerminalView::from_session(
+                    source,
+                    14.,
+                    crate::terminal_theme::default_palette(),
+                    cx,
+                );
+                view.apply_snapshot(snapshot, cx);
+                view
+            })
+        },
+    )?;
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.draw(cx).clear(cx);
+    })?;
+    let (unchanged, metrics) = handle.update(cx, |view, _, _| {
+        anyhow::ensure!(
+            view.painted_selection.len() == 1 && view.painted_selection[0].color == 0x123456,
+            "OSC selection background not used"
+        );
+        anyhow::ensure!(
+            view.painted_cursor_color == 0x112233,
+            "OSC cursor colour not used"
+        );
+        let expected = view.text_run("AA", 0xabcdef, Flags::empty()).color;
+        anyhow::ensure!(
+            view.painted_rows[0]
+                .text
+                .iter()
+                .any(|run| run.col == 1 && run.color == expected),
+            "OSC selection foreground not used"
+        );
+        Ok::<_, anyhow::Error>((
+            view.painted_rows[1].clone(),
+            (view.cell_width, view.line_height),
+        ))
+    })??;
+    session.apply_interactions(VecDeque::from([RenderCommand::Extend(Anchor {
+        point: GridPoint::new(Line(0), Column(3)),
+        side: Side::Right,
+    })]));
+    handle.update(cx, |view, _, cx| {
+        view.apply_snapshot(session.render_snapshot(VecDeque::new()).0, cx);
+    })?;
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.draw(cx).clear(cx);
+    })?;
+    handle.update(cx, |view, _, _| {
+        anyhow::ensure!(
+            Arc::ptr_eq(&unchanged, &view.painted_rows[1]),
+            "selection invalidated unrelated row cache"
+        );
+        anyhow::ensure!(
+            (view.cell_width, view.line_height) == metrics,
+            "colour control changed cell geometry"
+        );
+        Ok::<_, anyhow::Error>(())
+    })??;
+    // Keep the hidden window alive until the runner closes all its windows;
+    // closing the last one here would quit before the remaining checks.
+    Ok(())
 }
 
 async fn check_full_mailbox_selection(cx: &mut AsyncApp) -> anyhow::Result<()> {

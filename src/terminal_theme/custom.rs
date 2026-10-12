@@ -75,7 +75,7 @@ impl InterfaceTheme {
     }
 
     fn defaults(theme: TerminalTheme) -> Self {
-        let palette = Palette::for_terminal(palette(theme, 0));
+        let palette = Palette::for_terminal(palette(theme));
         Self {
             panel: HexColor(palette.panel),
             border: HexColor(palette.border),
@@ -136,6 +136,7 @@ impl ThemeDefinition {
             foreground: self.foreground.0,
             background: self.background.0,
             cursor: self.cursor.0,
+            selection: self.selection.0,
             ansi: self.ansi.map(|color| color.0),
         }
     }
@@ -145,7 +146,7 @@ impl ThemeDefinition {
     }
 
     pub fn palette(&self) -> Palette {
-        palette(self.colors(), self.selection())
+        palette(self.colors())
     }
 
     pub fn ui_palette(&self) -> Palette {
