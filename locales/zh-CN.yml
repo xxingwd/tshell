@@ -611,7 +611,6 @@ docker:
   more: "更多"
   search_resources: "搜索资源"
   no_resources: "没有匹配的资源"
-  open_all: "打开全部"
   select_resource: "选择资源"
   engine_info: "Engine 信息"
   storage: "存储"

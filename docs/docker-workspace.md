@@ -8,17 +8,18 @@ modes, operation output and file drafts for the application lifetime.
 
 ## Navigation and resources
 
-Clicking Docker turns the existing lower sidebar into a compact resource tree.
-Containers, Compose and Images expand to their live children; Compose projects
-expand to services, and untagged images stay at the bottom of the image branch.
-Storage groups Volumes and Networks, while Engine groups information, disk,
-events and daemon configuration. A group click both expands it and opens its
-main-pane list; a leaf opens its detail view. The tree uses a virtualized,
-bounded preview for very large branches and provides Open all to reach the full
-main-pane list, so later groups remain reachable while the main pane keeps every
-container. It uses the same host-specific snapshot as the main pane.
-Arrow keys and Home/End navigate the visible tree. Resource lists appear only
-in the main pane, so a selected leaf is not duplicated as a second full table.
+Clicking Docker turns the existing lower sidebar into four fixed navigation
+branches: Containers, Compose, Images and Engine. One branch expands at a time;
+its virtualized children scroll within the available space while the other
+headers remain visible. Container and image branches include every resource,
+with named image tags first and untagged images last. Compose projects can
+expand again to show their services. Engine contains Overview, Volumes,
+Networks, Storage, Events and daemon configuration.
+
+Clicking a branch opens its table or overview. Clicking a leaf opens full details;
+selecting a table row retains the adaptive table/detail comparison. Arrow keys,
+Home/End and Enter navigate, and Left/Right collapse or expand a branch/project.
+Expansion, project state and branch scroll belong to each host/endpoint.
 
 The main pane opens a virtual table for containers, Compose projects, images,
 volumes and networks. Search, creation and refresh belong to the table toolbar.
@@ -114,8 +115,10 @@ The terminal button creates Bollard attached TTY exec using `/bin/sh` for Linux 
 `cmd.exe` for Windows; users can edit the command arguments. Input/output uses the
 existing application `Session` and `TerminalView` parser/renderer and resize uses
 the Engine API. The terminal stays in Docker as a temporary bottom drawer, so the
-resource list or detail remains visible behind it and the global terminal page is
-not changed. A new exec replaces the previous drawer; closing it drops the
+resource list or detail keeps its own unobscured area above it and the global terminal page is
+not changed. The drawer can expand to fill the main pane and then restore its
+compact height. Copy, paste, search and close shortcuts target its focused
+terminal. It is shown only with its original host/endpoint. A new exec replaces the previous drawer; closing it drops the
 temporary session without stopping or removing the container. Existing terminals
 never retarget on host switches, and Explorer/Git remain host tools rather than
 container filesystem browsers.

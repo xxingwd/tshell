@@ -611,7 +611,6 @@ docker:
   more: "More"
   search_resources: "Search resources"
   no_resources: "No matching resources"
-  open_all: "Open all"
   select_resource: "Select a resource"
   engine_info: "Engine"
   storage: "Storage"

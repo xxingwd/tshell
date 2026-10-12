@@ -365,15 +365,23 @@ cargo build --locked --release --bin tshell
 ## 12. Docker 树形导航与内嵌临时终端
 
 2026-10-12 按实际 Docker 工作流收敛交互：左侧改为可展开的资源树，主区保留
-表格与详情，资源不在两个区域重复渲染。容器、Compose 项目 / service、镜像标签
+表格与详情，树负责定位，主区负责比较与操作。容器、Compose 项目 / service、镜像标签
 均可从树中直接定位；Volumes、Networks、Engine 信息、存储、事件和 daemon 配置
-收进 Storage / Engine 二级分组。树使用虚拟列表，容器数量增长时仍保持稳定。
+收进 Engine 二级菜单。四个分类固定可见，一次展开一类，完整资源在分支内虚拟滚动。
 
-- [x] 组节点点击同时展开 / 收起并打开主区集合；叶节点直接打开资源详情。超大分支保留有限预览并提供“打开全部”。
+- [x] 分类打开主区集合，箭头控制展开；叶节点打开完整详情。分类始终可访问，保留全部资源与各主机的展开 / 滚动状态。
 - [x] Compose 项目按 Docker labels 展开 service；镜像标签沿用完整身份和无标签排序。
-- [x] Storage / Engine 二级菜单收纳 Volume、Network、Engine 信息、磁盘、事件和配置。
+- [x] Engine 二级菜单收纳概览、Volume、Network、磁盘、事件和配置。
 - [x] Docker 容器终端复用应用现有 `Session` / `TerminalView`，在 Docker 主区底部临时抽屉打开。
-- [x] 关闭抽屉释放临时 exec 会话，不切换全局 Terminal 页，不创建普通可恢复 shell 会话。
+- [x] 抽屉可放大 / 恢复；输入、复制、粘贴、搜索与关闭复用现有组件。按原主机显示，迟到连接不会覆盖新的 exec；关闭释放临时连接。
 - [ ] 在真实 Linux / Windows 容器和远程 Engine 上验收抽屉 resize、TTY 输入输出及关闭后的 exec 生命周期。
+
+本轮验证（Windows x64，2026-10-12）：
+
+- `cargo fmt --all -- --check` 与工作区 / 暂存区 `git diff --check` 通过。
+- `cargo test --workspace --locked`：238 通过、20 忽略。
+- all-targets（含 `ui-check-screenshots`）与 release 编译检查通过；从暂存区独立导出源码后，all-targets 检查亦通过。
+- 原生 UI 回归覆盖资源树键盘定位、深浅 / 窄窗口、完整万条资源、主机状态恢复，以及临时终端抽屉 / 放大、输出绘制、搜索、跨主机隐藏和关闭后对象释放。截图为隔离测试数据。
+- 报告：`artifacts/docker-drawer-ready-ui.json`；截图：`artifacts/docker-drawer-ready-screenshots/`；完整测试日志：`tmp/docker-final-tests.log`。生成产物不提交。
 
 实现与行为见 [Docker workspace](docs/docker-workspace.md)。

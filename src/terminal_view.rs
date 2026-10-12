@@ -156,6 +156,17 @@ impl TerminalView {
         self.bounds
     }
 
+    #[cfg(debug_assertions)]
+    pub(crate) fn snapshot_contains(&self, text: &str) -> bool {
+        !self.snapshot_in_flight
+            && self.snapshot.rows.iter().any(|row| {
+                row.iter()
+                    .map(|cell| cell.c)
+                    .collect::<String>()
+                    .contains(text)
+            })
+    }
+
     fn session_mode(&self) -> TermMode {
         self.session.as_ref().map(|s| s.mode()).unwrap_or_default()
     }

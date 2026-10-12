@@ -106,11 +106,11 @@ impl Collection {
     }
 }
 
-struct Row {
-    resource: Resource,
-    cells: [String; 4],
+pub(crate) struct Row {
+    pub resource: Resource,
+    pub cells: [String; 4],
 }
-fn rows(engine: &Engine, collection: Collection, query: &str) -> Vec<Row> {
+pub(crate) fn rows(engine: &Engine, collection: Collection, query: &str) -> Vec<Row> {
     let mut project_counts = std::collections::BTreeMap::new();
     if collection == Collection::Projects {
         for container in &engine.containers {

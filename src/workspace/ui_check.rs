@@ -3080,21 +3080,30 @@ async fn check_docker_workspace(
                     cx,
                 );
                 if resource == 2 {
-                    let focus = app.read(cx).docker.read(cx).check_navigation_focus();
+                    app.read(cx)
+                        .docker
+                        .clone()
+                        .update(cx, |docker, cx| docker.check_compact_sidebar(true, cx));
+                    window.refresh();
+                    let _ = window.draw(cx);
+                    let focus = app
+                        .read(cx)
+                        .docker
+                        .clone()
+                        .update(cx, |docker, cx| docker.check_image_tree_focus(window, cx));
+                    window.refresh();
+                    let _ = window.draw(cx);
                     focus.focus(window, cx);
                     window.dispatch_keystroke(Keystroke::parse("down").unwrap(), cx);
-                    app.read(cx)
-                        .docker
-                        .read(cx)
-                        .check_browser_navigation(3, false, false);
+                    app.read(cx).docker.read(cx).check_image_selection(0);
+                    window.refresh();
+                    let _ = window.draw(cx);
+                    window.dispatch_keystroke(Keystroke::parse("down").unwrap(), cx);
+                    app.read(cx).docker.read(cx).check_image_selection(1);
+                    window.refresh();
+                    let _ = window.draw(cx);
                     window.dispatch_keystroke(Keystroke::parse("up").unwrap(), cx);
-                    app.read(cx)
-                        .docker
-                        .read(cx)
-                        .check_browser_navigation(2, false, false);
-                    app.read(cx).docker.clone().update(cx, |docker, cx| {
-                        docker.check_resource_fixture(resource, window, cx)
-                    });
+                    app.read(cx).docker.read(cx).check_image_selection(0);
                 }
                 window.dispatch_event(
                     PlatformInput::MouseMove(MouseMoveEvent {
@@ -3242,6 +3251,7 @@ async fn check_docker_workspace(
             let _ = window.draw(cx);
         })?;
     }
+    docker::check_terminal(handle, app.clone(), remote, cx).await?;
     cx.update_window(handle.into(), |_, window, cx| {
         app.update(cx, |app, cx| {
             app.active = previous;

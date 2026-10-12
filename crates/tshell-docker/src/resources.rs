@@ -228,6 +228,10 @@ pub(crate) async fn inspect(docker: &Docker, resource: &Resource) -> Result<Valu
     })
 }
 pub(crate) struct Resources {
+    pub sidebar_group: Option<crate::panel::SidebarGroup>,
+    pub sidebar_cursor: Option<SharedString>,
+    pub sidebar_scrolls: BTreeMap<crate::panel::SidebarGroup, UniformListScrollHandle>,
+    pub sidebar_projects: BTreeSet<String>,
     pub collection: Option<crate::browser::Collection>,
     pub inspector: bool,
     pub table_focus: FocusHandle,
@@ -279,6 +283,18 @@ impl Resources {
             editor
         });
         Self {
+            sidebar_group: Some(crate::panel::SidebarGroup::Containers),
+            sidebar_cursor: None,
+            sidebar_scrolls: [
+                crate::panel::SidebarGroup::Containers,
+                crate::panel::SidebarGroup::Compose,
+                crate::panel::SidebarGroup::Images,
+                crate::panel::SidebarGroup::Engine,
+            ]
+            .into_iter()
+            .map(|group| (group, UniformListScrollHandle::new()))
+            .collect(),
+            sidebar_projects: BTreeSet::new(),
             collection: Some(crate::browser::Collection::Containers),
             inspector: false,
             table_focus: cx.focus_handle(),

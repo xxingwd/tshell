@@ -43,6 +43,30 @@ pub fn notice(icon: IconName, message: impl Into<SharedString>, color: u32) -> D
         .child(div().min_w_0().flex_1().child(message.into()))
 }
 
+/// Place transient feedback inside a relative content area without resizing its siblings.
+pub fn content_notice(
+    id: impl Into<ElementId>,
+    icon: IconName,
+    message: impl Into<SharedString>,
+    color: u32,
+    palette: Palette,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .absolute()
+        .bottom_0()
+        .left_0()
+        .w_full()
+        .max_h_full()
+        .overflow_y_scroll()
+        .px_3()
+        .py_2()
+        .bg(rgb(palette.panel))
+        .border_t_1()
+        .border_color(rgb(palette.border))
+        .child(notice(icon, message, color))
+}
+
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 pub fn button(id: impl Into<ElementId>, icon: IconName, label: impl Into<SharedString>) -> Button {
@@ -61,6 +85,7 @@ pub fn icon_button(
     icon: IconName,
     label: impl Into<SharedString>,
 ) -> Button {
+    let label = label.into();
     Button::new(id)
         .ghost()
         .small()
@@ -69,6 +94,7 @@ pub fn icon_button(
         .text_size(px(12.))
         .line_height(relative(1.))
         .icon(icon)
+        .accessibility_label(label.clone())
         .tooltip(label)
 }
 

@@ -18,10 +18,7 @@ use gpui_kit::component::{
 use gpui_kit::{prelude::*, *};
 #[cfg(debug_assertions)]
 use std::collections::HashMap;
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    time::Duration,
-};
+use std::{collections::BTreeMap, time::Duration};
 use tshell_host::{Failure, HostId};
 use tshell_ui::appearance::Palette;
 #[derive(Clone)]
@@ -46,7 +43,6 @@ pub(crate) enum SidebarGroup {
     Containers,
     Compose,
     Images,
-    Storage,
     Engine,
 }
 pub(crate) struct Engine {
@@ -162,7 +158,6 @@ pub struct DockerView {
     preview_worker: Option<Worker>,
     project_worker: Option<Worker>,
     pending_form: Option<(Target, Resource, crate::actions::Action)>,
-    pub(crate) sidebar_expanded: BTreeSet<SidebarGroup>,
     #[cfg(debug_assertions)]
     fixture: bool,
     _updates: Task<()>,
@@ -309,13 +304,6 @@ impl DockerView {
             preview_worker: None,
             project_worker: None,
             pending_form: None,
-            sidebar_expanded: [
-                SidebarGroup::Containers,
-                SidebarGroup::Compose,
-                SidebarGroup::Images,
-            ]
-            .into_iter()
-            .collect(),
             #[cfg(debug_assertions)]
             fixture: false,
             _updates: updates,
@@ -2083,16 +2071,9 @@ impl DockerView {
     }
 
     pub fn check_compact_sidebar(&mut self, compact: bool, cx: &mut Context<Self>) {
-        self.sidebar_expanded = if compact {
-            BTreeSet::new()
-        } else {
-            [
-                SidebarGroup::Containers,
-                SidebarGroup::Compose,
-                SidebarGroup::Images,
-            ]
-            .into()
-        };
+        if let Some(engine) = self.engine_mut() {
+            engine.resources.sidebar_group = (!compact).then_some(SidebarGroup::Containers);
+        }
         cx.notify();
     }
 

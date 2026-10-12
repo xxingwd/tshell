@@ -598,6 +598,8 @@ pub struct AppView {
     forwards: BTreeMap<String, Vec<crate::ssh_forward::LocalForward>>,
     forward_processes: BTreeMap<(String, usize), crate::ssh_forward::Tunnel>,
     docker: Entity<tshell_docker::DockerView>,
+    docker_terminal: Option<docker::Terminal>,
+    docker_terminal_request: u64,
     docker_endpoint: Option<String>,
     workspaces: BTreeMap<WorkspaceKey, SessionWorkspace>,
     active_workspace: Option<WorkspaceKey>,
@@ -982,6 +984,8 @@ impl AppView {
             forwards: prefs.forwards,
             forward_processes: BTreeMap::new(),
             docker,
+            docker_terminal: None,
+            docker_terminal_request: 0,
             docker_endpoint: prefs.docker_endpoint.clone(),
             workspaces: BTreeMap::new(),
             active_workspace: None,
@@ -2829,6 +2833,30 @@ impl AppView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.page == Page::Docker
+            && let Some(view) = self.docker_terminal_view()
+            && view.read(cx).focus_handle(cx).contains_focused(window, cx)
+        {
+            match shortcut {
+                Shortcut::Copy => {
+                    view.update(cx, |view, cx| view.copy(cx));
+                    return;
+                }
+                Shortcut::Paste => {
+                    view.update(cx, |view, cx| view.paste(cx));
+                    return;
+                }
+                Shortcut::TerminalSearch => {
+                    view.update(cx, |view, cx| view.open_search(window, cx));
+                    return;
+                }
+                Shortcut::ClosePane | Shortcut::CloseWindow => {
+                    self.close_docker_terminal(cx);
+                    return;
+                }
+                _ => {}
+            }
+        }
         match shortcut {
             Shortcut::CommandPalette => {
                 self.show_command_palette(window, cx);
@@ -3752,7 +3780,7 @@ impl AppView {
                 .explorer_entity()
                 .map(|entity| entity.into_any_element()),
             Page::Git => self.git_entity().map(|entity| entity.into_any_element()),
-            Page::Docker => Some(self.docker.clone().into_any_element()),
+            Page::Docker => Some(self.docker_surface(_cx)),
             Page::Terminal => None,
         }
         .unwrap_or_else(|| {
@@ -4392,6 +4420,7 @@ impl Render for AppView {
         }
         self.prepare_tools(window, cx);
         self.prepare_docker(window, cx);
+        self.prepare_docker_terminal(cx);
         if self.need_focus
             && !window.has_active_dialog(cx)
             && !self.creating_tab

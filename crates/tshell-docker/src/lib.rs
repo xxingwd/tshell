@@ -5,6 +5,7 @@ pub mod connection;
 pub use connection::{Endpoint, Target};
 
 mod logs;
+mod navigation;
 pub mod terminal;
 
 mod actions;
