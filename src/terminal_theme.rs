@@ -78,6 +78,19 @@ mod tests {
     }
 
     #[test]
+    fn light_builtin_ansi_colors_remain_readable_on_white() {
+        let ansi = ThemeFile::default()
+            .selected("vscode-light")
+            .unwrap()
+            .colors()
+            .ansi;
+        assert_eq!(
+            (ansi[3], ansi[7], ansi[11], ansi[15]),
+            (0x8a6a00, 0x4b5563, 0x8a6a00, 0x6b7280)
+        );
+    }
+
+    #[test]
     fn paired_themes_follow_lightness_for_vscode() {
         assert_eq!(paired_theme("vscode-light", false), Some("vscode-dark"));
         assert_eq!(paired_theme("vscode-dark", true), Some("vscode-light"));

@@ -175,41 +175,39 @@ impl Monitor {
     ) {
         let (cancel, cancelled) = async_channel::bounded::<()>(1);
         let (sender, receiver) = async_channel::bounded(1);
-        std::thread::spawn(move || {
-            let runtime = match tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-            {
-                Ok(runtime) => runtime,
-                Err(error) => {
-                    let _ = sender.send_blocking(Err(error.to_string()));
-                    return;
+        // russh schedules channel closure on the current runtime when a stream
+        // is dropped. Keep that runtime alive after a monitor is cancelled.
+        crate::ssh_pool::runtime().spawn(async move {
+            let mut platform = None;
+            let mut failures = 0;
+            loop {
+                let result = tokio::select! {
+                    _ = cancelled.recv() => break,
+                    result = collect(&target, &metrics, &mut platform, &mut failures, &sender) => result,
+                };
+                let error = result
+                    .err()
+                    .map(|error| crate::i18n::format_error(&error))
+                    .unwrap_or_else(|| crate::t!("metrics.disconnected").to_string());
+                failures += 1;
+                let stopped = failures >= 3;
+                let error = if stopped {
+                    crate::t!("metrics.stopped_after_failures", error = error).to_string()
+                } else {
+                    error
+                };
+                tokio::select! {
+                    _ = cancelled.recv() => break,
+                    _ = sender.send(Err(error)) => {}
                 }
-            };
-            runtime.block_on(async {
-                let mut platform = None;
-                let mut failures = 0;
-                loop {
-                    let result = tokio::select! {
-                        _ = cancelled.recv() => break,
-                        result = collect(&target, &metrics, &mut platform, &mut failures, &sender) => result,
-                    };
-                    let error = result
-                        .err()
-                        .map(|error| crate::i18n::format_error(&error))
-                        .unwrap_or_else(|| crate::t!("metrics.disconnected").to_string());
-                    failures += 1;
-                    let stopped = failures >= 3;
-                    let error = if stopped {
-                        crate::t!("metrics.stopped_after_failures", error = error).to_string()
-                    } else {
-                        error
-                    };
-                    tokio::select! { _ = cancelled.recv() => break, _ = sender.send(Err(error)) => {} }
-                    if stopped { break; }
-                    tokio::select! { _ = cancelled.recv() => break, _ = tokio::time::sleep(Duration::from_secs(30)) => {} }
+                if stopped {
+                    break;
                 }
-            });
+                tokio::select! {
+                    _ = cancelled.recv() => break,
+                    _ = tokio::time::sleep(Duration::from_secs(30)) => {}
+                }
+            }
         });
         (Self { _cancel: cancel }, receiver)
     }
@@ -263,6 +261,38 @@ async fn collect(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires TSHELL_SSH_TEST_HOST; repeatedly cancels collectors on a shared transport"]
+    fn remote_monitor_restarts_release_channels() -> Result<()> {
+        let host = SshConfig {
+            destination: std::env::var("TSHELL_SSH_TEST_HOST")?,
+            user: String::new(),
+            port: None,
+            identity_file: None,
+        };
+        let _auxiliary = crate::ssh_pool::auxiliary(&host);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(async {
+            for restart in 0..16 {
+                let (monitor, updates) = Monitor::start(
+                    Target::Remote(host.clone()),
+                    [Metric::Memory].into_iter().collect(),
+                );
+                let stats = timeout(Duration::from_secs(20), updates.recv()).await??;
+                ensure!(stats.is_ok(), "restart {restart}: {stats:?}");
+                ensure!(stats.unwrap().memory.is_some());
+                drop(monitor);
+                while timeout(Duration::from_secs(3), updates.recv())
+                    .await?
+                    .is_ok()
+                {}
+            }
+            Ok(())
+        })
+    }
+
     #[test]
     #[ignore = "reads selected metrics from local Windows or TSHELL_SSH_TEST_HOST"]
     fn selected_metrics_collect_only_memory() -> Result<()> {

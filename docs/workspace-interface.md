@@ -90,12 +90,21 @@ does not create a terminal session. See
   update actions precede their status text, and forwarding reserves feedback
   space so validation cannot change the dialog height. Field validation remains
   attached to its input.
+- Private-key file selection fills the host editor's path field whether the
+  editor was opened from the sidebar or Settings. Closing the host editor
+  discards pending picker results.
 - Explorer refreshes keep the existing tree, expanded directories and selection
   until a successful replacement arrives. Git uses a persistent file-list scroll
   handle across requests. Its compact count area and session unread dots reserve
   their width so asynchronous updates cannot shorten adjacent names.
 - New-session directory completion reserves a 150-pixel scrollable result area
   and a 32-pixel scrollable validation area, including when either is empty.
+  Enter and the confirm button both wait for remote directory validation when
+  necessary, showing a busy button and ignoring duplicate submissions. Validation
+  publishes before completion listing finishes; editing the form, closing it, or
+  switching hosts cancels a pending submission. Failed validation keeps the form
+  and reports the actual lookup error. The dialog's default Enter confirmation
+  delegates to session submission instead of closing and clearing validation first.
   Theme-list errors use a fixed single-line slot with the full message in a
   tooltip. Docker configuration pages keep Save/Discard controls present and
   disabled when unavailable, and reserve the source-file row before loading.
@@ -185,6 +194,11 @@ verifies that workspace errors do not resize terminal panes.
 It also checks directory/theme feedback sizes, status metric identities and height,
 retained Explorer selection/scroll, Git list scrolling during failed refreshes, and Docker editor
 bounds before document arrival and across clean/dirty states.
+
+With `TSHELL_SSH_TEST_HOST` set, the check also covers immediate remote session
+submission, duplicate Enter/confirm, missing directories, and cancellation after
+editing or changing hosts. Set `TSHELL_UI_CHECK_SCOPE=session-submission` to run
+only those cases, still using an isolated `TSHELL_DATA_DIR`.
 
 To also capture native renders, build with `--features ui-check-screenshots`
 and set `TSHELL_UI_SCREENSHOT_DIR` before running the check. Workspace captures

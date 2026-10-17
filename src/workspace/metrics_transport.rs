@@ -75,7 +75,7 @@ pub(super) async fn detect(target: &Target) -> Result<Platform> {
 
 pub(super) struct Connection {
     pub reader: Box<dyn AsyncRead + Unpin + Send>,
-    // Dropping the monitor kills its local collector; SSH streams close their channel on drop.
+    _cancel: Option<async_channel::Sender<()>>,
     _child: Option<Child>,
 }
 pub(super) async fn connect(
@@ -88,11 +88,39 @@ pub(super) async fn connect(
     match target {
         Target::Remote(host) => {
             let command = format!("{program} {}", args.join(" "));
-            let channel = crate::ssh_pool::exec_aux(host, &command).await?;
+            let mut channel = crate::ssh_pool::exec_aux(host, &command).await?;
             channel.data(script.as_bytes()).await?;
             channel.eof().await?;
+            let (reader, mut writer) = tokio::io::duplex(65536);
+            let (cancel, cancelled) = async_channel::bounded::<()>(1);
+            crate::ssh_pool::runtime().spawn(async move {
+                loop {
+                    let message = tokio::select! {
+                        _ = cancelled.recv() => break,
+                        message = channel.wait() => message,
+                    };
+                    match message {
+                        Some(russh::ChannelMsg::Data { data }) => {
+                            let sent = tokio::select! {
+                                _ = cancelled.recv() => break,
+                                sent = writer.write_all(&data) => sent,
+                            };
+                            if sent.is_err() {
+                                break;
+                            }
+                        }
+                        Some(russh::ChannelMsg::Eof | russh::ChannelMsg::Close) | None => break,
+                        _ => {}
+                    }
+                }
+                // Closing a non-PTY channel alone can leave its sampling shell
+                // asleep and consuming a server session slot. Stop our command first.
+                let _ = channel.signal(russh::Sig::TERM).await;
+                let _ = channel.close().await;
+            });
             Ok(Connection {
-                reader: Box::new(channel.into_stream()),
+                reader: Box::new(reader),
+                _cancel: Some(cancel),
                 _child: None,
             })
         }
@@ -122,6 +150,7 @@ pub(super) async fn connect(
                 .ok_or_else(|| anyhow::anyhow!("{}", crate::t!("metrics.script_read_failed")))?;
             Ok(Connection {
                 reader: Box::new(stdout),
+                _cancel: None,
                 _child: Some(child),
             })
         }

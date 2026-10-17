@@ -314,7 +314,6 @@ pub(crate) fn expand_wide_selection(spans: &mut [PaintSpan], rows: &[std::sync::
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::appearance::PaletteTerminalTheme;
     use crate::terminal::Session;
     use alacritty_terminal::index::{Column, Point as GridPoint};
     use gpui_kit::component::ThemeMode;
@@ -350,20 +349,20 @@ mod tests {
     fn shell_and_ash_blue_encodings_match_across_themes_and_osc_overrides() {
         let light = Palette::new(ThemeMode::Light);
         let dark = Palette::new(ThemeMode::Dark);
-        // Appearance switches preserve every indexed colour, both on screen
-        // and in OSC query replies. Default foreground/background still adapt.
-        for index in 0..=255 {
-            assert_eq!(
-                resolve_color(Color::Indexed(index), light, &Colors::default()),
-                resolve_color(Color::Indexed(index), dark, &Colors::default()),
-            );
-            assert_eq!(
-                light.terminal_theme().rgb(index as usize),
-                dark.terminal_theme().rgb(index as usize)
-            );
+        // Each appearance keeps its indexed colours consistent on screen and
+        // in OSC query replies. Light and dark themes may use different
+        // palettes so that both remain readable on their backgrounds.
+        for palette in [light, dark] {
+            for index in 0..=255 {
+                assert_eq!(
+                    resolve_color(Color::Indexed(index), palette, &Colors::default()),
+                    crate::terminal_protocol::indexed_color(index, &palette.ansi)
+                );
+            }
         }
         assert_ne!(light.text, dark.text);
         assert_ne!(light.terminal, dark.terminal);
+        assert_ne!(light.ansi, dark.ansi);
         let s = Session::remote("%ash-blue".into(), 4, 80, Arc::new(|_| Ok(())));
         // Ratatui Blue -> Crossterm DarkBlue -> SGR 38;5;4. The shell's
         // SGR 34 must be identical, including bold, DIM and SGR 22 resets.

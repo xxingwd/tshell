@@ -5,6 +5,10 @@ use std::{collections::HashSet, path::Path};
 
 const DEFAULT_THEME_JSON: &str = include_str!("defaults.json");
 const THEME_FILE_VERSION: u32 = 3;
+const LEGACY_VSCODE_LIGHT_ANSI: [u32; 16] = [
+    0x111827, 0xdc2626, 0x16a34a, 0xca8a04, 0x2563eb, 0x7c3aed, 0x0891b2, 0xf8fafc, 0x64748b,
+    0xef4444, 0x22c55e, 0xeab308, 0x3b82f6, 0xa855f7, 0x06b6d4, 0xffffff,
+];
 const REMOVED_BUILTIN_THEME_IDS: &[&str] = &[
     "tide-light",
     "tide-dark",
@@ -214,6 +218,15 @@ impl ThemeFile {
         let defaults = Self::default();
         let mut changed = false;
         for theme in &mut file.themes {
+            if theme.id == "vscode-light"
+                && theme.ansi.map(|color| color.0) == LEGACY_VSCODE_LIGHT_ANSI
+            {
+                theme.ansi = defaults
+                    .selected("vscode-light")
+                    .expect("embedded theme template must contain vscode-light")
+                    .ansi;
+                changed = true;
+            }
             if theme.interface.is_none() {
                 theme.interface = defaults
                     .selected(&theme.id)
@@ -392,6 +405,45 @@ mod tests {
         assert!(saved["themes"][0].get("foreground").is_none());
         assert_eq!(saved["themes"][0]["ink"], "#000000");
         assert!(saved["themes"][0]["interface"].is_object());
+    }
+
+    #[test]
+    fn legacy_light_ansi_palette_is_migrated_without_overwriting_custom_colors() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("theme.json");
+        let mut legacy =
+            serde_json::to_value(ThemeFile::default().selected("vscode-light").unwrap()).unwrap();
+        legacy["ansi"] = serde_json::json!([
+            "#111827", "#DC2626", "#16A34A", "#CA8A04", "#2563EB", "#7C3AED", "#0891B2", "#F8FAFC",
+            "#64748B", "#EF4444", "#22C55E", "#EAB308", "#3B82F6", "#A855F7", "#06B6D4", "#FFFFFF"
+        ]);
+        let mut custom = legacy.clone();
+        custom["id"] = "custom-1".into();
+        custom["ansi"][7] = "#F8FAFC".into();
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "version": THEME_FILE_VERSION,
+                "themes": [legacy, custom]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let migrated = ThemeFile::load(&path).unwrap();
+        assert_eq!(
+            migrated.selected("vscode-light").unwrap().colors().ansi,
+            ThemeFile::default()
+                .selected("vscode-light")
+                .unwrap()
+                .colors()
+                .ansi
+        );
+        assert_eq!(
+            migrated.selected("custom-1").unwrap().colors().ansi[7],
+            0xf8fafc
+        );
+        assert_eq!(ThemeFile::load(&path).unwrap(), migrated);
     }
 
     #[test]

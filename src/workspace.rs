@@ -582,6 +582,7 @@ pub struct AppView {
     tab_name: Entity<InputState>,
     directory_candidates: Vec<String>,
     directory_task: Option<Task<()>>,
+    session_submit_task: Option<Task<()>>,
     directory_error: Option<String>,
     validated_directory: Option<(usize, String, String)>,
     command_state: Entity<CommandState>,
@@ -960,6 +961,7 @@ impl AppView {
             }),
             directory_candidates: Vec::new(),
             directory_task: None,
+            session_submit_task: None,
             directory_error: None,
             validated_directory: None,
             tab_name: cx.new(|cx| {
@@ -1042,8 +1044,16 @@ impl AppView {
         )
         .detach();
         cx.subscribe_in(&this.tab_name, window, |this, _, event, window, cx| {
-            if matches!(event, InputEvent::PressEnter { .. }) && this.creating_tab {
-                this.create_tab(window, cx);
+            if this.creating_tab {
+                match event {
+                    InputEvent::PressEnter { .. } => this.create_tab(window, cx),
+                    InputEvent::Change if this.session_submit_task.is_some() => {
+                        this.session_submit_task = None;
+                        this.message = None;
+                        cx.notify();
+                    }
+                    _ => {}
+                }
             }
         })
         .detach();
@@ -1458,6 +1468,10 @@ impl AppView {
         cx.notify();
     }
     fn switch_host(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.home_task = None;
+        self.directory_task = None;
+        self.session_submit_task = None;
+        self.validated_directory = None;
         self.active = index;
         self.connection_latency = ConnectionLatency::default();
 
@@ -1729,6 +1743,7 @@ impl AppView {
         self.editing_session = None;
         self.home_task = None;
         self.directory_task = None;
+        self.session_submit_task = None;
         self.directory_candidates.clear();
         self.directory_error = None;
         self.validated_directory = None;
@@ -1796,6 +1811,7 @@ impl AppView {
             };
             let width = width.min((f32::from(window.viewport_size().width) - 32.).max(0.));
             let owner = owner.clone();
+            let submit_owner = owner.clone();
             workspace_dialog(dialog, cx)
                 .title(title.clone())
                 .width(px(width))
@@ -1822,6 +1838,14 @@ impl AppView {
                         }
                         _ => app.modal_closed(cx),
                     });
+                })
+                .when(matches!(kind, ModalKind::NewTab), |dialog| {
+                    dialog.on_ok(move |_, window, cx| {
+                        // Input Enter also reaches the dialog before its deferred
+                        // submission event. Only create_tab may close this form.
+                        let _ = submit_owner.update(cx, |app, cx| app.create_tab(window, cx));
+                        false
+                    })
                 })
                 .child(if matches!(kind, ModalKind::NewTab) {
                     div()
@@ -2603,6 +2627,9 @@ impl AppView {
         self.show_terminal(cx);
     }
     pub(super) fn show_new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.home_task = None;
+        self.directory_task = None;
+        self.session_submit_task = None;
         self.tab_name
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.editing_session = None;
@@ -2617,7 +2644,12 @@ impl AppView {
         self.open_modal(crate::t!("ws.new_session"), window, cx);
         self.tab_name
             .update(cx, |input, cx| input.focus(window, cx));
-        if let Some(remote) = self.remote_files() {
+        if let Some(remote) = self.hosts[self.active]
+            .config
+            .as_ref()
+            .map(|host| remote_files::Session::new(host.ssh.clone()))
+        {
+            let host_id = self.hosts[self.active].identity();
             self.home_task = Some(cx.spawn_in(window, async move |view, cx| {
                 let home = cx
                     .background_executor()
@@ -2625,6 +2657,7 @@ impl AppView {
                     .await;
                 let _ = view.update_in(cx, |this, window, cx| {
                     if !this.creating_tab
+                        || this.hosts[this.active].identity() != host_id
                         || this.editing_session.is_some()
                         || !this.tab_path.read(cx).value().is_empty()
                     {
@@ -2658,6 +2691,9 @@ impl AppView {
         }
     }
     fn create_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.creating_tab || self.session_submit_task.is_some() {
+            return;
+        }
         let path = self.tab_path.read(cx).value().trim().to_owned();
         if path.is_empty() || path.chars().any(char::is_control) {
             self.message = Some(crate::t!("ws.directory_invalid").to_string());
@@ -2666,26 +2702,6 @@ impl AppView {
         }
         let path = if self.editing_session.is_some() {
             path
-        } else if self.session_directory(cx).is_none() {
-            // Directory completion runs asynchronously. When the user presses
-            // Enter immediately after choosing or typing a local path, resolve
-            // it synchronously so a valid path is not rejected just because the
-            // completion task has not published its result yet.
-            if self.hosts[self.active].config.is_none() {
-                let resolved = directories::resolve(&path, &self.cwd);
-                match resolved.canonicalize() {
-                    Ok(resolved) if resolved.is_dir() => resolved.to_string_lossy().into_owned(),
-                    _ => {
-                        self.message = Some(crate::t!("ws.directory_missing").to_string());
-                        cx.notify();
-                        return;
-                    }
-                }
-            } else {
-                self.message = Some(crate::t!("ws.directory_missing").to_string());
-                cx.notify();
-                return;
-            }
         } else if self.hosts[self.active].config.is_none() {
             let path = directories::resolve(&path, &self.cwd);
             match path.canonicalize() {
@@ -2696,8 +2712,11 @@ impl AppView {
                     return;
                 }
             }
+        } else if let Some(path) = self.session_directory(cx) {
+            path.to_owned()
         } else {
-            self.session_directory(cx).unwrap().to_owned()
+            self.submit_remote_session(window, cx);
+            return;
         };
         let name = self.tab_name.read(cx).value().trim().to_owned();
         if name.chars().any(char::is_control) {
@@ -2732,6 +2751,47 @@ impl AppView {
         self.close_modal(window, cx);
         self.act(action, cx);
     }
+    fn submit_remote_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(host) = self.hosts[self.active].config.as_ref() else {
+            return;
+        };
+        let remote = remote_files::Session::new(host.ssh.clone());
+        let host_id = self.hosts[self.active].identity();
+        let input = self.tab_path.read(cx).value().to_string();
+        let name = self.tab_name.read(cx).value().to_string();
+        self.directory_task = None;
+        self.directory_error = None;
+        self.message = None;
+        self.session_submit_task = Some(cx.spawn_in(window, async move |view, cx| {
+            let query = input.trim().to_owned();
+            let result = cx
+                .background_executor()
+                .spawn(async move { remote_files::directory(&remote, &query) })
+                .await;
+            let _ = view.update_in(cx, |this, window, cx| {
+                this.session_submit_task = None;
+                if !this.creating_tab
+                    || this.editing_session.is_some()
+                    || this.hosts[this.active].identity() != host_id
+                    || this.tab_path.read(cx).value().as_ref() != input
+                    || this.tab_name.read(cx).value().as_ref() != name
+                {
+                    return;
+                }
+                match result {
+                    Ok(path) => {
+                        this.validated_directory = Some((this.active, input, path));
+                        this.create_tab(window, cx);
+                    }
+                    Err(error) => {
+                        this.message = Some(crate::i18n::format_error(&error));
+                        cx.notify();
+                    }
+                }
+            });
+        }));
+        cx.notify();
+    }
     fn session_directory(&self, cx: &App) -> Option<&str> {
         let input = self.tab_path.read(cx).value();
         self.validated_directory
@@ -2740,14 +2800,19 @@ impl AppView {
             .map(|(_, _, path)| path.as_str())
     }
     fn complete_tab_directory(&mut self, cx: &mut Context<Self>) {
+        self.session_submit_task = None;
         self.directory_candidates.clear();
         self.directory_error = None;
         self.validated_directory = None;
         self.message = None;
         let input = self.tab_path.read(cx).value().to_string();
         let host_index = self.active;
+        let host_id = self.hosts[host_index].identity();
         let base = self.cwd.clone();
-        let remote = self.remote_files();
+        let remote = self.hosts[self.active]
+            .config
+            .as_ref()
+            .map(|host| remote_files::Session::new(host.ssh.clone()));
         let checkable = !input.trim().is_empty() && !input.chars().any(char::is_control);
         if remote.is_none() && checkable {
             let path = directories::resolve(input.trim(), &base);
@@ -2771,23 +2836,17 @@ impl AppView {
                 .timer(Duration::from_millis(250))
                 .await;
             let query = input.clone();
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    let checked = remote
-                        .as_ref()
-                        .filter(|_| checkable)
-                        .map(|host| remote_files::directory(host, &query));
-                    let candidates = directories::complete(&query, &base, remote.as_ref());
-                    (checked, candidates)
-                })
-                .await;
-            let _ = view.update(cx, |this, cx| {
-                if this.creating_tab
-                    && this.active == host_index
-                    && this.tab_path.read(cx).value().as_ref() == input
-                {
-                    if let Some(checked) = result.0 {
+            if let Some(remote) = remote.as_ref().filter(|_| checkable).cloned() {
+                let checked = cx
+                    .background_executor()
+                    .spawn(async move { remote_files::directory(&remote, query.trim()) })
+                    .await;
+                let current = view.update(cx, |this, cx| {
+                    let current = this.creating_tab
+                        && this.active == host_index
+                        && this.hosts[this.active].identity() == host_id
+                        && this.tab_path.read(cx).value().as_ref() == input;
+                    if current {
                         match checked {
                             Ok(path) => {
                                 this.validated_directory = Some((host_index, input.clone(), path))
@@ -2796,8 +2855,26 @@ impl AppView {
                                 this.directory_error = Some(crate::i18n::format_error(&error))
                             }
                         }
+                        cx.notify();
                     }
-                    match result.1 {
+                    current
+                });
+                if !current.unwrap_or(false) {
+                    return;
+                }
+            }
+            let query = input.trim().to_owned();
+            let candidates = cx
+                .background_executor()
+                .spawn(async move { directories::complete(&query, &base, remote.as_ref()) })
+                .await;
+            let _ = view.update(cx, |this, cx| {
+                if this.creating_tab
+                    && this.active == host_index
+                    && this.hosts[this.active].identity() == host_id
+                    && this.tab_path.read(cx).value().as_ref() == input
+                {
+                    match candidates {
                         Ok(paths) => this.directory_candidates = paths,
                         Err(error) if this.directory_error.is_none() => {
                             this.directory_error = Some(
@@ -2856,7 +2933,10 @@ impl AppView {
             if let Ok(Ok(Some(paths))) = receiver.await {
                 if let Some(path) = paths.into_iter().next() {
                     let _ = view.update_in(cx, |this, window, cx| {
-                        if this.settings && this.settings_ui.host_form {
+                        // The host editor can be opened from the sidebar or
+                        // from Settings. `settings` is false for the former,
+                        // but the picker result must update both forms.
+                        if this.settings_ui.host_form {
                             this.identity_file.update(cx, |input, cx| {
                                 input.set_value(path.to_string_lossy().into_owned(), window, cx)
                             });
@@ -4326,7 +4406,11 @@ impl AppView {
                             crate::t!("ws.open"),
                         )
                         .text_color(rgb(p.accent))
-                        .disabled(self.session_directory(cx).is_none())
+                        .loading(self.session_submit_task.is_some())
+                        .disabled(
+                            self.session_submit_task.is_some()
+                                || self.tab_path.read(cx).value().trim().is_empty(),
+                        )
                         .on_click(cx.listener(|this, _, window, cx| this.create_tab(window, cx))),
                     ),
             )

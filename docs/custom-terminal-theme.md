@@ -8,6 +8,6 @@
 
 会话标题和普通会话项不绘制独立底色，直接透出侧边栏背景；悬停时显示状态色，当前选中项显示更深的选中色。
 
-所有主题保存在一个 `theme.json` 文件中。启动时文件不存在则从内置模板创建，模板只包含 VS Code Light/Dark Modern 两套方案。旧版文件加载时会移除旧的内置主题并补齐 VS Code 两套方案，不覆盖用户自定义方案；版本 2 的旧配色自动补齐界面色并升级到版本 3。若存在旧版 `terminal-theme.json`，会将它追加到模板中。Windows 默认路径是 `%APPDATA%\tshell\theme.json`；设置了 `TSHELL_DATA_DIR` 时，文件位于该目录下。外部编辑文件后，可用页面右上角的刷新按钮重新加载。
+所有主题保存在一个 `theme.json` 文件中。启动时文件不存在则从内置模板创建，模板只包含 VS Code Light/Dark Modern 两套方案。旧版文件加载时会移除旧的内置主题并补齐 VS Code 两套方案，不覆盖用户自定义方案；版本 2 的旧配色自动补齐界面色并升级到版本 3。旧版内置亮色方案中会导致白色或黄色文字贴近白色背景的 ANSI 调色板会自动迁移；用户修改过的 ANSI 值不会被覆盖。若存在旧版 `terminal-theme.json`，会将它追加到模板中。Windows 默认路径是 `%APPDATA%\tshell\theme.json`；设置了 `TSHELL_DATA_DIR` 时，文件位于该目录下。外部编辑文件后，可用页面右上角的刷新按钮重新加载。
 
 文件包含 `version` 和 `themes`。每个 `themes` 条目包含稳定的 `id`、显示名称 `name`、共享的 `ink`（文字/终端前景色）、`surface`（基础/终端背景色）、`accent`（强调/光标色），以及终端专属的 `selection` 和 `ansi`。`interface` 包含 `panel`、`border`、`muted`、`hover`、`selected`、`error`，只用于 GPUI Kit 和工作区，不改变终端选区或 ANSI 输出。颜色格式必须是 `#RRGGBB`；`ansi` 恰好 16 项。旧的 `foreground`、`background`、`cursor` 字段仍可读取，保存时统一写成新字段。`id` 只使用小写英文字母、数字和连字符。两个槽位分别以 `light_theme`、`dark_theme` 保存在 `workspace.json`。旧版主题选择会回退到 VS Code 对应的明暗方案。自动模式不读取 Windows 强调色。

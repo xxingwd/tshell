@@ -1,11 +1,19 @@
 use gpui_kit::{WindowAppearance, component::ThemeMode};
 use serde::{Deserialize, Serialize};
 
-// Fallback for UI palettes and bare rendering checks. App terminals replace
-// these colours with the user's selected palette from terminal_theme.
+// Fallback for dark UI palettes and bare rendering checks. App terminals
+// replace these colours with the user's selected palette from terminal_theme.
 pub const DEFAULT_ANSI: [u32; 16] = [
     0x172033, 0xf87171, 0x4ade80, 0xfbbf24, 0x60a5fa, 0xc084fc, 0x22d3ee, 0xdbe4f0, 0x64748b,
     0xfca5a5, 0x86efac, 0xfde68a, 0x93c5fd, 0xd8b4fe, 0x67e8f9, 0xffffff,
+];
+
+// Light backgrounds need dark ANSI white and yellow entries. Keeping a
+// separate fallback prevents the first frame from rendering light text on
+// the light terminal surface before the selected terminal theme is applied.
+pub const LIGHT_ANSI: [u32; 16] = [
+    0x111827, 0xdc2626, 0x16a34a, 0x8a6a00, 0x2563eb, 0x7c3aed, 0x0891b2, 0x4b5563, 0x64748b,
+    0xef4444, 0x22c55e, 0x8a6a00, 0x3b82f6, 0xa855f7, 0x06b6d4, 0x6b7280,
 ];
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -212,7 +220,7 @@ impl Palette {
                 terminal: 0xffffff,
                 selection: 0xadd6ff,
                 error: 0xee0000,
-                ansi: DEFAULT_ANSI,
+                ansi: LIGHT_ANSI,
             }
         } else {
             Self {

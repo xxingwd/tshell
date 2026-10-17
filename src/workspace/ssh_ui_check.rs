@@ -1,5 +1,162 @@
 use super::*;
 
+pub(super) async fn check_session_submission(
+    handle: WindowHandle<Root>,
+    app: &Entity<AppView>,
+    destination: String,
+    cx: &mut AsyncApp,
+) -> anyhow::Result<()> {
+    let index = app.update(cx, |app, cx| -> anyhow::Result<usize> {
+        let ssh = tshell_host::SshConfig {
+            destination,
+            user: String::new(),
+            port: None,
+            identity_file: None,
+        };
+        let backend =
+            LocalBackend::restore(app.default_cwd.clone(), Some(ssh.clone()), Some(vec![]))?;
+        let snapshot = backend.snapshot();
+        let index = app.hosts.len();
+        app.hosts.push(Host {
+            name: "Session submission check".into(),
+            config: Some(HostDefinition {
+                id: Default::default(),
+                ssh,
+                name: "Session submission check".into(),
+                tmux: false,
+                socket: None,
+            }),
+            backend: Some(Backend::Local(backend)),
+            snapshot,
+            pending: Vec::new(),
+            views: BTreeMap::new(),
+            read_notices: BTreeMap::new(),
+            collapsed_sessions: BTreeSet::new(),
+            viewport: None,
+        });
+        app.switch_host(index, cx);
+        Ok(index)
+    })?;
+    for case in [
+        "enter",
+        "submit",
+        "missing",
+        "missing-enter",
+        "edit",
+        "name",
+        "close",
+        "switch",
+    ] {
+        let enter = matches!(case, "enter" | "missing-enter");
+        let before = app.read_with(cx, |app, _| app.hosts[index].snapshot.sessions.len());
+        cx.update_window(handle.into(), |_, window, cx| {
+            app.update(cx, |app, cx| {
+                app.show_new_session(window, cx);
+                app.home_task = None;
+                app.tab_name
+                    .update(cx, |input, cx| input.set_value(case, window, cx));
+                app.tab_path.update(cx, |input, cx| {
+                    input.set_value(
+                        if matches!(case, "missing" | "missing-enter") {
+                            "/tshell-ui-check-missing-directory"
+                        } else {
+                            "  ~  "
+                        },
+                        window,
+                        cx,
+                    );
+                    input.focus(window, cx);
+                });
+            });
+            window.refresh();
+            window.draw(cx).clear(cx);
+        })?;
+        cx.background_executor()
+            .timer(Duration::from_millis(25))
+            .await;
+        cx.update_window(handle.into(), |_, window, cx| {
+            app.update(cx, |app, cx| {
+                app.directory_task = None;
+                app.validated_directory = None;
+                if !enter {
+                    app.create_tab(window, cx);
+                    app.create_tab(window, cx);
+                    anyhow::ensure!(
+                        app.session_submit_task.is_some(),
+                        "{case}: submission did not wait for validation"
+                    );
+                    match case {
+                        "edit" => {
+                            app.tab_path
+                                .update(cx, |input, cx| input.set_value("/tmp", window, cx));
+                            app.complete_tab_directory(cx);
+                        }
+                        "name" => app
+                            .tab_name
+                            .update(cx, |input, cx| input.set_value("changed", window, cx)),
+                        "close" => app.close_modal(window, cx),
+                        "switch" => app.switch_host(0, cx),
+                        _ => {}
+                    }
+                }
+                Ok::<_, anyhow::Error>(())
+            })?;
+            if enter {
+                app.read(cx)
+                    .tab_path
+                    .clone()
+                    .update(cx, |input, cx| input.focus(window, cx));
+                window.refresh();
+                window.draw(cx).clear(cx);
+                window.dispatch_keystroke(Keystroke::parse("enter").unwrap(), cx);
+            }
+            Ok::<_, anyhow::Error>(())
+        })??;
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while app.read_with(cx, |app, _| {
+            app.session_submit_task.is_some()
+                || (enter && app.creating_tab && app.message.is_none())
+        }) {
+            anyhow::ensure!(
+                std::time::Instant::now() < deadline,
+                "{case}: submission timed out"
+            );
+            cx.background_executor()
+                .timer(Duration::from_millis(25))
+                .await;
+        }
+        cx.background_executor()
+            .timer(Duration::from_millis(100))
+            .await;
+        app.read_with(cx, |app, _| -> anyhow::Result<()> {
+            let sessions = &app.hosts[index].snapshot.sessions;
+            if matches!(case, "enter" | "submit") {
+                anyhow::ensure!(sessions.len() == before + 1, "{case}: session not created exactly once: {:?}", app.message);
+                anyhow::ensure!(sessions.last().is_some_and(|session| session.name == case && session.cwd.starts_with('/')), "{case}: resolved remote directory was lost");
+                anyhow::ensure!(!app.creating_tab, "{case}: successful submission left dialog open");
+            } else {
+                anyhow::ensure!(sessions.len() == before, "{case}: stale or invalid submission created a session");
+                if matches!(case, "missing" | "missing-enter") {
+                    anyhow::ensure!(app.creating_tab && app.message.is_some(), "directory failure did not preserve the dialog and error");
+                }
+            }
+            Ok(())
+        })?;
+        cx.update_window(handle.into(), |_, window, cx| {
+            app.update(cx, |app, cx| {
+                app.close_modal(window, cx);
+                app.switch_host(index, cx);
+            });
+        })?;
+    }
+    app.update(cx, |app, cx| {
+        app.switch_host(0, cx);
+        app.hosts.pop();
+        app.sync(cx);
+    });
+    Ok(())
+}
+
 pub(super) async fn check(
     handle: WindowHandle<Root>,
     app: Entity<AppView>,

@@ -262,7 +262,8 @@ pub(crate) fn run_ui_check(output: PathBuf) -> bool {
                 let json = match report {
                     Ok(()) => {
                         result.store(true, Ordering::Release);
-                        serde_json::json!({"passed": true, "clipboard_checked": std::env::var_os("TSHELL_UI_CHECK_SKIP_CLIPBOARD").is_none(), "remote_files_checked": std::env::var_os("TSHELL_REMOTE_UI_ROOT").is_some(), "checked": [
+                        let session_only = std::env::var("TSHELL_UI_CHECK_SCOPE").as_deref() == Ok("session-submission");
+                        serde_json::json!({"passed": true, "clipboard_checked": !session_only && std::env::var_os("TSHELL_UI_CHECK_SKIP_CLIPBOARD").is_none(), "remote_files_checked": !session_only && std::env::var_os("TSHELL_REMOTE_UI_ROOT").is_some(), "checked": if session_only { vec!["remote session Enter and confirm", "duplicate submission", "missing directory", "edit, close and host-switch cancellation"] } else { vec![
             "event-driven title wakes workspace without polling", "terminal Tab input retains focus", "Ctrl+B toggles sidebar with terminal focus", "sidebar viewport and persisted state", "Zen preserves sidebar preference", "session and tab first-frame terminal bounds stay stable", "single and grouped terminal sidebar rendering", "equal split shortcuts and close redistribution", "host and key settings pages", "standalone host validation",
                             "terminal viewport unchanged", "settings restores terminal focus",
             "command palette focus and dispatch", "GPUI frame overlay and status item defaults", "Git mode", "file tree", "syntax editor", "status bar and notifications", "unread terminal notice acknowledgement",
@@ -272,7 +273,7 @@ pub(crate) fn run_ui_check(output: PathBuf) -> bool {
             "new tab has no dialog", "session file state", "Markdown and HTML preview", "session directory and optional name", "session groups with compact tab separators", "named session creation and previous tab restoration",
             "SSH forwarding dialog dark and narrow light layout", "forwarding dialog X closes after cancelling or saving Add", "transfer panel dark and light layout", "transfer header drag and viewport constraints", "transfer launcher collapse and expansion", "individual transfer cancellation and clearing", "transfer hover retention and automatic collapse",
             "Git raw Unicode/tab selection in both layouts", "Git word and line selection", "Git off-screen selection anchor", "terminal search focus, navigation and live output", "terminal search dark and narrow light layouts", "Ctrl-click links and unchanged ordinary TUI mouse reports", "terminal file link line/column and draft preservation", "terminal directory link Explorer root", "notification pane targeting and closed identity", "Docker separate image aliases, tagged-first ordering, untagged tail and complete IDs", "Docker resource tables, responsive adjacent previews, keyboard selection/expand/close/return and per-host restoration", "Docker functional sidebar menu, 10k containers/images, YAML/JSON/output editors in dark/light narrow layouts", "Docker follows visible/hidden hosts, preserves resource selection and dirty drafts, rejects stale previews and works without sessions"
-                        ]})
+                        ] }})
                     }
                     Err(error) => {
                         serde_json::json!({"passed": false, "error": crate::i18n::format_error(&error)})
@@ -317,6 +318,10 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     let app = handle.update(cx, |root, _, _| {
         root.view().clone().downcast::<AppView>().unwrap()
     })?;
+    if std::env::var("TSHELL_UI_CHECK_SCOPE").as_deref() == Ok("session-submission") {
+        let destination = std::env::var("TSHELL_SSH_TEST_HOST")?;
+        return ssh_ui_check::check_session_submission(handle, &app, destination, cx).await;
+    }
     anyhow::ensure!(
         app.read_with(cx, |app, _cx| app.sidebar_opacity) == 1.,
         "sidebar did not default to opaque"
@@ -2842,7 +2847,10 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     #[cfg(feature = "ui-check-screenshots")]
     check_workspace_styles(handle, app.clone(), cx).await?;
     feature_check::check(handle, app.clone(), cx).await?;
-    check_docker_workspace(handle, app, cx).await?;
+    check_docker_workspace(handle, app.clone(), cx).await?;
+    if let Ok(destination) = std::env::var("TSHELL_SSH_TEST_HOST") {
+        ssh_ui_check::check_session_submission(handle, &app, destination, cx).await?;
+    }
     Ok(())
 }
 

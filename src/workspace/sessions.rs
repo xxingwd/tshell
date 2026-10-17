@@ -26,6 +26,7 @@ impl AppView {
         };
         self.home_task = None;
         self.directory_task = None;
+        self.session_submit_task = None;
         self.creating_tab = true;
         self.editing_session = Some(session.id);
         self.settings = false;
