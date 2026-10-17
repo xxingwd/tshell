@@ -292,7 +292,9 @@ build with `tshell.exe --workspace-ui-check <report.json>`.
 
 ## Packaging and Updates
 
-See [release notes](docs/release-notes.md) for changes in TShell 0.1.2.
+See [release notes](docs/release-notes.md) for changes in TShell 0.1.3,
+including Docker tools, SSH forwarding, and fixes for remote session creation,
+host metrics, light terminal colors, and private-key path selection.
 
 Pushing a `v*` tag runs the Windows GitHub Actions workflow, which tests,
 builds, packages, and publishes a same-repository release. The package contains

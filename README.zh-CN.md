@@ -237,7 +237,8 @@ cargo test --workspace --locked -- --include-ignored
 
 ## 打包和更新
 
-TShell 0.1.2 的变更见 [发布说明](docs/release-notes.md)。
+TShell 0.1.3 的变更见 [发布说明](docs/release-notes.md)，包括 Docker 工具、SSH 转发，
+以及远程会话创建、主机统计、亮色终端配色和私钥路径选择的修复。
 
 推送 `v*` tag 会运行 Windows GitHub Actions，执行测试、构建、打包并发布同仓库
 Release。产物包含程序、许可声明、校验和与更新元数据。工作流和恢复方式见
