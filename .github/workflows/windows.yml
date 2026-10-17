@@ -25,7 +25,7 @@ jobs:
       - name: Install Rust
         shell: pwsh
         run: |
-          rustup toolchain install nightly-2026-09-12 --profile minimal
+          rustup toolchain install nightly-2026-09-12 --profile minimal --component rustfmt
           if ($LASTEXITCODE -ne 0) { throw 'Rust installation failed' }
           rustup override set nightly-2026-09-12
           if ($LASTEXITCODE -ne 0) { throw 'Rust setup failed' }
