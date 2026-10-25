@@ -48,7 +48,11 @@ impl AppView {
         [
             PaletteGroup {
                 label: "ws.group_hosts",
-                targets: (0..self.hosts.len()).map(PaletteTarget::Host).collect(),
+                targets: self
+                    .ordered_host_indices()
+                    .into_iter()
+                    .map(PaletteTarget::Host)
+                    .collect(),
             },
             PaletteGroup {
                 label: "ws.group_sessions",
@@ -165,7 +169,8 @@ impl AppView {
 
     pub(super) fn command_view(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let groups = self.palette_groups();
-        let height = 410_f32.min((f32::from(window.viewport_size().height) - 180.).max(180.));
+        let height =
+            LIST_DIALOG_BODY_HEIGHT.min((f32::from(window.viewport_size().height) - 180.).max(64.));
         let owner = cx.entity().downgrade();
         let mut command = Command::new(&self.command_state);
         for group in &groups {

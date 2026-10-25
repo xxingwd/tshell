@@ -153,6 +153,25 @@ pub(in crate::workspace) async fn check_transfer_panel(
             .timer(Duration::from_millis(30))
             .await;
         draw(cx)?;
+        cx.update_window(handle.into(), |_, window, cx| {
+            let queue = &app.read(cx).transfer_queue;
+            let bounds = queue.panel_bounds(window.viewport_size());
+            anyhow::ensure!(
+                bounds.top() >= px(CHROME_BAR_HEIGHT + PANEL_MARGIN)
+                    && bounds.bottom() <= viewport.height - px(32.),
+                "transfer rows overlapped window chrome: {bounds:?}"
+            );
+            if viewport.height >= px(840.) {
+                anyhow::ensure!(
+                    bounds.size.height
+                        >= px(PANEL_HEADER_HEIGHT
+                            + queue.jobs.len() as f32 * TRANSFER_ROW_HEIGHT
+                            + PANEL_FOOTER_HEIGHT),
+                    "transfer panel hid rows despite available window space"
+                );
+            }
+            Ok::<_, anyhow::Error>(())
+        })??;
         anyhow::ensure!(
             app.read_with(cx, |app, _| app.terminal_palette.terminal_theme().light())
                 == (appearance == Appearance::Light),
@@ -169,12 +188,10 @@ pub(in crate::workspace) async fn check_transfer_panel(
             .panel_bounds(window.viewport_size())
     })?;
     let origin = bounds.origin + point(px(80.), px(20.));
+    let drag_delta = point(px(180.), px(-20.));
     let expected_offset = cx.update_window(handle.into(), |_, window, cx| {
         let queue = &app.read(cx).transfer_queue;
-        queue.clamped_offset(
-            queue.offset + point(px(180.), px(70.)),
-            window.viewport_size(),
-        )
+        queue.clamped_offset(queue.offset + drag_delta, window.viewport_size())
     })?;
     for (name, delta) in [("error", -10.), ("restored", 10.)] {
         send(
@@ -209,7 +226,7 @@ pub(in crate::workspace) async fn check_transfer_panel(
         }),
         cx,
     )?;
-    let target = origin - point(px(180.), px(70.));
+    let target = origin - drag_delta;
     send(
         PlatformInput::MouseMove(MouseMoveEvent {
             position: target,
@@ -317,7 +334,13 @@ pub(in crate::workspace) async fn check_transfer_panel(
             .any(|job| job.id == 1)),
         "single-task clear did not respond"
     );
-    let pointer = bounds.origin + point(px(80.), px(20.));
+    let pointer = cx.update_window(handle.into(), |_, window, cx| {
+        app.read(cx)
+            .transfer_queue
+            .panel_bounds(window.viewport_size())
+            .origin
+            + point(px(80.), px(20.))
+    })?;
     send(
         PlatformInput::MouseMove(MouseMoveEvent {
             position: pointer,

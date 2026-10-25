@@ -16,7 +16,6 @@ pub struct LocalBackend {
     pixel_viewports: BTreeMap<String, PixelViewport>,
     pub(super) screens: BTreeMap<String, Arc<Session>>,
     next: u64,
-    external_sessions: BTreeMap<String, String>,
     cwd: PathBuf,
     ssh: Option<tshell_host::SshConfig>,
 }
@@ -44,7 +43,6 @@ impl LocalBackend {
             pixel_viewports: BTreeMap::new(),
             screens: BTreeMap::new(),
             next: 0,
-            external_sessions: BTreeMap::new(),
             cwd,
             ssh,
         };
@@ -52,6 +50,12 @@ impl LocalBackend {
             Some(profiles) => {
                 for profile in profiles {
                     this.new_session(profile.name, profile.path)?;
+                    if !profile.id.is_empty()
+                        && !this.state.sessions.iter().any(|s| s.order_id == profile.id)
+                        && let Some(session) = this.state.sessions.last_mut()
+                    {
+                        session.order_id = profile.id;
+                    }
                 }
             }
             None => this.apply(Action::NewSession)?,
@@ -200,8 +204,6 @@ impl LocalBackend {
             }
         }
         self.state.sessions.retain(|s| !s.windows.is_empty());
-        self.external_sessions
-            .retain(|id, _| self.state.sessions.iter().any(|session| &session.id == id));
         if self.state.session().is_none() {
             self.state.active_session = self
                 .state
@@ -262,6 +264,7 @@ impl LocalBackend {
         let id = self.id("local-session-");
         self.state.sessions.push(SessionInfo {
             id: id.clone(),
+            order_id: uuid::Uuid::new_v4().to_string(),
             name,
             cwd: path,
             ..Default::default()
@@ -271,48 +274,12 @@ impl LocalBackend {
         self.state.revision += 1;
         Ok(())
     }
-    pub fn insert_external(
-        &mut self,
-        source: String,
-        name: String,
-        screen: Arc<Session>,
-    ) -> String {
-        let pane = self.id("container-pane-");
-        self.screens.insert(pane.clone(), screen);
-        let existing = self
-            .external_sessions
-            .iter()
-            .find(|(id, key)| {
-                **key == source && self.state.sessions.iter().any(|session| &session.id == *id)
-            })
-            .map(|(id, _)| id.clone());
-        let id = existing.unwrap_or_else(|| {
-            let id = self.id("container-session-");
-            self.state.sessions.push(SessionInfo {
-                id: id.clone(),
-                name: name.clone(),
-                ..Default::default()
-            });
-            self.external_sessions.insert(id.clone(), source);
-            id
-        });
-        self.state.active_session = id.clone();
-        self.add_window(pane);
-        if let Some(window) = self.active_window_mut() {
-            window.name = name;
-        }
-        self.state.revision += 1;
-        id
-    }
-    pub fn is_external_session(&self, id: &str) -> bool {
-        self.external_sessions.contains_key(id)
-    }
     pub fn profiles(&self) -> Vec<SessionProfile> {
         self.state
             .sessions
             .iter()
-            .filter(|session| !self.is_external_session(&session.id))
             .map(|session| SessionProfile {
+                id: session.order_id.clone(),
                 name: session.name.clone(),
                 path: session.cwd.clone(),
             })
@@ -352,15 +319,6 @@ impl LocalBackend {
         self.resize(&id, 100, 28);
     }
     pub fn apply(&mut self, action: Action) -> Result<()> {
-        let external = match &action {
-            Action::NewWindowInSession(id) => self.is_external_session(id),
-            Action::NewWindow | Action::NewWindowAt { .. } | Action::Split(_) => self
-                .state
-                .session()
-                .is_some_and(|session| self.is_external_session(&session.id)),
-            _ => false,
-        };
-        anyhow::ensure!(!external, "{}", crate::t!("docker.new_terminal_from_panel"));
         match action {
             Action::NewSession => {
                 let path = if self.ssh.is_some() {
@@ -369,9 +327,6 @@ impl LocalBackend {
                     self.cwd.to_string_lossy().into_owned()
                 };
                 self.new_session(crate::t!("local.default_session").to_string().into(), path)?;
-            }
-            Action::NewSessionAt(path) => {
-                self.new_session(crate::t!("local.session").to_string(), path)?
             }
             Action::NewNamedSession { name, path } => self.new_session(name, path)?,
             Action::SelectSession(id) => {
@@ -400,21 +355,6 @@ impl LocalBackend {
                     .collect();
                 for window in windows {
                     self.close_window(&window);
-                }
-            }
-            Action::NewWindowInSession(id) => {
-                self.apply(Action::SelectSession(id))?;
-                self.new_window(None)?;
-            }
-            Action::RenameWindow { id, name } => {
-                if let Some(window) = self
-                    .state
-                    .sessions
-                    .iter_mut()
-                    .flat_map(|s| &mut s.windows)
-                    .find(|w| w.id == id)
-                {
-                    window.name = name;
                 }
             }
             Action::MoveFocus(direction) | Action::MovePane(direction) => {
@@ -615,30 +555,6 @@ fn window_pixel_panes(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn external_terminals_group_by_source_without_restoring_or_splitting() {
-        let mut backend =
-            LocalBackend::restore(std::env::temp_dir(), None, Some(Vec::new())).unwrap();
-        let screen = || Session::remote("container".into(), 28, 100, Arc::new(|_| Ok(())));
-        let first =
-            backend.insert_external("engine-a:container".into(), "Docker A".into(), screen());
-        assert_eq!(
-            backend.insert_external("engine-a:container".into(), "Docker A".into(), screen()),
-            first
-        );
-        assert_eq!(backend.snapshot().session().unwrap().windows.len(), 2);
-        assert!(backend.apply(Action::Split(SplitAxis::Horizontal)).is_err());
-        assert!(backend.apply(Action::NewWindow).is_err());
-        let second =
-            backend.insert_external("engine-b:container".into(), "Docker B".into(), screen());
-        assert_ne!(first, second);
-        assert_eq!(backend.snapshot().sessions.len(), 2);
-        assert!(backend.profiles().is_empty());
-        backend.apply(Action::RemoveSession(first)).unwrap();
-        assert_eq!(backend.snapshot().sessions.len(), 1);
-        assert_eq!(backend.snapshot().sessions[0].id, second);
-    }
 
     #[test]
     fn plain_ssh_connection_tracks_pty_readiness_and_failure() {
@@ -916,10 +832,12 @@ mod tests {
         };
         let profiles = vec![
             SessionProfile {
+                id: "tmp-session".into(),
                 name: "tmp".into(),
                 path: "/tmp".into(),
             },
             SessionProfile {
+                id: "root-session".into(),
                 name: "root".into(),
                 path: "/".into(),
             },
@@ -1006,6 +924,8 @@ mod tests {
             })
             .unwrap();
         let saved = backend.profiles();
+        assert!(saved.iter().all(|profile| !profile.id.is_empty()));
+        assert_ne!(saved[0].id, saved[1].id);
         let encoded = serde_json::to_string(&saved).unwrap();
         let json: serde_json::Value = serde_json::from_str(&encoded).unwrap();
         assert!(
@@ -1020,6 +940,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(restored.profiles(), saved);
+        assert_eq!(restored.snapshot().sessions[1].order_id, saved[1].id);
         assert!(
             restored
                 .snapshot()
@@ -1032,6 +953,22 @@ mod tests {
         assert_eq!(backend.profiles()[0].name, "renamed");
         let empty = LocalBackend::restore(root, None, Some(Vec::new())).unwrap();
         assert!(empty.snapshot().sessions.is_empty());
+    }
+
+    #[test]
+    fn legacy_session_profiles_gain_distinct_persistent_order_ids() {
+        let root = std::env::temp_dir();
+        let profiles: Vec<SessionProfile> = serde_json::from_value(serde_json::json!([
+            {"name": "duplicate", "path": root},
+            {"name": "duplicate", "path": root}
+        ]))
+        .unwrap();
+        let backend = LocalBackend::restore(root, None, Some(profiles)).unwrap();
+        let profiles = backend.profiles();
+        assert!(!profiles[0].id.is_empty());
+        assert!(!profiles[1].id.is_empty());
+        assert_ne!(profiles[0].id, profiles[1].id);
+        assert_eq!(backend.snapshot().sessions[0].order_id, profiles[0].id);
     }
 
     #[test]

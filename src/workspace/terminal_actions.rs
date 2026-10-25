@@ -102,7 +102,6 @@ impl AppView {
                     );
                     return;
                 };
-                if self.hosts[location.host].backend.as_ref().is_some_and(|backend|matches!(backend,Backend::Local(backend) if backend.is_external_session(&location.session))){window.push_notification(Notification::warning(crate::t!("docker.file_tools_unavailable")),cx);return;}
                 let remote = self.hosts[location.host].config.is_some();
                 let directory = link
                     .directory

@@ -51,13 +51,32 @@ pub(super) fn complete(input: &str, base: &Path, remote: Option<&Session>) -> Re
         .map(|entry| format!("{}{}", entry.path().display(), std::path::MAIN_SEPARATOR))
         .collect();
     paths.sort();
-    paths.truncate(8);
     Ok(paths)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn completion_keeps_all_matching_directories_in_sorted_order() {
+        let base = tempfile::tempdir().unwrap();
+        let expected: Vec<_> = (0..30)
+            .map(|index| base.path().join(format!("project-{index:02}")))
+            .collect();
+        for path in expected.iter().rev() {
+            std::fs::create_dir(path).unwrap();
+        }
+        std::fs::create_dir(base.path().join("other")).unwrap();
+        std::fs::write(base.path().join("project-file"), "").unwrap();
+        assert_eq!(
+            complete("project-", base.path(), None).unwrap(),
+            expected
+                .iter()
+                .map(|path| format!("{}{}", path.display(), std::path::MAIN_SEPARATOR))
+                .collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn completion_filters_files_and_resolves_relative_prefixes() {
         let base = std::env::temp_dir().join(format!("tshell-complete-{}", std::process::id()));

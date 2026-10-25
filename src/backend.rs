@@ -131,6 +131,8 @@ pub struct WindowInfo {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionInfo {
     pub id: String,
+    /// Persistent identity for workspace order, independent of the current connection.
+    pub order_id: String,
     pub name: String,
     pub cwd: String,
     pub active_window: String,
@@ -139,6 +141,8 @@ pub struct SessionInfo {
 /// Client-owned session configuration; tmux sessions are never persisted here.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SessionProfile {
+    #[serde(default)]
+    pub id: String,
     pub name: String,
     pub path: String,
 }
@@ -193,16 +197,13 @@ impl Snapshot {
 #[derive(Clone, Debug)]
 pub enum Action {
     RenameSession { id: String, name: String },
-    RenameWindow { id: String, name: String },
     RemoveSession(String),
-    NewWindowInSession(String),
     MoveFocus(Direction),
     MovePane(Direction),
     SelectSession(String),
     SelectWindow(String),
     SelectPane(String),
     NewSession,
-    NewSessionAt(String),
     NewNamedSession { path: String, name: String },
     NewWindow,
     NewWindowAt { path: String, name: String },

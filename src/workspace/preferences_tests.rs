@@ -4,6 +4,21 @@ use crate::terminal_theme::ThemeFile;
 use gpui_kit::WindowAppearance;
 
 #[test]
+fn navigation_orders_migrate_and_round_trip() {
+    let mut prefs: Preferences = serde_json::from_str("{}").unwrap();
+    assert!(prefs.host_order.is_empty() && prefs.session_order.is_empty());
+    prefs.host_order = vec!["remote".into(), "local".into()];
+    prefs.session_order.insert(
+        "remote".into(),
+        vec!["tmux:$2:200".into(), "tmux:$1:100".into()],
+    );
+    let restored: Preferences =
+        serde_json::from_str(&serde_json::to_string(&prefs).unwrap()).unwrap();
+    assert_eq!(restored.host_order, prefs.host_order);
+    assert_eq!(restored.session_order, prefs.session_order);
+}
+
+#[test]
 fn system_mode_selects_independently_configured_light_and_dark_schemes() {
     let themes = ThemeFile::default();
     for (appearance, system, expected) in [

@@ -328,11 +328,14 @@ impl DockerView {
             div()
                 .id("docker-resource-overview")
                 .size_full()
+                .flex()
+                .flex_col()
                 .overflow_y_scroll()
                 .px_4()
                 .py_2()
                 .children(fields.into_iter().map(|(label, value)| {
                     div()
+                        .flex_shrink_0()
                         .py_2()
                         .flex()
                         .gap_3()
@@ -352,6 +355,7 @@ impl DockerView {
                     let count = references.len();
                     view.child(
                         div()
+                            .flex_shrink_0()
                             .py_2()
                             .text_size(px(12.))
                             .text_color(rgb(p.muted))
@@ -381,7 +385,9 @@ impl DockerView {
                                     .collect()
                             }),
                         )
-                        .h(px((count as f32 * 30.).min(180.))),
+                        .flex_1()
+                        .min_h(px((count as f32 * 30.).min(90.)))
+                        .max_h(px(count as f32 * 30.)),
                     )
                 })
                 .into_any_element()

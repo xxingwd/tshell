@@ -21,11 +21,16 @@ xterm.js or OpenSSH feature parity.
 - A host -> session -> tab -> split workspace model with collapsible navigation,
   keyboard-driven commands, equal column/row splits, floating/focus modes, and persisted
   interface preferences.
+- Hosts and sessions start in creation order, including tmux. Reorder hosts in
+  Settings and drag session headings to save a custom order for each host.
 - Compact native controls, concise labels with on-demand help, compact responsive settings,
   keyboard focus feedback, field-level host validation, adaptive Git diff controls,
   and content-area loading/error feedback that keeps toolbars stable. Refreshes
-  retain file/Git lists and scroll positions; directory completion, document
-  controls reserve their space, and status metrics follow their content width. See
+  retain file/Git lists and scroll positions; document controls reserve their
+  space, session directory lists expand with window height, and status metrics
+  follow their content width. Directory completion scrolls past eight matches;
+  command, forwarding, transfer and Docker related-container lists use available
+  height, and Docker JSON forms adapt to the window. See
   [workspace interface](docs/workspace-interface.md).
 - Explorer and read-only Git views for local and remote working directories.
   Remote files use SFTP and remote Git commands; no remote Python or mount is
@@ -170,6 +175,11 @@ a pane or exiting its shell redistributes the remaining group automatically.
 There are no draggable dividers, pane-size shortcuts, or alternate tiling modes.
 Local, ordinary SSH, and tmux use this same split model. See
 [split layout behavior](docs/workspace-interface.md#equal-splits).
+TShell computes and submits explicit tmux pane dimensions, preserving equal
+groups when rows and columns are added or closed.
+During reconnects the empty terminal shows the current tmux phase. Layout
+recovery retries after a fresh snapshot when an external change races with a
+command, and very small windows explain when equal panes cannot fit.
 
 All actions are listed in Settings and may be rebound. The workspace shortcuts
 are an application contract and are not replaced by xterm compatibility work.
@@ -292,9 +302,9 @@ build with `tshell.exe --workspace-ui-check <report.json>`.
 
 ## Packaging and Updates
 
-See [release notes](docs/release-notes.md) for changes in TShell 0.1.3,
-including Docker tools, SSH forwarding, and fixes for remote session creation,
-host metrics, light terminal colors, and private-key path selection.
+See [release notes](docs/release-notes.md) for changes in TShell 0.1.4,
+including tmux layout recovery, persisted host/session ordering, adaptive lists,
+and a fix for the Windows HTML preview crash.
 
 Pushing a `v*` tag runs the Windows GitHub Actions workflow, which tests,
 builds, packages, and publishes a same-repository release. The package contains

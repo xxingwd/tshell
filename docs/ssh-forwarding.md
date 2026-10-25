@@ -5,9 +5,10 @@ terminal host. Every row shows its type, SSH host, separate listen and target po
 columns, and status. Rows without a target port leave that column empty; SOCKS5
 drafts also omit its input while preserving column alignment.
 There is no forwarding entry in the host menu. The compact dialog uses 36-pixel
-rows and a **+** icon in the table header, with height based on visible rows.
-Feedback space is reserved below the rows so validation errors do not change
-the dialog height or header position.
+rows and a **+** icon in the table header. Its body grows with the number of rules,
+up to 560 pixels or the available window height, with remaining rows scrollable.
+Validation messages share that scroll area without a permanent empty footer;
+they do not change the dialog height or header position.
 The status-bar entry is an icon with a tooltip; it has no aggregate count or byte summary.
 
 **+** inserts an editable row into the same list. Select a forwarding

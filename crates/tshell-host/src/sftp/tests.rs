@@ -165,6 +165,23 @@ fn remote_file_round_trip_and_conflict() -> Result<()> {
         complete(&host, &format!("{root}/em"))?,
         vec![format!("{root}/empty/")]
     );
+    let mut completion_paths = Vec::new();
+    for index in (0..20).rev() {
+        let path = format!("{root}/completion-{index:02}");
+        operate(
+            &host,
+            crate::files::Operation::Create {
+                path: Path::new(&path).to_owned(),
+                directory: true,
+            },
+        )?;
+        completion_paths.push(format!("{path}/"));
+    }
+    completion_paths.sort();
+    assert_eq!(
+        complete(&host, &format!("{root}/completion-"))?,
+        completion_paths
+    );
     assert!(
         complete(&host, "~")?
             .iter()

@@ -391,97 +391,125 @@ impl AppView {
         .detach();
     }
 
-    fn host_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn host_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = self.palette;
         div()
             .flex()
             .flex_col()
-            .children(self.hosts.iter().enumerate().map(|(index, host)| {
-                let detail = host
-                    .config
-                    .as_ref()
-                    .map(|config| {
-                        format!(
-                            "{}@{}:{}",
-                            config.ssh.user,
-                            config.ssh.destination,
-                            config.ssh.port.unwrap_or(22)
-                        )
-                    })
-                    .unwrap_or_else(|| crate::t!("settings.local_host").into_owned());
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .min_h(px(48.))
-                    .py_2()
-                    .border_b_1()
-                    .border_color(rgb(p.border))
-                    .child(
-                        Icon::new(if host.config.is_some() {
-                            IconName::Server
-                        } else {
-                            IconName::Monitor
+            .children(self.ordered_host_indices().into_iter().enumerate().map(
+                |(position, index)| {
+                    let host = &self.hosts[index];
+                    let detail = host
+                        .config
+                        .as_ref()
+                        .map(|config| {
+                            format!(
+                                "{}@{}:{}",
+                                config.ssh.user,
+                                config.ssh.destination,
+                                config.ssh.port.unwrap_or(22)
+                            )
                         })
-                        .size(px(16.))
-                        .flex_shrink_0()
-                        .text_color(rgb(p.muted)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .line_height(relative(1.25))
-                            .child(host.name.clone())
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .line_height(relative(1.25))
-                                    .text_color(rgb(p.muted))
-                                    .truncate()
-                                    .child(detail),
-                            ),
-                    )
-                    .child(
-                        icon_button(
-                            ("settings-open-host", index),
-                            IconName::ArrowUpRight,
-                            crate::t!("settings.open_host"),
+                        .unwrap_or_else(|| crate::t!("settings.local_host").into_owned());
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .min_h(px(48.))
+                        .py_2()
+                        .border_b_1()
+                        .border_color(rgb(p.border))
+                        .child(
+                            Icon::new(if host.config.is_some() {
+                                IconName::Server
+                            } else {
+                                IconName::Monitor
+                            })
+                            .size(px(16.))
+                            .flex_shrink_0()
+                            .text_color(rgb(p.muted)),
                         )
-                        .on_click(cx.listener(
-                            move |app, _, window, cx| {
-                                app.close_modal(window, cx);
-                                app.switch_host(index, cx);
-                            },
-                        )),
-                    )
-                    .child(
-                        icon_button(
-                            ("settings-edit-host", index),
-                            IconName::Pencil,
-                            crate::t!("settings.edit"),
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .line_height(relative(1.25))
+                                .child(host.name.clone())
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .line_height(relative(1.25))
+                                        .text_color(rgb(p.muted))
+                                        .truncate()
+                                        .child(detail),
+                                ),
                         )
-                        .on_click(
-                            cx.listener(move |app, _, window, cx| app.edit_host(index, window, cx)),
-                        ),
-                    )
-                    .when(index != 0, |row| {
-                        row.child(
+                        .child(
                             icon_button(
-                                ("settings-remove-host", index),
-                                IconName::Trash,
-                                crate::t!("settings.remove_host"),
+                                ("settings-host-up", index),
+                                IconName::ArrowUp,
+                                crate::t!("settings.host_move_up"),
+                            )
+                            .disabled(position == 0)
+                            .on_click(
+                                cx.listener(move |app, _, _, cx| app.move_host(index, -1, cx)),
+                            ),
+                        )
+                        .child(
+                            icon_button(
+                                ("settings-host-down", index),
+                                IconName::ArrowDown,
+                                crate::t!("settings.host_move_down"),
+                            )
+                            .disabled(position + 1 == self.hosts.len())
+                            .on_click(
+                                cx.listener(move |app, _, _, cx| app.move_host(index, 1, cx)),
+                            ),
+                        )
+                        .child(
+                            icon_button(
+                                ("settings-open-host", index),
+                                IconName::ArrowUpRight,
+                                crate::t!("settings.open_host"),
                             )
                             .on_click(cx.listener(
                                 move |app, _, window, cx| {
-                                    app.confirm_remove_host(index, window, cx)
+                                    app.close_modal(window, cx);
+                                    app.switch_host(index, cx);
                                 },
                             )),
                         )
-                    })
-            }))
+                        .child(
+                            icon_button(
+                                ("settings-edit-host", index),
+                                IconName::Pencil,
+                                crate::t!("settings.edit"),
+                            )
+                            .on_click(cx.listener(
+                                move |app, _, window, cx| app.edit_host(index, window, cx),
+                            )),
+                        )
+                        .when(index != 0, |row| {
+                            row.child(
+                                icon_button(
+                                    ("settings-remove-host", index),
+                                    IconName::Trash,
+                                    crate::t!("settings.remove_host"),
+                                )
+                                .on_click(cx.listener(
+                                    move |app, _, window, cx| {
+                                        app.confirm_remove_host(index, window, cx)
+                                    },
+                                )),
+                            )
+                        })
+                        .when(index == 0, |row| {
+                            row.child(div().size(px(style::CONTROL_HEIGHT)).flex_shrink_0())
+                        })
+                },
+            ))
             .into_any_element()
     }
 
@@ -507,11 +535,11 @@ impl AppView {
                         let public_key = key.public_key.clone();
                         let path = key.path.clone();
                         let hosts: Vec<_> = self
-                            .hosts
-                            .iter()
-                            .enumerate()
-                            .skip(1)
-                            .map(|(host_index, host)| {
+                            .ordered_host_indices()
+                            .into_iter()
+                            .filter(|&index| self.hosts[index].config.is_some())
+                            .map(|host_index| {
+                                let host = &self.hosts[host_index];
                                 (
                                     host_index,
                                     host.name.clone(),
@@ -1090,14 +1118,6 @@ impl AppView {
         crate::i18n::set_language(language);
         self.save(cx);
         cx.notify();
-    }
-    pub(super) fn set_terminal_theme(
-        &mut self,
-        theme: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.select_theme(self.appearance.mode(window.appearance()), theme, window, cx);
     }
     pub(super) fn set_ligatures(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.ligatures = enabled;

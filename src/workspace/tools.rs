@@ -352,11 +352,6 @@ impl AppView {
         if self.page == Page::Docker && self.hosts[self.active].backend.is_none() {
             self.show_terminal(cx);
         }
-        if self.active_is_container() {
-            self.message = Some(crate::t!("docker.file_tools_unavailable").into_owned());
-            cx.notify();
-            return;
-        }
         let Some(key) = self.active_workspace.clone() else {
             return;
         };

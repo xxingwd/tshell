@@ -14,6 +14,7 @@ use gpui_kit::component::{
     WindowExt,
     input::{EditorState, InputEvent, InputState},
     notification::Notification,
+    scroll::ScrollableElement,
 };
 use gpui_kit::{prelude::*, *};
 #[cfg(debug_assertions)]
@@ -1722,13 +1723,18 @@ impl DockerView {
                 .collect();
             let request = std::sync::Arc::new(parking_lot::Mutex::new(Some(request)));
             let owner = cx.entity().downgrade();
-            window.open_dialog(cx, move |dialog, _, cx| {
+            window.open_dialog(cx, move |dialog, window, cx| {
                 use gpui_kit::component::input::Input;
                 let (request, owner, fields) = (request.clone(), owner.clone(), fields.clone());
                 let content = div()
+                    .id("docker-action-fields")
                     .flex()
                     .flex_col()
                     .gap_2()
+                    .max_h(px(
+                        (f32::from(window.viewport_size().height) - 180.).max(64.)
+                    ))
+                    .overflow_y_scrollbar()
                     .when(matches!(action, crate::actions::Action::Recreate), |view| {
                         view.child(
                             div()
@@ -1738,6 +1744,7 @@ impl DockerView {
                     })
                     .children(fields.iter().map(|(label, input)| {
                         div()
+                            .flex_shrink_0()
                             .flex()
                             .flex_col()
                             .gap_1()
@@ -1746,7 +1753,8 @@ impl DockerView {
                             .child(match input {
                                 FormField::Input(input) => Input::new(input).into_any_element(),
                                 FormField::Json(editor) => div()
-                                    .h(px(240.))
+                                    .h(px((f32::from(window.viewport_size().height) - 340.)
+                                        .clamp(100., 420.)))
                                     .font_family("monospace")
                                     .child(gpui_kit::base::input::Editor::new(editor))
                                     .into_any_element(),
@@ -1754,6 +1762,9 @@ impl DockerView {
                     }));
                 tshell_ui::controls::workspace_dialog(dialog, cx)
                     .title(t!(action.key()).into_owned())
+                    .width(px(
+                        640_f32.min((f32::from(window.viewport_size().width) - 32.).max(0.))
+                    ))
                     .child(content)
                     .on_ok(move |_, window, cx| {
                         let values: Vec<_> = fields
@@ -1971,6 +1982,24 @@ pub(crate) fn is_running(container: &ContainerSummary) -> bool {
 
 #[cfg(debug_assertions)]
 impl DockerView {
+    pub fn check_action_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(engine) = self.engine_mut() else {
+            return;
+        };
+        let target = engine.target.clone();
+        let connection = engine
+            .docker
+            .replace(Docker::connect_with_local_defaults().unwrap());
+        self.open_action(
+            target,
+            None,
+            crate::actions::Action::CreateContainer,
+            window,
+            cx,
+        );
+        self.engine_mut().unwrap().docker = connection;
+    }
+
     pub fn check_feedback_state(&mut self, state: usize, cx: &mut Context<Self>) {
         let engine = self.engine_mut().expect("Docker fixture Engine");
         engine.loading = state == 1;
@@ -2302,7 +2331,14 @@ impl DockerView {
                 serde_json::json!({"Name":name,"Driver":"local","Mountpoint":"/var/lib/docker/volumes/fixture-data/_data","Scope":"local","Options":{}})
             }
             Resource::Network(id) => {
-                serde_json::json!({"Id":id,"Driver":"bridge","Scope":"local","Internal":false,"IPAM":{"Config":[{"Subnet":"172.18.0.0/16","Gateway":"172.18.0.1"}]},"Containers":{}})
+                let containers: serde_json::Map<_, _> = engine
+                    .containers
+                    .iter()
+                    .take(40)
+                    .filter_map(|container| container.id.clone())
+                    .map(|id| (id, serde_json::json!({})))
+                    .collect();
+                serde_json::json!({"Id":id,"Driver":"bridge","Scope":"local","Internal":false,"IPAM":{"Config":[{"Subnet":"172.18.0.0/16","Gateway":"172.18.0.1"}]},"Containers":containers})
             }
             Resource::Info => {
                 serde_json::json!({"ID":"fixture-engine-id","Name":"fixture-engine","ServerVersion":"28.5.0","OperatingSystem":"Linux","Architecture":"x86_64","DockerRootDir":"/var/lib/docker","Driver":"overlay2","SecurityOptions":["name=seccomp,profile=builtin"]})
@@ -2428,9 +2464,6 @@ impl DockerView {
                     .dirty(cx)
             );
         }
-    }
-    pub fn check_navigation_focus(&self) -> FocusHandle {
-        self.engine().unwrap().resources.focus.clone()
     }
     pub fn check_image_selection(&self, index: usize) {
         assert!(

@@ -39,15 +39,17 @@ mod settings;
 mod theme_tests;
 use settings::SettingsUi;
 use tshell_explorer::{self as explorer, Explorer};
-use tshell_git::{GitView, git, selection as git_selection, view as git_view};
+use tshell_git::GitView;
+#[cfg(debug_assertions)]
+use tshell_git::{git, selection as git_selection, view as git_view};
 mod host_metrics;
 mod launcher;
 mod metrics_config;
 mod metrics_transport;
 #[cfg(test)]
 mod preferences_tests;
-use tshell_explorer::preview;
 use tshell_host::sftp as remote_files;
+mod navigation_order;
 mod sessions;
 mod ssh_auth;
 use tshell_ui::controls::{self as style, workspace_dialog};
@@ -57,12 +59,12 @@ mod tools;
 mod transfer_queue;
 #[cfg(windows)]
 mod updates;
-use tshell_explorer::workbench;
 
 const SIDEBAR_WIDTH: f32 = 212.;
 const WINDOW_CONTROL_WIDTH: f32 = 38.;
 const WINDOW_CONTROLS_WIDTH: f32 = WINDOW_CONTROL_WIDTH * 3.;
 const CHROME_BAR_HEIGHT: f32 = 28.;
+const LIST_DIALOG_BODY_HEIGHT: f32 = 560.;
 pub(crate) const DEFAULT_WINDOW_SIZE: [f32; 2] = [1320., 840.];
 
 #[cfg(debug_assertions)]
@@ -96,6 +98,8 @@ struct Preferences {
     acrylic_background: bool,
     keybindings: shortcuts::Overrides,
     hosts: Vec<HostDefinition>,
+    host_order: Vec<String>,
+    session_order: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     forwards: BTreeMap<String, Vec<crate::ssh_forward::LocalForward>>,
     sessions: BTreeMap<String, Vec<crate::backend::SessionProfile>>,
@@ -540,6 +544,8 @@ pub struct AppView {
     theme_error: Option<String>,
     terminal_palette: Palette,
     hosts: Vec<Host>,
+    host_order: Vec<String>,
+    session_order: BTreeMap<String, Vec<String>>,
     session_profiles: BTreeMap<String, Vec<crate::backend::SessionProfile>>,
     active: usize,
     font_size: f32,
@@ -631,7 +637,7 @@ impl Render for ModalContent {
             .update(cx, |app, cx| match self.kind {
                 ModalKind::Settings => app.settings_view(_window, cx),
                 ModalKind::Host => app.connection_editor(cx),
-                ModalKind::NewTab => app.new_session_editor(cx),
+                ModalKind::NewTab => app.new_session_editor(_window, cx),
                 ModalKind::Commands => app.command_view(_window, cx),
                 ModalKind::ThemeEditor => app.theme_editor_view(cx),
                 ModalKind::Forward => app.forward_editor(cx),
@@ -829,7 +835,8 @@ impl AppView {
                 pending: Vec::new(),
             });
         }
-        let docker_targets = docker::targets(&hosts, prefs.docker_endpoint.clone());
+        let docker_targets =
+            docker::targets(&hosts, prefs.docker_endpoint.clone(), &prefs.host_order);
         let docker = cx.new(|cx| {
             tshell_docker::DockerView::new(
                 docker_targets,
@@ -902,6 +909,8 @@ impl AppView {
             terminal_palette,
             hosts,
             session_profiles: prefs.sessions,
+            host_order: prefs.host_order,
+            session_order: prefs.session_order,
             active: 0,
             settings_ui,
             font_family,
@@ -1188,6 +1197,12 @@ impl AppView {
             forwards: self.forwards.clone(),
             docker_endpoint: self.docker_endpoint.clone(),
             hosts: self.hosts.iter().filter_map(|h| h.config.clone()).collect(),
+            host_order: self
+                .ordered_host_indices()
+                .iter()
+                .map(|&index| self.hosts[index].identity().to_string())
+                .collect(),
+            session_order: self.session_order.clone(),
             sessions: self
                 .hosts
                 .iter()
@@ -1212,8 +1227,9 @@ impl AppView {
         prefs.write_to(&Preferences::path())
     }
     fn sync(&mut self, cx: &mut Context<Self>) {
-        let mut profiles_changed = false;
+        let mut preferences_changed = self.prune_host_orders();
         for (index, host) in self.hosts.iter_mut().enumerate() {
+            let host_id = host.identity().to_string();
             if let Some(backend) = &mut host.backend {
                 backend.listen(self.workspace_updates.clone());
                 backend.reap_finished();
@@ -1222,11 +1238,19 @@ impl AppView {
                         let profiles = local.profiles();
                         if self.session_profiles.get(&key) != Some(&profiles) {
                             self.session_profiles.insert(key, profiles);
-                            profiles_changed = true;
+                            preferences_changed = true;
                         }
                     }
                 }
-                let snapshot = backend.snapshot();
+                let mut snapshot = backend.snapshot();
+                if let Some(order) = self.session_order.get_mut(&host_id) {
+                    preferences_changed |= navigation_order::prune_session_order(order, &snapshot);
+                    navigation_order::apply_session_order(&mut snapshot.sessions, order);
+                    if order.is_empty() {
+                        self.session_order.remove(&host_id);
+                        preferences_changed = true;
+                    }
+                }
                 if snapshot.revision != host.snapshot.revision
                     || snapshot.connection != host.snapshot.connection
                 {
@@ -1293,7 +1317,7 @@ impl AppView {
                 }
             }
         }
-        if profiles_changed {
+        if preferences_changed {
             self.save(cx);
         }
         self.workspaces.retain(|(id, session), _| {
@@ -1793,12 +1817,12 @@ impl AppView {
         window.open_dialog(cx, move |dialog, window, cx| {
             let height: f32 = match kind {
                 ModalKind::Settings => 720.,
-                ModalKind::Host if local_host => 220.,
+                ModalKind::Host if local_host => 140.,
                 ModalKind::Host => 460.,
-                ModalKind::Commands => 410.,
+                ModalKind::Commands => LIST_DIALOG_BODY_HEIGHT,
                 ModalKind::ThemeEditor => 460.,
                 ModalKind::Forward => forward_dialog_height.get(),
-                ModalKind::NewTab => 360.,
+                ModalKind::NewTab => LIST_DIALOG_BODY_HEIGHT,
             };
             let height = height.min((f32::from(window.viewport_size().height) - 180.).max(64.));
             let width: f32 = match kind {
@@ -1847,7 +1871,7 @@ impl AppView {
                         false
                     })
                 })
-                .child(if matches!(kind, ModalKind::NewTab) {
+                .child(if matches!(kind, ModalKind::NewTab | ModalKind::Commands) {
                     div()
                         .max_h(px(height))
                         .overflow_y_scrollbar()
@@ -1897,7 +1921,7 @@ impl AppView {
         let count: usize = self.forwards.values().map(Vec::len).sum();
         let draft = usize::from(self.forward_add_form && self.editing_forward.is_none());
         self.forward_dialog_height
-            .set((68. + (count + draft) as f32 * 36.).clamp(68., 320.));
+            .set((28. + (count + draft) as f32 * 36.).clamp(64., LIST_DIALOG_BODY_HEIGHT));
     }
 
     fn open_forward_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2231,7 +2255,7 @@ impl AppView {
         let p = self.palette;
         let mut rows = Vec::new();
         let mut row_index: usize = 0;
-        for host_index in 0..self.hosts.len() {
+        for host_index in self.ordered_host_indices() {
             let Some(config) = self.hosts[host_index].config.clone() else {
                 continue;
             };
@@ -2483,11 +2507,10 @@ impl AppView {
         let kind = self.forward_kind;
         let selected = self.forward_host_index;
         let hosts: Vec<_> = self
-            .hosts
-            .iter()
-            .enumerate()
-            .filter(|(_, host)| host.config.is_some())
-            .map(|(index, host)| (index, host.name.clone()))
+            .ordered_host_indices()
+            .into_iter()
+            .filter(|&index| self.hosts[index].config.is_some())
+            .map(|index| (index, self.hosts[index].name.clone()))
             .collect();
         let selected_name = hosts
             .iter()
@@ -2951,9 +2974,11 @@ impl AppView {
         if self.hosts.len() < 2 {
             return;
         }
-        let len = self.hosts.len() as isize;
-        let index = (self.active as isize + delta).rem_euclid(len) as usize;
-        self.switch_host(index, cx);
+        let order = self.ordered_host_indices();
+        if let Some(position) = order.iter().position(|&index| index == self.active) {
+            let next = (position as isize + delta).rem_euclid(order.len() as isize) as usize;
+            self.switch_host(order[next], cx);
+        }
     }
     fn font(&mut self, delta: f32, cx: &mut Context<Self>) {
         self.font_size = (self.font_size + delta).clamp(10., 24.);
@@ -3161,8 +3186,8 @@ impl AppView {
             Shortcut::MovePane(d) => self.act(Action::MovePane(d), cx),
             Shortcut::SelectSession(index) => self.select_session_at(index, cx),
             Shortcut::Session(i) => {
-                if i < self.hosts.len() {
-                    self.switch_host(i, cx);
+                if let Some(&index) = self.ordered_host_indices().get(i) {
+                    self.switch_host(index, cx);
                 }
             }
         }
@@ -3288,6 +3313,7 @@ impl AppView {
         let id = self.hosts[index].identity();
         self.workspaces.retain(|(host, _), _| *host != id);
         self.hosts.remove(index);
+        self.prune_host_orders();
         if self
             .active_workspace
             .as_ref()
@@ -3393,7 +3419,11 @@ impl AppView {
                 } else if h.connection() == Connection::Closed {
                     crate::t!("ws.disconnected")
                 } else {
-                    crate::t!("ws.connecting")
+                    h.snapshot
+                        .message
+                        .clone()
+                        .map(std::borrow::Cow::Owned)
+                        .unwrap_or_else(|| crate::t!("ws.connecting"))
                 })
                 .when(h.snapshot.connected(), |view| {
                     view.child(
@@ -3700,10 +3730,10 @@ impl AppView {
         };
         let current = self.active;
         let hosts: Vec<_> = self
-            .hosts
-            .iter()
-            .enumerate()
-            .map(|(index, host)| {
+            .ordered_host_indices()
+            .into_iter()
+            .map(|index| {
+                let host = &self.hosts[index];
                 (
                     index,
                     host.name.clone(),
@@ -4329,12 +4359,20 @@ impl AppView {
                 .into_any_element(),
         }
     }
-    fn new_session_editor(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn new_session_editor(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         if self.editing_session.is_some() {
             return self.session_editor(cx);
         }
         let p = self.palette;
         let local = self.hosts[self.active].config.is_none();
+        let body_height =
+            LIST_DIALOG_BODY_HEIGHT.min((f32::from(window.viewport_size().height) - 180.).max(64.));
+        // Leave room for the form controls inside the dialog's viewport limit.
+        let results_height = (body_height - 140.).max(30.);
+        let feedback = self
+            .message
+            .clone()
+            .or_else(|| self.directory_error.clone());
         div()
             .w_full()
             .flex()
@@ -4416,72 +4454,75 @@ impl AppView {
             )
             .child(
                 div()
-                    .id("directory-completions")
+                    .id("session-directory-results")
                     .flex()
                     .flex_col()
-                    .h(px(150.))
+                    .h(px(results_height))
                     .flex_shrink_0()
-                    .overflow_y_scrollbar()
-                    .children(
-                        self.directory_candidates
-                            .iter()
-                            .enumerate()
-                            .map(|(index, path)| {
-                                let selected = path.clone();
-                                let label = path
-                                    .trim_end_matches(['/', '\\'])
-                                    .rsplit(['/', '\\'])
-                                    .next()
-                                    .unwrap_or(path)
-                                    .to_owned();
-                                div()
-                                    .id(("directory-candidate", index))
-                                    .h(px(30.))
-                                    .flex_shrink_0()
-                                    .px_2()
-                                    .rounded_sm()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .cursor_pointer()
-                                    .text_color(rgb(p.text))
-                                    .hover(|style| style.bg(rgb(p.selected)))
-                                    .child(
-                                        Icon::new(IconName::Folder)
-                                            .xsmall()
-                                            .text_color(rgb(p.muted)),
-                                    )
-                                    .child(div().flex_1().min_w_0().truncate().child(label))
-                                    .child(
-                                        Icon::new(IconName::ChevronRight)
-                                            .xsmall()
-                                            .text_color(rgb(p.muted)),
-                                    )
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.accept_directory(selected.clone(), window, cx)
-                                    }))
-                            }),
-                    ),
-            )
-            .child(
-                div()
-                    .id("directory-feedback")
-                    .h(px(32.))
-                    .flex_shrink_0()
-                    .min_w_0()
-                    .overflow_y_scroll()
-                    .text_size(px(11.))
-                    .text_color(rgb(if self.message.is_some() {
-                        p.error
-                    } else {
-                        p.muted
-                    }))
-                    .when_some(
-                        self.message
-                            .clone()
-                            .or_else(|| self.directory_error.clone()),
-                        |view, message| view.child(message),
-                    ),
+                    .child(
+                        div()
+                            .id("directory-completions")
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scrollbar()
+                            .children(self.directory_candidates.iter().enumerate().map(
+                                |(index, path)| {
+                                    let selected = path.clone();
+                                    let label = path
+                                        .trim_end_matches(['/', '\\'])
+                                        .rsplit(['/', '\\'])
+                                        .next()
+                                        .unwrap_or(path)
+                                        .to_owned();
+                                    div()
+                                        .id(("directory-candidate", index))
+                                        .h(px(30.))
+                                        .flex_shrink_0()
+                                        .px_2()
+                                        .rounded_sm()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .cursor_pointer()
+                                        .text_color(rgb(p.text))
+                                        .hover(|style| style.bg(rgb(p.selected)))
+                                        .child(
+                                            Icon::new(IconName::Folder)
+                                                .xsmall()
+                                                .text_color(rgb(p.muted)),
+                                        )
+                                        .child(div().flex_1().min_w_0().truncate().child(label))
+                                        .child(
+                                            Icon::new(IconName::ChevronRight)
+                                                .xsmall()
+                                                .text_color(rgb(p.muted)),
+                                        )
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.accept_directory(selected.clone(), window, cx)
+                                        }))
+                                },
+                            )),
+                    )
+                    .when_some(feedback, |view, message| {
+                        view.child(
+                            div()
+                                .id("directory-feedback")
+                                .h(px(32.))
+                                .pt_1()
+                                .flex_shrink_0()
+                                .min_w_0()
+                                .overflow_y_scroll()
+                                .text_size(px(11.))
+                                .text_color(rgb(if self.message.is_some() {
+                                    p.error
+                                } else {
+                                    p.muted
+                                }))
+                                .child(message),
+                        )
+                    }),
             )
             .into_any_element()
     }
@@ -4540,26 +4581,25 @@ impl AppView {
                     .col_span(2)
                     .child(Input::new(&self.label)),
             )
-            .child(
-                self.host_field(
-                    HostField::Destination,
-                    crate::t!("ws.field_host").into_owned(),
-                )
-                .required(true)
-                .visible(!name_only)
-                .child(Input::new(&self.destination)),
-            )
-            .child(
-                self.host_field(HostField::User, crate::t!("ws.field_user").into_owned())
+            .when(!name_only, |form| {
+                form.child(
+                    self.host_field(
+                        HostField::Destination,
+                        crate::t!("ws.field_host").into_owned(),
+                    )
                     .required(true)
-                    .visible(!name_only)
-                    .child(Input::new(&self.user)),
-            )
-            .child(
-                self.host_field(HostField::Port, crate::t!("ws.field_port").into_owned())
-                    .visible(!name_only)
-                    .child(Input::new(&self.port)),
-            );
+                    .child(Input::new(&self.destination)),
+                )
+                .child(
+                    self.host_field(HostField::User, crate::t!("ws.field_user").into_owned())
+                        .required(true)
+                        .child(Input::new(&self.user)),
+                )
+                .child(
+                    self.host_field(HostField::Port, crate::t!("ws.field_port").into_owned())
+                        .child(Input::new(&self.port)),
+                )
+            });
         let authentication =
             Form::vertical().small().columns(2).child(
                 self.host_field(

@@ -1,5 +1,29 @@
 //! Session groups and compact tab separators, sourced from the live backend.
 use super::*;
+
+#[derive(Clone)]
+struct SessionDrag {
+    host: tshell_host::HostId,
+    session: String,
+    name: String,
+    background: u32,
+    foreground: u32,
+}
+
+impl Render for SessionDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_3()
+            .py_1()
+            .rounded_sm()
+            .shadow_md()
+            .bg(rgb(self.background))
+            .text_color(rgb(self.foreground))
+            .text_size(px(13.))
+            .child(self.name.clone())
+    }
+}
+
 impl AppView {
     pub(super) fn select_session_at(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(session_id) = self.hosts[self.active]
@@ -110,6 +134,18 @@ impl AppView {
             let edit_id = id.clone();
             let delete_id = id.clone();
             let host_index = self.active;
+            let host_id = host.identity();
+            let drop_host = host_id.clone();
+            let drop_target = id.clone();
+            let order: Vec<_> = host
+                .snapshot
+                .sessions
+                .iter()
+                .map(|s| s.id.clone())
+                .collect();
+            let move_id = id.clone();
+            let move_host = host_id.clone();
+            let last = group_index + 1 == host.snapshot.sessions.len();
             let owner = cx.entity().downgrade();
             rows.push(
                 div()
@@ -131,6 +167,43 @@ impl AppView {
                     .line_height(relative(1.25))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(rgb(p.text))
+                    .tooltip(|window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(
+                            crate::t!("session.drag_reorder").into_owned(),
+                        )
+                        .build(window, cx)
+                    })
+                    .drag_over::<SessionDrag>(move |style, drag, _, _| {
+                        if drag.host != drop_host || drag.session == drop_target {
+                            return style;
+                        }
+                        let Some(from) = order.iter().position(|id| id == &drag.session) else {
+                            return style;
+                        };
+                        if from < group_index {
+                            style.border_b_2().border_color(rgb(p.accent))
+                        } else {
+                            style.border_t_2().border_color(rgb(p.accent))
+                        }
+                    })
+                    .on_drag(
+                        SessionDrag {
+                            host: host_id.clone(),
+                            session: id.clone(),
+                            name: session.name.clone(),
+                            background: p.panel,
+                            foreground: p.text,
+                        },
+                        |drag, _, _, cx| {
+                            cx.stop_propagation();
+                            cx.new(|_| drag.clone())
+                        },
+                    )
+                    .on_drop(cx.listener(move |app, drag: &SessionDrag, _, cx| {
+                        if app.hosts[app.active].identity() == drag.host {
+                            app.move_session(&drag.host, &drag.session, &move_id, cx);
+                        }
+                    }))
                     .child(
                         div()
                             .flex_1()
@@ -175,11 +248,36 @@ impl AppView {
                         this.toggle_session(id.clone(), cx);
                     }))
                     .context_menu(move |menu, _, _| {
+                        let up_owner = owner.clone();
+                        let down_owner = owner.clone();
+                        let up_host = move_host.clone();
+                        let down_host = move_host.clone();
+                        let up_id = edit_id.clone();
+                        let down_id = edit_id.clone();
                         let edit_owner = owner.clone();
                         let delete_owner = owner.clone();
                         let id = edit_id.clone();
                         let delete_id = delete_id.clone();
-                        menu.item(PopupMenuItem::new(crate::t!("session.edit_menu")).on_click(
+                        menu.item(
+                            PopupMenuItem::new(crate::t!("session.move_up"))
+                                .disabled(group_index == 0)
+                                .on_click(move |_, _, cx| {
+                                    let _ = up_owner.update(cx, |app, cx| {
+                                        app.move_session_relative(&up_host, &up_id, -1, cx)
+                                    });
+                                }),
+                        )
+                        .item(
+                            PopupMenuItem::new(crate::t!("session.move_down"))
+                                .disabled(last)
+                                .on_click(move |_, _, cx| {
+                                    let _ = down_owner.update(cx, |app, cx| {
+                                        app.move_session_relative(&down_host, &down_id, 1, cx)
+                                    });
+                                }),
+                        )
+                        .separator()
+                        .item(PopupMenuItem::new(crate::t!("session.edit_menu")).on_click(
                             move |_, window, cx| {
                                 let _ = edit_owner
                                     .update(cx, |this, cx| this.edit_session(&id, window, cx));

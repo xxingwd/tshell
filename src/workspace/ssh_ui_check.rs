@@ -297,6 +297,30 @@ pub(super) async fn check(
             })??;
         }
         cx.update_window(handle.into(), |_, window, cx| {
+            let saved = app.update(cx, |app, cx| {
+                app.close_modal(window, cx);
+                let saved = app.forwards.clone();
+                let key = forward_storage_key(app.hosts[index].config.as_ref().unwrap());
+                let rules = app.forwards.get_mut(&key).unwrap();
+                rules.resize(20, rules[0].clone());
+                app.open_forward_editor(window, cx);
+                saved
+            });
+            window.refresh();
+            let _ = window.draw(cx);
+            #[cfg(feature = "ui-check-screenshots")]
+            if let Some(directory) = std::env::var_os("TSHELL_UI_SCREENSHOT_DIR") {
+                window
+                    .render_to_image()?
+                    .save(PathBuf::from(directory).join(format!("ssh-{_name}-forward-many.png")))?;
+            }
+            app.update(cx, |app, cx| {
+                app.close_modal(window, cx);
+                app.forwards = saved;
+            });
+            Ok::<_, anyhow::Error>(())
+        })??;
+        cx.update_window(handle.into(), |_, window, cx| {
             app.update(cx, |app, cx| {
                 app.close_modal(window, cx);
                 app.open_forward_editor(window, cx);

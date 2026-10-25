@@ -29,6 +29,9 @@ back button returns to the list. Logs, YAML, JSON and output use the full pane.
 Arrow keys and Home/End select rows, Enter expands details and Escape closes the
 adjacent preview. Columns adapt to available width; truncated values retain
 full-value tooltips. Each host keeps its selection, table scroll and preview.
+Related container lists fill the remaining detail height instead of stopping
+after six rows. Action forms use viewport-limited scrolling, and JSON fields
+expand in taller windows while keeping confirmation controls reachable.
 Loading and request failures stay in the table or detail content area. Search,
 column headers, detail actions and log controls keep their position. Empty lists
 show a centered state; refreshes retain existing content with a notice inside

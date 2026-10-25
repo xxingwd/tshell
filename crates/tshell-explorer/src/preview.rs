@@ -146,19 +146,27 @@ pub struct WebPreview {
 
 #[cfg(windows)]
 impl WebPreview {
-    pub fn new(html: &str, bounds: Bounds<Pixels>, window: &Window) -> wry::Result<Self> {
+    pub(crate) fn new(
+        html: &str,
+        bounds: Bounds<Pixels>,
+        parent: wry::raw_window_handle::RawWindowHandle,
+    ) -> wry::Result<Self> {
+        // Captured from the live parent on the UI thread immediately before
+        // construction. No GPUI borrow may span WebView2's nested message pump.
+        let parent = unsafe { wry::raw_window_handle::WindowHandle::borrow_raw(parent) };
         let webview = wry::WebViewBuilder::new()
             .with_html(html)
+            .with_visible(false)
             .with_incognito(true)
             .with_navigation_handler(|url| url == "about:blank")
             .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
             .with_bounds(web_bounds(bounds))
-            .build_as_child(window)?;
+            .build_as_child(&parent)?;
         Ok(Self {
             webview,
             html: html.to_owned(),
             bounds,
-            visible: true,
+            visible: false,
         })
     }
 

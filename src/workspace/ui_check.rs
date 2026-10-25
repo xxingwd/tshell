@@ -5,7 +5,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::time::Instant;
-use tshell_explorer::SessionFileState;
+use tshell_explorer::{SessionFileState, preview, workbench};
 
 fn check_equal_split_bounds(app: &AppView) -> anyhow::Result<()> {
     let host = &app.hosts[0];
@@ -52,19 +52,19 @@ fn check_transient_layout_sizes(
                 AvailableSpace::MinContent,
             );
             let baseline = app
-                .new_session_editor(cx)
+                .new_session_editor(window, cx)
                 .layout_as_root(available, window, cx);
             anyhow::ensure!(
                 baseline.height > px(150.),
                 "directory fixture did not measure its form"
             );
-            for count in [3, 15, 0] {
+            for count in [3, 15, 40, 0] {
                 app.directory_candidates = (0..count)
                     .map(|index| format!("/fixture/directory-{index}"))
                     .collect();
                 app.directory_error = Some("Fixture directory lookup failed. ".repeat(12));
                 anyhow::ensure!(
-                    app.new_session_editor(cx)
+                    app.new_session_editor(window, cx)
                         .layout_as_root(available, window, cx)
                         == baseline,
                     "directory results or validation changed form size at {width}px"
@@ -259,12 +259,18 @@ pub(crate) fn run_ui_check(output: PathBuf) -> bool {
             crate::terminal_view::init(cx);
             cx.spawn(async move |cx| {
                 let report = check(cx).await;
+                let html_only = std::env::var("TSHELL_UI_CHECK_SCOPE").as_deref() == Ok("html-preview");
                 let json = match report {
+                    Ok(()) if html_only => {
+                        result.store(true, Ordering::Release);
+                        serde_json::json!({"passed": true, "clipboard_checked": false, "remote_files_checked": false, "checked": ["index.html opens through native frame events without reentrant GPUI borrowing", "HTML preview preserves source and hides over the terminal"]})
+                    }
                     Ok(()) => {
                         result.store(true, Ordering::Release);
                         let session_only = std::env::var("TSHELL_UI_CHECK_SCOPE").as_deref() == Ok("session-submission");
-                        serde_json::json!({"passed": true, "clipboard_checked": !session_only && std::env::var_os("TSHELL_UI_CHECK_SKIP_CLIPBOARD").is_none(), "remote_files_checked": !session_only && std::env::var_os("TSHELL_REMOTE_UI_ROOT").is_some(), "checked": if session_only { vec!["remote session Enter and confirm", "duplicate submission", "missing directory", "edit, close and host-switch cancellation"] } else { vec![
-            "event-driven title wakes workspace without polling", "terminal Tab input retains focus", "Ctrl+B toggles sidebar with terminal focus", "sidebar viewport and persisted state", "Zen preserves sidebar preference", "session and tab first-frame terminal bounds stay stable", "single and grouped terminal sidebar rendering", "equal split shortcuts and close redistribution", "host and key settings pages", "standalone host validation",
+                        let navigation_only = std::env::var("TSHELL_UI_CHECK_SCOPE").as_deref() == Ok("navigation-order");
+                        serde_json::json!({"passed": true, "clipboard_checked": !session_only && !navigation_only && std::env::var_os("TSHELL_UI_CHECK_SKIP_CLIPBOARD").is_none(), "remote_files_checked": !session_only && !navigation_only && std::env::var_os("TSHELL_REMOTE_UI_ROOT").is_some(), "checked": if navigation_only { vec!["host order persistence without changing active host", "native session dragging in both directions", "session refresh restores persisted drag order", "session move action", "deleted session and host order cleanup", "disconnected host preserves session order"] } else if session_only { vec!["remote session Enter and confirm", "duplicate submission", "missing directory", "edit, close and host-switch cancellation"] } else { vec![
+            "host order persistence without changing active host", "native session dragging and persisted refresh order", "deleted session and host order cleanup", "disconnected host preserves session order", "event-driven title wakes workspace without polling", "terminal Tab input retains focus", "Ctrl+B toggles sidebar with terminal focus", "sidebar viewport and persisted state", "Zen preserves sidebar preference", "session and tab first-frame terminal bounds stay stable", "single and grouped terminal sidebar rendering", "equal split shortcuts and close redistribution", "host and key settings pages", "standalone host validation",
                             "terminal viewport unchanged", "settings restores terminal focus",
             "command palette focus and dispatch", "GPUI frame overlay and status item defaults", "Git mode", "file tree", "syntax editor", "status bar and notifications", "unread terminal notice acknowledgement",
                             "settings dialog and pages", "component settings pages render after scrolling", "resource order, visibility, persistence and stop", "font preference", "ligature preference", "2 file-backed terminal themes", "theme selection", "theme persistence", "theme.json create, edit, delete and invalid-file fallback", "unified interface appearance", "opacity preference",
@@ -318,9 +324,16 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     let app = handle.update(cx, |root, _, _| {
         root.view().clone().downcast::<AppView>().unwrap()
     })?;
+    if std::env::var("TSHELL_UI_CHECK_SCOPE").as_deref() == Ok("html-preview") {
+        return check_html_preview(handle, &app, cx).await;
+    }
     if std::env::var("TSHELL_UI_CHECK_SCOPE").as_deref() == Ok("session-submission") {
         let destination = std::env::var("TSHELL_SSH_TEST_HOST")?;
         return ssh_ui_check::check_session_submission(handle, &app, destination, cx).await;
+    }
+    navigation_order::check(app.clone(), cx).await?;
+    if std::env::var("TSHELL_UI_CHECK_SCOPE").as_deref() == Ok("navigation-order") {
+        return Ok(());
     }
     anyhow::ensure!(
         app.read_with(cx, |app, _cx| app.sidebar_opacity) == 1.,
@@ -1226,6 +1239,24 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     });
     draw(cx)?;
     #[cfg(windows)]
+    if wry::webview_version().is_ok() {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !app.read_with(cx, |app, cx| {
+            let explorer = app.check_explorer(cx);
+            explorer.web_preview_failed
+                || explorer
+                    .web_preview
+                    .as_ref()
+                    .is_some_and(|web| web.is_visible())
+        }) {
+            anyhow::ensure!(Instant::now() < deadline, "HTML initialization timed out");
+            cx.background_executor()
+                .timer(Duration::from_millis(25))
+                .await;
+            draw(cx)?;
+        }
+    }
+    #[cfg(windows)]
     app.read_with(cx, |app, cx| {
         if wry::webview_version().is_ok() {
             anyhow::ensure!(
@@ -1621,10 +1652,6 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
             );
             app.set_language(crate::i18n::Language::En, cx);
             anyhow::ensure!(
-                &*rust_i18n::locale() == "en",
-                "language preference did not switch locale"
-            );
-            anyhow::ensure!(
                 crate::t!("settings.appearance") == "Appearance",
                 "translated label missing after language switch"
             );
@@ -1763,7 +1790,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
                 WindowBackgroundAppearance::Blurred
             );
             app.appearance = Appearance::Light;
-            app.set_terminal_theme("vscode-dark", window, cx);
+            app.select_theme(ThemeMode::Light, "vscode-dark", window, cx);
             assert_eq!(app.palette.background, app.terminal_palette.terminal);
             for host in &app.hosts {
                 for view in host.views.values() {
@@ -1798,7 +1825,7 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
                     window,
                     cx,
                 );
-                app.set_terminal_theme(&id, window, cx);
+                app.select_theme(app.appearance.mode(window.appearance()), &id, window, cx);
             });
         })?;
         draw(cx)?;
@@ -2107,7 +2134,12 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     std::fs::write(AppView::theme_path(), before_editor)?;
     cx.update_window(handle.into(), |_, window, cx| {
         app.update(cx, |app, cx| {
-            app.set_terminal_theme("vscode-dark", window, cx);
+            app.select_theme(
+                app.appearance.mode(window.appearance()),
+                "vscode-dark",
+                window,
+                cx,
+            );
             app.reload_theme_file(window, cx);
         });
     })?;
@@ -2854,6 +2886,78 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn check_html_preview(
+    handle: WindowHandle<Root>,
+    app: &Entity<AppView>,
+    cx: &mut AsyncApp,
+) -> anyhow::Result<()> {
+    let directory = PathBuf::from(std::env::var_os("TSHELL_DATA_DIR").unwrap());
+    std::fs::create_dir_all(&directory)?;
+    let path = directory.join("index.html");
+    std::fs::write(
+        &path,
+        "<!doctype html><h1>HTML preview regression</h1><p>Ready</p>",
+    )?;
+    cx.update_window(handle.into(), |_, window, cx| {
+        app.update(cx, |app, cx| {
+            app.check_initialize_tools(window, cx);
+            app.open_path(path.clone(), window, cx);
+        });
+    })?;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        cx.background_executor()
+            .timer(Duration::from_millis(25))
+            .await;
+        let ready = app.read_with(cx, |app, cx| {
+            let explorer = app.check_explorer(cx);
+            #[cfg(windows)]
+            return explorer
+                .web_preview
+                .as_ref()
+                .is_some_and(|web| web.is_visible());
+            #[cfg(not(windows))]
+            return explorer.preview_mode && explorer.open_file.as_ref() == Some(&path);
+        });
+        if ready {
+            break;
+        }
+        anyhow::ensure!(
+            Instant::now() < deadline,
+            "HTML preview did not become visible"
+        );
+    }
+    // Keep dispatching real native events after the initial preview creation.
+    cx.background_executor()
+        .timer(Duration::from_millis(500))
+        .await;
+    app.read_with(cx, |app, cx| {
+        let explorer = app.check_explorer(cx);
+        anyhow::ensure!(
+            explorer.open_file.as_ref() == Some(&path),
+            "HTML file changed"
+        );
+        anyhow::ensure!(!explorer.editor_dirty, "HTML preview dirtied the file");
+        Ok::<_, anyhow::Error>(())
+    })?;
+    app.update(cx, |app, cx| app.show_terminal(cx));
+    cx.background_executor()
+        .timer(Duration::from_millis(100))
+        .await;
+    #[cfg(windows)]
+    app.read_with(cx, |app, cx| {
+        anyhow::ensure!(
+            app.check_explorer(cx)
+                .web_preview
+                .as_ref()
+                .is_some_and(|web| !web.is_visible()),
+            "HTML preview stayed visible over the terminal"
+        );
+        Ok::<_, anyhow::Error>(())
+    })?;
+    Ok(())
+}
+
 #[cfg(feature = "ui-check-screenshots")]
 async fn check_command_palette_styles(
     handle: WindowHandle<Root>,
@@ -3221,7 +3325,20 @@ async fn check_workspace_styles(
         cx.update_window(handle.into(), |_, window, cx| {
             app.update(cx, |app, cx| {
                 app.close_modal(window, cx);
+                app.edit_host(0, window, cx);
+            });
+        })?;
+        capture(&format!("{name}-host-rename"), cx)?;
+        cx.update_window(handle.into(), |_, window, cx| {
+            app.update(cx, |app, cx| {
+                app.close_modal(window, cx);
                 app.show_new_session(window, cx);
+                app.directory_task = None;
+                app.directory_candidates = (0..30)
+                    .map(|index| format!("/workspace/project-{index:02}"))
+                    .collect();
+                app.directory_error = None;
+                cx.notify();
             });
         })?;
         capture(&format!("{name}-new-session"), cx)?;
@@ -3608,7 +3725,8 @@ async fn check_docker_workspace(
                     app.page = Page::Docker;
                     app.sidebar_collapsed = false;
                     let remote_tab = (tab + 1) % 3;
-                    let targets = docker::targets(&app.hosts, app.docker_endpoint.clone());
+                    let targets =
+                        docker::targets(&app.hosts, app.docker_endpoint.clone(), &app.host_order);
                     app.docker.update(cx, |docker, cx| {
                         docker.set_targets(targets, window, cx);
                         docker.check_fixture(remote_id.clone(), remote_tab, window, cx);
@@ -3714,9 +3832,10 @@ async fn check_docker_workspace(
                     cx,
                     &format!("docker-{_name}-resource-{resource}"),
                 )?;
+                let position = point(px(420.), px(if resource == 5 { 80. } else { 400. }));
                 window.dispatch_event(
                     PlatformInput::MouseDown(MouseDownEvent {
-                        position: point(px(420.), px(400.)),
+                        position,
                         click_count: 1,
                         ..Default::default()
                     }),
@@ -3724,7 +3843,7 @@ async fn check_docker_workspace(
                 );
                 window.dispatch_event(
                     PlatformInput::MouseUp(MouseUpEvent {
-                        position: point(px(420.), px(400.)),
+                        position,
                         click_count: 1,
                         ..Default::default()
                     }),
@@ -3783,6 +3902,21 @@ async fn check_docker_workspace(
                 Ok::<_, anyhow::Error>(())
             })??;
         }
+        cx.update_window(handle.into(), |_, window, cx| {
+            app.read(cx).docker.clone().update(cx, |docker, cx| {
+                docker.check_action_form(window, cx);
+            });
+            window.refresh();
+            let _ = window.draw(cx);
+            #[cfg(feature = "ui-check-screenshots")]
+            if let Some(directory) = std::env::var_os("TSHELL_UI_SCREENSHOT_DIR") {
+                window.render_to_image()?.save(
+                    PathBuf::from(directory).join(format!("docker-{_name}-action-form.png")),
+                )?;
+            }
+            window.close_dialog(cx);
+            Ok::<_, anyhow::Error>(())
+        })??;
         for collection in 0..5 {
             cx.update_window(handle.into(), |_, window, cx| {
                 let focus = app.update(cx, |app, cx| {

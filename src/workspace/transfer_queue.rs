@@ -118,9 +118,15 @@ impl TransferQueue {
         if !self.panel_open {
             return size(px(36.), px(36.));
         }
-        let rows = (self.jobs.len() as f32 * TRANSFER_ROW_HEIGHT)
-            .min(TRANSFER_ROW_HEIGHT * 4.)
-            .min((f32::from(viewport.height) - 124.).max(0.));
+        let available_rows = (f32::from(viewport.height)
+            - CHROME_BAR_HEIGHT
+            - PANEL_MARGIN
+            - 32.
+            - PANEL_HEADER_HEIGHT
+            - PANEL_FOOTER_HEIGHT
+            - 2.)
+            .max(0.);
+        let rows = (self.jobs.len() as f32 * TRANSFER_ROW_HEIGHT).min(available_rows);
         size(
             px(PANEL_WIDTH.min((f32::from(viewport.width) - PANEL_MARGIN * 2.).max(0.))),
             px(PANEL_HEADER_HEIGHT + rows + PANEL_FOOTER_HEIGHT + 2.),

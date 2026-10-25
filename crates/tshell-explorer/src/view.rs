@@ -1,5 +1,49 @@
 use super::*;
 impl Explorer {
+    #[cfg(windows)]
+    fn start_web_preview(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.web_preview_initializing = true;
+        let handle = window.window_handle();
+        cx.spawn(async move |owner, cx| {
+            let request = cx.update_window(handle, |_, window, cx| {
+                owner.read_with(cx, |this, _| {
+                    if !this.visible || !this.preview_mode || this.editor_language != "html" {
+                        return None;
+                    }
+                    let html = this.file_preview.as_ref()?.web_html()?.to_owned();
+                    let parent = wry::raw_window_handle::HasWindowHandle::window_handle(window)
+                        .ok()?
+                        .as_raw();
+                    Some((html, parent))
+                })
+            });
+            // WebView2 dispatches native messages while constructing the controller.
+            // Run outside App/Window/Explorer updates so those callbacks can borrow GPUI.
+            let result = match request {
+                Ok(Ok(Some((html, parent)))) => Some(preview::WebPreview::new(&html, bounds, parent)),
+                _ => None,
+            };
+            let _ = owner.update(cx, |this, cx| {
+                this.web_preview_initializing = false;
+                match result {
+                    Some(Ok(web)) => this.web_preview = Some(web),
+                    Some(Err(error)) => {
+                        tracing::warn!(%error, "WebView preview unavailable; using native fallback");
+                        this.web_preview_failed = true;
+                    }
+                    None => {}
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub fn file_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = self.palette;
         let owner = cx.entity().downgrade();
@@ -340,16 +384,11 @@ impl Explorer {
                                                     };
                                                     let result = if let Some(web) = &mut this.web_preview {
                                                         web.show(html, bounds)
-                                                    } else if this.web_preview_failed {
+                                                    } else if this.web_preview_failed || this.web_preview_initializing {
                                                         return;
                                                     } else {
-                                                        match preview::WebPreview::new(html, bounds, window) {
-                                                            Ok(web) => {
-                                                                this.web_preview = Some(web);
-                                                                Ok(())
-                                                            }
-                                                            Err(error) => Err(error),
-                                                        }
+                                                        this.start_web_preview(bounds, window, cx);
+                                                        return;
                                                     };
                                                     if let Err(error) = result {
                                                         tracing::warn!(%error, "WebView preview unavailable; using native fallback");

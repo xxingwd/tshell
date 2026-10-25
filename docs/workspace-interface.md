@@ -38,6 +38,20 @@ does not create a terminal session. See
   Session groups use 4 pixels of top spacing; pane rows have 1-pixel vertical
   margins and tab separators have 2-pixel vertical margins.
   Click targets and hover actions have fixed dimensions.
+- Hosts start in creation order; Settings > Hosts provides up/down controls,
+  including for the local host. Saved display order also applies to host pickers,
+  the command palette, and host keyboard navigation. New hosts append at the end.
+  Sessions start in creation order, with tmux creation timestamps read from the
+  server and numeric session IDs breaking timestamp ties. Drag a session heading
+  onto another heading to move it to that position; the drop marker appears below
+  the target when moving down and above it when moving up. The session context
+  menu also provides Move Up/Down. Orders persist per host across refreshes,
+  renames, and reconnects; new sessions append after a manual order. tmux order
+  is a TShell preference and does not change the server's session names or IDs.
+  A confirmed session refresh removes deleted sessions from saved order records;
+  deleting the last session clears that host's session-order record. Connecting
+  or disconnected hosts retain their saved order until a successful refresh.
+  Removing a host clears its host-order and session-order records as well.
 - Settings retain native navigation and search. Setting labels and controls
   wrap into separate lines when the content area cannot fit both. Groups are
   unframed sections capped at 680 pixels, with compact headings and 36-pixel
@@ -56,7 +70,8 @@ does not create a terminal session. See
   Commands show their configured shortcut. Names, addresses, directories, and
   command identifiers remain searchable, with native arrow/Enter navigation and
   a localized empty result. Confirmation uses the original target even
-  after filtering. The list height adapts to the viewport. Reopening the palette resets
+  after filtering. The list body uses up to 560 pixels, constrained by the viewport;
+  filtered results can shrink instead of leaving an empty lower area. Reopening the palette resets
   its query and focus in the existing dialog.
   `Alt+1` through `Alt+9` select sessions on the active host in sidebar order;
   unavailable positions leave the selection unchanged. The shortcuts can be
@@ -64,6 +79,7 @@ does not create a terminal session. See
 - Host forms separate connection and authentication fields. Invalid submissions
   attach the error to the corresponding field and focus that input. The footer
   remains outside the scroll area, including at the 860 x 520 minimum viewport.
+  The local-host rename form uses a compact 140-pixel body.
   Add and edit use the same form and compact check/cancel icon controls. Session
   creation/rename and theme editing also use check icons for confirmation, with
   localized tooltips and accessible names. Authentication and host-key trust
@@ -87,8 +103,8 @@ does not create a terminal session. See
   prompt. Shortcut conflicts use a fixed space beside the recording control;
   window-size validation also reserves its feedback space.
   Theme-editor failures stay inside the editor,
-  update actions precede their status text, and forwarding reserves feedback
-  space so validation cannot change the dialog height. Field validation remains
+  update actions precede their status text, and forwarding shows feedback
+  inside its scroll area so validation cannot change the dialog height. Field validation remains
   attached to its input.
 - Private-key file selection fills the host editor's path field whether the
   editor was opened from the sidebar or Settings. Closing the host editor
@@ -97,8 +113,14 @@ does not create a terminal session. See
   until a successful replacement arrives. Git uses a persistent file-list scroll
   handle across requests. Its compact count area and session unread dots reserve
   their width so asynchronous updates cannot shorten adjacent names.
-- New-session directory completion reserves a 150-pixel scrollable result area
-  and a 32-pixel scrollable validation area, including when either is empty.
+- New-session directory completion uses the available window height for a
+  single-column scrollable result area, up to 420 pixels (14 directory rows).
+  Validation takes 32 pixels from that area only while a message is present;
+  an empty feedback area no longer limits the visible directories. The form
+  controls and overall result-area height stay stable across listing and validation.
+  Local and SSH completion no longer truncate matching directories to eight;
+  remaining results are reachable by scrolling. SSH keeps its existing 4096-entry
+  directory read limit.
   Enter and the confirm button both wait for remote directory validation when
   necessary, showing a busy button and ignoring duplicate submissions. Validation
   publishes before completion listing finishes; editing the form, closing it, or
@@ -162,23 +184,48 @@ opaque one-pixel strokes painted without pointer handlers. A restrained accent
 marks the active pane's internal edges; hover and focus never change geometry.
 
 Local and ordinary SSH geometry derives group proportions from membership,
-without mutable split ratios. tmux remains the owner of remote geometry. TShell
-submits each split/close and its native sibling redistribution as one ordered
-control sequence. Mixed groups use `select-layout -E` to spread row siblings,
-then their column parent, preserving pane identity and row groups. This replaces
-successive `resize-pane -x/-y` calls that could undo earlier adjustments.
-Queued workspace actions wait for the preceding server snapshot to settle.
+without mutable split ratios. For tmux, TShell computes explicit pane widths,
+heights and offsets in cells from the confirmed window size and column/row
+membership, reserving one cell per divider. It submits the whole result as one
+checksummed classic `select-layout` layout, with rounding remainders assigned
+from left to right and top to bottom. This avoids `select-layout -E`: tmux 3.8
+can exclude nested row groups when counting column siblings, producing unequal
+widths and panes outside the window.
 
-Observed tmux pane changes, window resizes, and focus-mode restoration also
-redistribute column layouts, including layouts whose previous sizes had drifted.
+Each split/close first refreshes the server's surviving pane IDs, native pane
+order and focus. Layout submission preserves pane identities and row groups;
+if native pane order differs from geometric order, ordered swaps and focus
+restoration complete the submission. Queued workspace actions wait for the
+preceding server snapshot to settle.
+
+Initial connection, observed tmux geometry changes, window resizes, and focus-mode
+restoration also redistribute column layouts, including existing layouts whose
+widths had drifted beyond the window while their row groups remained intact.
+Control streams are opened from discovery before layout recovery can defer
+the first visible snapshot, so attaching to an unequal saved layout cannot
+wait for repair commands on a connection that has not yet been started.
 The UI keeps the previous confirmed layout during recovery and publishes the
 new server geometry after refresh; it does not predict pane sizes. Arbitrary
 layouts made by external tmux clients remain server-owned; automatic recovery
 applies when their geometry fits the column/row model, not every tmux topology.
-Native redistribution behavior is based on [tmux 3.6a select-layout](https://github.com/tmux/tmux/blob/3.6a/cmd-select-layout.c)
-and [sibling spreading](https://github.com/tmux/tmux/blob/3.6a/layout.c).
+Connection progress is shown as SSH discovery, control-channel startup, or
+layout recovery in the empty terminal surface. If a layout command races with
+an external change, TShell refreshes pane IDs and retries it twice. Very small
+windows are left untouched and explain that there is not enough space for equal
+panes. Repeated focus and pane-selection actions are collapsed while a snapshot
+is in flight.
+The classic layout format and native pane assignment are based on
+[tmux 3.6 layout-custom.c](https://github.com/tmux/tmux/blob/3.6/layout-custom.c)
+and [tmux 3.8 layout-custom.c](https://github.com/tmux/tmux/blob/3.8/layout-custom.c).
 
 ## Native Verification
+
+Set `TSHELL_UI_CHECK_SCOPE=html-preview` and `TSHELL_UI_CHECK_VISIBLE=1` to
+exercise opening an isolated `index.html` through native frame events, waiting
+for WebView2 initialization, and hiding it when returning to the terminal.
+This check deliberately avoids synchronous manual draws: initialization must
+allow queued application work to run without reentering borrowed GPUI state.
+Run it with an isolated `TSHELL_DATA_DIR` and an installed WebView2 runtime.
 
 `--workspace-ui-check` exercises focus, modal cleanup, host validation,
 first-frame terminal bounds across session/tab switches (single and mixed splits,
@@ -220,5 +267,9 @@ where Windows denies even an independent `OpenClipboard` call, setting
 
 The opt-in `real_tmux_grouped_splits_close_exit_resize_and_zoom_stay_equal` test
 uses `TSHELL_SSH_TEST_HOST` and an isolated tmux socket. It checks repeated column
-creation, close and shell-exit recovery, rapid mixed splits, resize, and zoom.
+creation, attaching to existing unequal row/column groups, down once followed
+by right twice, exact restoration of the original
+rows after closing appended columns, repeated row-first mixed splits, close and
+shell-exit recovery, rapid mixed splits, resize, and zoom. The regression has
+been checked against isolated tmux 3.6 and 3.8 servers.
 Local unit and native UI checks do not substitute for that remote test.

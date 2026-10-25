@@ -157,7 +157,7 @@ enum TerminalState {
     Attached(Entity<TerminalView>),
     Failed(String),
 }
-pub(super) fn targets(hosts: &[Host], endpoint: Option<String>) -> Vec<Target> {
+pub(super) fn targets(hosts: &[Host], endpoint: Option<String>, order: &[String]) -> Vec<Target> {
     let mut targets = vec![Target::local(
         crate::t!("docker.local").into_owned(),
         endpoint,
@@ -169,13 +169,19 @@ pub(super) fn targets(hosts: &[Host], endpoint: Option<String>) -> Vec<Target> {
             endpoint: Endpoint::Ssh(config.ssh.clone()),
         })
     }));
+    targets.sort_by_key(|target| {
+        order
+            .iter()
+            .position(|id| *id == target.id.to_string())
+            .unwrap_or(usize::MAX)
+    });
     targets
 }
 impl AppView {
     fn docker_terminal_current(&self) -> Option<&Terminal> {
         self.docker_terminal.as_ref().filter(|terminal| {
             terminal.target.id == self.hosts[self.active].identity()
-                && targets(&self.hosts, self.docker_endpoint.clone())
+                && targets(&self.hosts, self.docker_endpoint.clone(), &self.host_order)
                     .iter()
                     .any(|target| {
                         target.id == terminal.target.id
@@ -310,18 +316,8 @@ impl AppView {
             )
             .into_any_element()
     }
-    pub(super) fn active_is_container(&self) -> bool {
-        let host = &self.hosts[self.active];
-        match &host.backend {
-            Some(Backend::Local(backend)) => host
-                .snapshot
-                .session()
-                .is_some_and(|session| backend.is_external_session(&session.id)),
-            _ => false,
-        }
-    }
     pub(super) fn prepare_docker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let targets = targets(&self.hosts, self.docker_endpoint.clone());
+        let targets = targets(&self.hosts, self.docker_endpoint.clone(), &self.host_order);
         let host_id = self.hosts[self.active].identity();
         let visible = self.page == Page::Docker;
         self.docker.update(cx, |docker, cx| {
@@ -385,7 +381,7 @@ impl AppView {
                         {
                             return;
                         }
-                        if !targets(&this.hosts, this.docker_endpoint.clone())
+                        if !targets(&this.hosts, this.docker_endpoint.clone(), &this.host_order)
                             .iter()
                             .any(|current| {
                                 current.id == target.id && current.endpoint == target.endpoint

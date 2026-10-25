@@ -21,6 +21,8 @@ TShell uses an existing `~/Downloads`, then the home directory, and finally its
 startup directory. The user can choose a different destination for every download.
 
 The transfer panel appears in the lower-right corner when a task is added. It
+grows with the task list to use the available window height, with scrollable
+overflow and clearance for the title bar and status bar; it has no four-row cap. It
 shows the direction, host, file name, current file, bytes transferred, and a
 progress bar once the total size is known. Directory transfers scan their
 entries first, so the panel can briefly show `Scanning files`. The header can

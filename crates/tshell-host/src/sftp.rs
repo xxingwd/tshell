@@ -305,7 +305,6 @@ pub fn complete(host: &Session, input: &str) -> Result<Vec<String>> {
                 .map(|e| format!("{}/{}/", parent.trim_end_matches('/'), e.filename))
                 .collect::<Vec<_>>();
             paths.sort();
-            paths.truncate(8);
             Ok(paths)
         })
     })

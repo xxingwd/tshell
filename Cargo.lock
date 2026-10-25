@@ -9365,7 +9365,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "tshell"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -9375,9 +9375,7 @@ dependencies = [
  "embed-resource",
  "gpui-kit",
  "hex",
- "html5ever 0.27.0",
  "libloading",
- "markup5ever_rcdom",
  "notify-rust",
  "parking_lot",
  "percent-encoding",
@@ -9385,13 +9383,11 @@ dependencies = [
  "regex",
  "reqwest",
  "russh",
- "rust-i18n",
  "semver",
  "serde",
  "serde_json",
  "sha2 0.11.0",
  "shell-words",
- "similar",
  "tauri-winrt-notification",
  "tempfile",
  "tokio",
@@ -9403,6 +9399,7 @@ dependencies = [
  "tshell-host",
  "tshell-ui",
  "url",
+ "uuid",
  "winreg 0.55.0",
  "wry",
 ]
