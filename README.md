@@ -53,6 +53,8 @@ xterm.js or OpenSSH feature parity.
   WebView2 preview on Windows. HTML has a one-click switch back to editing;
   PDF is view-only. The HTML preview renders inline styles but blocks scripts
   and external resources.
+- SVG and standalone Mermaid diagrams have offline WebView2 previews with zoom,
+  fit and source editing on Windows. See [file previews](docs/file-previews.md).
 - Unified workspace and terminal colors with VS Code Light/Dark Modern schemes.
   A single `theme.json` stores terminal colors and interface tokens per scheme;
   version 2 schemes migrate in place. Edit custom color schemes separately; assign the VS Code schemes to the light
@@ -217,7 +219,8 @@ silently overwritten.
 
 Markdown (`.md`, `.mdx`) and HTML (`.html`, `.htm`) files show a read-only
 preview when opened at up to 256 KiB; PDF (`.pdf`) files show a read-only
-WebView2 preview up to 20 MiB. Larger files stay in the source editor.
+WebView2 preview up to 20 MiB. Text above the preview limit stays in the source
+editor; PDF above 20 MiB is refused.
 Markdown source renders directly through GPUI Kit's native `TextView::markdown`
 on all platforms. On Windows, an embedded WebView2 displays HTML layout and
 inline CSS, or the PDF document through its built-in PDF viewer. HTML preview
@@ -226,6 +229,11 @@ away. Relative assets are not loaded, including for remote files. Other
 platforms and systems without WebView2 show a PDF runtime notice and use the
 text-oriented native HTML fallback. Use the Edit/Preview controls in the file
 header to switch views; saving always writes the original UTF-8 source.
+
+SVG (`.svg`, up to 256 KiB) and Mermaid (`.mmd`, `.mermaid`, up to 32 KiB)
+also open in Windows WebView2 with zoom and fit controls. Mermaid is bundled
+for offline use; Markdown diagrams retain the native Markdown behavior.
+See [file previews](docs/file-previews.md) for format limits and fallbacks.
 
 Git view reports `git status --porcelain` for the active tool directory. It is a
 read-only browser: staging, commits, pushes, and history editing are outside

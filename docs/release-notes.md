@@ -1,5 +1,14 @@
 # Release Notes
 
+## Unreleased
+
+- Added offline SVG and standalone Mermaid (`.mmd`, `.mermaid`) previews on
+  Windows with zoom, fit, source editing and recoverable syntax errors.
+  Preview scripts are bundled; source cannot load external resources. See
+  [file previews](file-previews.md) for limits and platform fallback behavior.
+- Preserve PDF binary/read-only state across renames and ignore source-line
+  navigation for PDF files. Restrict preview navigation to the active document.
+
 ## 0.1.4 — 2026-10-25
 
 - Fixed a Windows crash when opening HTML files such as `index.html`.

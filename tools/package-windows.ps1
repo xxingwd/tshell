@@ -44,6 +44,8 @@ $notices.Add("`nBundled Microsoft ConPTY runtime")
 $notices.Add([System.IO.File]::ReadAllText((Join-Path $PWD 'vendor/conpty/LICENSE')))
 $notices.Add("`nBundled terminal palette data")
 $notices.Add([System.IO.File]::ReadAllText((Join-Path $PWD 'src/terminal_theme/PALETTE_LICENSE')))
+$notices.Add("`nBundled Mermaid preview renderer")
+$notices.Add([System.IO.File]::ReadAllText((Join-Path $PWD 'assets/preview/THIRD_PARTY_LICENSES.txt')))
 $notices | Set-Content -LiteralPath "$OutputDirectory/THIRD-PARTY-NOTICES.txt" -Encoding utf8
 Copy-Item -LiteralPath "$OutputDirectory/THIRD-PARTY-NOTICES.txt" -Destination "$staging/THIRD-PARTY-NOTICES.txt"
 @'

@@ -8,22 +8,29 @@ impl Explorer {
         cx: &mut Context<Self>,
     ) {
         self.web_preview_initializing = true;
+        self.web_preview_generation += 1;
+        let generation = self.web_preview_generation;
         let handle = window.window_handle();
         cx.spawn(async move |owner, cx| {
             let request = cx.update_window(handle, |_, window, cx| {
                 owner.read_with(cx, |this, _| {
                     if !this.visible
                         || !this.preview_mode
-                        || !matches!(this.editor_language.as_str(), "html" | "pdf")
+                        || this.web_preview_generation != generation
+                        || !preview::uses_webview(&this.editor_language)
                     {
                         return None;
                     }
-                    let source = match this.editor_language.as_str() {
-                        "html" => preview::WebPreviewSource::Html(
-                            this.file_preview.as_ref()?.web_html()?.to_owned(),
-                        ),
-                        "pdf" => preview::WebPreviewSource::Pdf(this.pdf_preview.clone()?),
-                        _ => return None,
+                    let source = if this.pdf_preview.is_some() {
+                        preview::WebPreviewSource::Pdf(this.pdf_preview.clone()?)
+                    } else {
+                        let document = this.file_preview.as_ref()?;
+                        let html = document.web_html()?.to_owned();
+                        if document.is_graphic() {
+                            preview::WebPreviewSource::Graphic(html)
+                        } else {
+                            preview::WebPreviewSource::Html(html)
+                        }
                     };
                     let parent = wry::raw_window_handle::HasWindowHandle::window_handle(window)
                         .ok()?
@@ -40,6 +47,9 @@ impl Explorer {
                 _ => None,
             };
             let _ = owner.update(cx, |this, cx| {
+                if this.web_preview_generation != generation {
+                    return;
+                }
                 this.web_preview_initializing = false;
                 match result {
                     Some(Ok(web)) => this.web_preview = Some(web),
@@ -376,6 +386,17 @@ impl Explorer {
                                 self.palette,
                             )
                             .into_any_element()
+                        } else if self.file_preview.as_ref().is_some_and(|document| document.is_graphic()) {
+                            div().size_full().flex().flex_col()
+                                .child(style::content_notice(
+                                    "file-graphic-fallback",
+                                    IconName::File,
+                                    crate::t!("file.graphic_preview_unavailable"),
+                                    self.palette.muted,
+                                    self.palette,
+                                ))
+                                .children(self.file_preview.as_ref().map(|document| preview::render(document, self.palette, &self.font_family)))
+                                .into_any_element()
                         } else {
                             self.file_preview
                                 .as_ref()
@@ -398,13 +419,14 @@ impl Explorer {
                                             window.defer(cx, move |window, cx| {
                                                 let _ = owner.update(cx, |this, cx| {
                                                     if !this.visible
-                                                        || !matches!(this.editor_language.as_str(), "html" | "pdf")
+                                                        || !preview::uses_webview(&this.editor_language)
                                                         || !this.preview_mode
                                                         || window.has_active_dialog(cx)
                                                     {
                                                         return;
                                                     }
                                                     let is_pdf = this.editor_language == "pdf";
+                                                    let is_graphic = this.file_preview.as_ref().is_some_and(|document| document.is_graphic());
                                                     let source_available = if is_pdf {
                                                         this.pdf_preview.is_some()
                                                     } else {
@@ -419,7 +441,7 @@ impl Explorer {
                                                     if this
                                                         .web_preview
                                                         .as_ref()
-                                                        .is_some_and(|web| web.is_pdf() != is_pdf)
+                                                        .is_some_and(|web| web.is_pdf() != is_pdf || web.is_graphic() != is_graphic)
                                                     {
                                                         this.web_preview = None;
                                                         this.web_preview_failed = false;
@@ -516,6 +538,7 @@ impl Explorer {
                 self.web_preview = None;
                 self.web_preview_failed = false;
                 self.web_preview_initializing = false;
+                self.web_preview_generation += 1;
             }
             self.file_editor.update(cx, |editor, cx| {
                 editor.set_value(state.text, window, cx);
@@ -539,6 +562,7 @@ impl Explorer {
         if let Some((path, position)) = self.file_link_position.take()
             && self.open_file.as_ref() == Some(&path)
             && self.image_preview.is_none()
+            && self.pdf_preview.is_none()
         {
             self.preview_mode = false;
             self.file_editor.update(cx, |editor, cx| {
@@ -552,8 +576,8 @@ impl Explorer {
         #[cfg(windows)]
         if !self.visible
             || !self.preview_mode
-            || !matches!(self.editor_language.as_str(), "html" | "pdf")
-            || (self.editor_language == "html" && self.file_preview.is_none())
+            || !preview::uses_webview(&self.editor_language)
+            || (self.editor_language != "pdf" && self.file_preview.is_none())
             || (self.editor_language == "pdf" && self.pdf_preview.is_none())
             || window.has_active_dialog(cx)
         {

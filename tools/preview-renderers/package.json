@@ -1,0 +1,11 @@
+{
+  "name": "tshell-preview-renderers",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "scripts": { "build": "node build.mjs" },
+  "dependencies": {
+    "mermaid": "12.2.0"
+  },
+  "devDependencies": { "esbuild": "0.28.2" }
+}

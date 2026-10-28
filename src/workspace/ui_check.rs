@@ -259,11 +259,12 @@ pub(crate) fn run_ui_check(output: PathBuf) -> bool {
             crate::terminal_view::init(cx);
             cx.spawn(async move |cx| {
                 let report = check(cx).await;
-                let html_only = std::env::var("TSHELL_UI_CHECK_SCOPE").as_deref() == Ok("html-preview");
+                let preview_scope = std::env::var("TSHELL_UI_CHECK_SCOPE").ok();
+                let html_only = matches!(preview_scope.as_deref(), Some("html-preview" | "common-previews"));
                 let json = match report {
                     Ok(()) if html_only => {
                         result.store(true, Ordering::Release);
-                        serde_json::json!({"passed": true, "clipboard_checked": false, "remote_files_checked": false, "checked": ["index.html opens through native frame events without reentrant GPUI borrowing", "HTML preview preserves source and hides over the terminal"]})
+                        serde_json::json!({"passed": true, "clipboard_checked": false, "remote_files_checked": false, "checked": if preview_scope.as_deref() == Some("common-previews") { vec!["HTML and PDF navigation through restricted local protocols", "SVG image decode and offline Mermaid flowchart/sequence rendering", "malformed SVG and Mermaid show recoverable errors", "source editing, file switches and hidden terminal views"] } else { vec!["index.html opens through native frame events without reentrant GPUI borrowing", "HTML preview preserves source and hides over the terminal"] }})
                     }
                     Ok(()) => {
                         result.store(true, Ordering::Release);
@@ -326,6 +327,9 @@ async fn check(cx: &mut AsyncApp) -> anyhow::Result<()> {
     })?;
     if std::env::var("TSHELL_UI_CHECK_SCOPE").as_deref() == Ok("html-preview") {
         return check_html_preview(handle, &app, cx).await;
+    }
+    if std::env::var("TSHELL_UI_CHECK_SCOPE").as_deref() == Ok("common-previews") {
+        return check_common_previews(handle, &app, cx).await;
     }
     if std::env::var("TSHELL_UI_CHECK_SCOPE").as_deref() == Ok("session-submission") {
         let destination = std::env::var("TSHELL_SSH_TEST_HOST")?;
@@ -2955,6 +2959,154 @@ async fn check_html_preview(
         );
         Ok::<_, anyhow::Error>(())
     })?;
+    Ok(())
+}
+
+async fn check_common_previews(
+    handle: WindowHandle<Root>,
+    app: &Entity<AppView>,
+    cx: &mut AsyncApp,
+) -> anyhow::Result<()> {
+    check_html_preview(handle, app, cx).await?;
+    let directory = PathBuf::from(std::env::var_os("TSHELL_DATA_DIR").unwrap());
+    for (name, source, malformed) in [
+        (
+            "document.pdf",
+            std::str::from_utf8(include_bytes!("../../tests/fixtures/explorer-preview.pdf"))?,
+            false,
+        ),
+        (
+            "icon.svg",
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 80"><rect width="240" height="80" fill="white"/><text x="12" y="45" fill="black">TShell 中文 SVG</text></svg>"#,
+            false,
+        ),
+        ("flow.mmd", "flowchart LR\n A[本地] --> B[远程]", false),
+        (
+            "sequence.mermaid",
+            "sequenceDiagram\n Alice->>Bob: Hello",
+            false,
+        ),
+        ("invalid.svg", "<svg>broken", true),
+        ("invalid.mmd", "this is not a diagram", true),
+    ] {
+        let path = directory.join(name);
+        let is_pdf = name.ends_with(".pdf");
+        std::fs::write(&path, source)?;
+        cx.update_window(handle.into(), |_, window, cx| {
+            app.update(cx, |app, cx| app.open_path(path.clone(), window, cx));
+        })?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(25))
+                .await;
+            let complete = app.read_with(cx, |app, cx| {
+                let explorer = app.check_explorer(cx);
+                if explorer.open_file.as_ref() != Some(&path) || explorer.file_loading.is_some() {
+                    return Ok(false);
+                }
+                anyhow::ensure!(!explorer.editor_dirty, "{name} preview dirtied the file");
+                if is_pdf {
+                    anyhow::ensure!(
+                        explorer
+                            .pdf_preview
+                            .as_ref()
+                            .is_some_and(|bytes| bytes.as_slice() == source.as_bytes()),
+                        "PDF bytes changed"
+                    );
+                    anyhow::ensure!(
+                        explorer.file_editor.read(cx).value().is_empty(),
+                        "PDF entered the text editor"
+                    );
+                } else {
+                    anyhow::ensure!(
+                        explorer.file_editor.read(cx).value().as_ref() == source,
+                        "{name} source changed"
+                    );
+                }
+                #[cfg(windows)]
+                {
+                    use tshell_explorer::preview::RenderStatus;
+                    anyhow::ensure!(
+                        !explorer.web_preview_failed,
+                        "{name} WebView initialization failed"
+                    );
+                    let Some(web) = &explorer.web_preview else {
+                        return Ok(false);
+                    };
+                    if web.status() == RenderStatus::Loading || !web.is_visible() {
+                        return Ok(false);
+                    }
+                    anyhow::ensure!(
+                        web.status()
+                            == if malformed {
+                                RenderStatus::Failed
+                            } else {
+                                RenderStatus::Ready
+                            },
+                        "{name} render status: {:?}",
+                        web.status()
+                    );
+                }
+                #[cfg(not(windows))]
+                let _ = malformed;
+                Ok::<_, anyhow::Error>(true)
+            })?;
+            if complete {
+                break;
+            }
+            anyhow::ensure!(
+                Instant::now() < deadline,
+                "{name} did not render before the deadline"
+            );
+        }
+        if is_pdf {
+            cx.update_window(handle.into(), |_, window, cx| {
+                app.update(cx, |app, cx| {
+                    app.explorer_entity().unwrap().update(cx, |explorer, cx| {
+                        explorer.save_open_file(window, cx);
+                        anyhow::ensure!(!explorer.file_saving, "PDF save entered the text writer");
+                        Ok::<_, anyhow::Error>(())
+                    })
+                })
+            })??;
+            anyhow::ensure!(
+                std::fs::read(&path)? == source.as_bytes(),
+                "PDF save changed its bytes"
+            );
+            app.update(cx, |app, cx| app.show_terminal(cx));
+            cx.background_executor()
+                .timer(Duration::from_millis(50))
+                .await;
+            continue;
+        }
+        // Exercise Edit/Preview transitions without replacing or saving the source.
+        app.update(cx, |app, cx| {
+            app.explorer_entity().unwrap().update(cx, |explorer, cx| {
+                explorer.preview_mode = false;
+                explorer.file_preview = None;
+                cx.notify();
+            });
+        });
+        cx.background_executor()
+            .timer(Duration::from_millis(100))
+            .await;
+        #[cfg(windows)]
+        app.read_with(cx, |app, cx| {
+            anyhow::ensure!(
+                app.check_explorer(cx)
+                    .web_preview
+                    .as_ref()
+                    .is_some_and(|web| !web.is_visible()),
+                "{name} covers its source editor"
+            );
+            Ok::<_, anyhow::Error>(())
+        })?;
+        app.update(cx, |app, cx| app.show_terminal(cx));
+        cx.background_executor()
+            .timer(Duration::from_millis(50))
+            .await;
+    }
     Ok(())
 }
 

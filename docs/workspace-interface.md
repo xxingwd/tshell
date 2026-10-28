@@ -220,6 +220,10 @@ and [tmux 3.8 layout-custom.c](https://github.com/tmux/tmux/blob/3.8/layout-cust
 
 ## Native Verification
 
+Use `TSHELL_UI_CHECK_SCOPE=common-previews` to verify actual SVG image decoding,
+offline Mermaid flowchart/sequence rendering, malformed-source errors, source
+switching and hiding child WebViews. See [file previews](file-previews.md).
+
 Set `TSHELL_UI_CHECK_SCOPE=html-preview` and `TSHELL_UI_CHECK_VISIBLE=1` to
 exercise opening an isolated `index.html` through native frame events, waiting
 for WebView2 initialization, and hiding it when returning to the terminal.

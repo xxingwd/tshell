@@ -4,6 +4,11 @@ use gpui_kit::{prelude::*, *};
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{Handle, NodeData, RcDom, SerializableHandle};
 use tshell_ui::appearance::Palette;
+mod graphics;
+#[cfg(windows)]
+mod web;
+#[cfg(windows)]
+pub use web::{RenderStatus, WebPreview, WebPreviewSource};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Block {
@@ -32,35 +37,56 @@ pub struct Document {
 enum Content {
     Markdown(String),
     Html(String),
+    Graphic(String),
 }
 
 impl Document {
     pub fn markdown_source(&self) -> Option<&str> {
         match &self.content {
             Content::Markdown(source) => Some(source),
-            Content::Html(_) => None,
+            Content::Html(_) | Content::Graphic(_) => None,
         }
     }
 
     pub fn web_html(&self) -> Option<&str> {
         match &self.content {
             Content::Markdown(_) => None,
-            Content::Html(html) => Some(html),
+            Content::Html(html) | Content::Graphic(html) => Some(html),
         }
+    }
+
+    pub fn is_graphic(&self) -> bool {
+        matches!(self.content, Content::Graphic(_))
     }
 }
 
 pub const MAX_PREVIEW_BYTES: usize = 256 * 1024;
+pub const MAX_DIAGRAM_BYTES: usize = 32 * 1024;
+
+pub fn uses_webview(language: &str) -> bool {
+    matches!(language, "html" | "pdf" | "svg" | "mermaid")
+}
 
 pub fn is_previewable(language: &str) -> bool {
-    matches!(language, "markdown" | "html")
+    matches!(language, "markdown" | "html" | "svg" | "mermaid")
 }
 
 pub fn can_preview(language: &str, source: &str) -> bool {
-    is_previewable(language) && source.len() <= MAX_PREVIEW_BYTES
+    let limit = if language == "mermaid" {
+        MAX_DIAGRAM_BYTES
+    } else {
+        MAX_PREVIEW_BYTES
+    };
+    is_previewable(language) && source.len() <= limit
 }
 
 pub fn parse(language: &str, source: &str) -> Document {
+    if matches!(language, "svg" | "mermaid") {
+        return Document {
+            blocks: vec![Block::Code(source.to_owned())],
+            content: Content::Graphic(graphics::page(language, source)),
+        };
+    }
     if language == "markdown" {
         return Document {
             blocks: Vec::new(),
@@ -134,142 +160,6 @@ fn find_head(root: &Handle) -> Option<Handle> {
         stack.extend(node.children.borrow().iter().rev().cloned());
     }
     None
-}
-
-#[cfg(windows)]
-#[derive(Clone)]
-pub enum WebPreviewSource {
-    Html(String),
-    Pdf(std::sync::Arc<Vec<u8>>),
-}
-
-#[cfg(windows)]
-pub struct WebPreview {
-    webview: wry::WebView,
-    html: String,
-    pdf: bool,
-    bounds: Bounds<Pixels>,
-    visible: bool,
-}
-
-#[cfg(windows)]
-impl WebPreview {
-    pub(crate) fn new(
-        source: WebPreviewSource,
-        bounds: Bounds<Pixels>,
-        parent: wry::raw_window_handle::RawWindowHandle,
-    ) -> wry::Result<Self> {
-        // Captured from the live parent on the UI thread immediately before
-        // construction. No GPUI borrow may span WebView2's nested message pump.
-        let parent = unsafe { wry::raw_window_handle::WindowHandle::borrow_raw(parent) };
-        let (html, pdf, builder) = match source {
-            WebPreviewSource::Html(html) => {
-                let builder = wry::WebViewBuilder::new().with_html(&html);
-                (html, false, builder)
-            }
-            WebPreviewSource::Pdf(bytes) => {
-                let builder = wry::WebViewBuilder::new()
-                    .with_custom_protocol("tshell-pdf".into(), move |_id, _request| {
-                        let mut response = wry::http::Response::new(std::borrow::Cow::Owned(
-                            bytes.as_ref().clone(),
-                        ));
-                        response.headers_mut().insert(
-                            wry::http::header::CONTENT_TYPE,
-                            wry::http::HeaderValue::from_static("application/pdf"),
-                        );
-                        response.headers_mut().insert(
-                            wry::http::header::CONTENT_DISPOSITION,
-                            wry::http::HeaderValue::from_static("inline"),
-                        );
-                        response
-                    })
-                    .with_url("tshell-pdf://localhost/document.pdf");
-                (String::new(), true, builder)
-            }
-        };
-        let webview = builder
-            .with_visible(false)
-            .with_incognito(true)
-            .with_navigation_handler(|url| {
-                url == "about:blank"
-                    || url.starts_with("http://tshell-pdf.")
-                    || url.starts_with("https://tshell-pdf.")
-            })
-            .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
-            .with_bounds(web_bounds(bounds))
-            .build_as_child(&parent)?;
-        Ok(Self {
-            webview,
-            html,
-            pdf,
-            bounds,
-            visible: false,
-        })
-    }
-
-    pub fn show_html(&mut self, html: &str, bounds: Bounds<Pixels>) -> wry::Result<()> {
-        if self.pdf {
-            return Ok(());
-        }
-        if self.html != html {
-            self.webview.load_html(html)?;
-            self.html = html.to_owned();
-        }
-        self.show_bounds(bounds)
-    }
-
-    pub fn show_pdf(&mut self, bounds: Bounds<Pixels>) -> wry::Result<()> {
-        if !self.pdf {
-            return Ok(());
-        }
-        self.show_bounds(bounds)
-    }
-
-    fn show_bounds(&mut self, bounds: Bounds<Pixels>) -> wry::Result<()> {
-        if self.bounds != bounds {
-            self.webview.set_bounds(web_bounds(bounds))?;
-            self.bounds = bounds;
-        }
-        if !self.visible {
-            self.webview.set_visible(true)?;
-            self.visible = true;
-        }
-        Ok(())
-    }
-
-    pub fn hide(&mut self) {
-        if self.visible && self.webview.set_visible(false).is_ok() {
-            self.visible = false;
-        }
-    }
-
-    pub fn is_visible(&self) -> bool {
-        self.visible
-    }
-
-    pub fn is_pdf(&self) -> bool {
-        self.pdf
-    }
-
-    pub fn html(&self) -> &str {
-        &self.html
-    }
-}
-
-#[cfg(windows)]
-fn web_bounds(bounds: Bounds<Pixels>) -> wry::Rect {
-    wry::Rect {
-        position: wry::dpi::LogicalPosition::new(
-            f64::from(bounds.origin.x),
-            f64::from(bounds.origin.y),
-        )
-        .into(),
-        size: wry::dpi::LogicalSize::new(
-            f64::from(bounds.size.width),
-            f64::from(bounds.size.height),
-        )
-        .into(),
-    }
 }
 
 pub fn render(document: &Document, palette: Palette, font_family: &str) -> AnyElement {
@@ -554,6 +444,20 @@ fn finish_block(blocks: &mut Vec<Block>, active: &mut Option<ActiveBlock>, text:
 #[cfg(test)]
 mod tests {
     use super::{Block, MAX_PREVIEW_BYTES, can_preview, parse};
+
+    #[test]
+    fn graphic_previews_leave_large_sources_editable() {
+        assert!(can_preview("svg", "<svg/>"));
+        assert!(!can_preview("svg", &"a".repeat(MAX_PREVIEW_BYTES + 1)));
+        assert!(can_preview("mermaid", "graph TD; A-->B"));
+        assert!(!can_preview(
+            "mermaid",
+            &"a".repeat(super::MAX_DIAGRAM_BYTES + 1)
+        ));
+        let graphic = parse("svg", "<svg/>");
+        assert!(graphic.is_graphic());
+        assert_eq!(graphic.blocks, vec![Block::Code("<svg/>".into())]);
+    }
 
     #[test]
     fn preview_size_does_not_limit_source_editing() {

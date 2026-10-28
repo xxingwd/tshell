@@ -567,11 +567,15 @@ fn update_file(state: &mut SessionFileState, operation: &Operation, remote: bool
                 destination.join(&rest)
             };
             state.path = Some(destination.as_path_buf());
-            state.language = workbench::language_for_path(&destination.as_path_buf()).to_owned();
-            state.pdf = None;
-            state.preview_mode = preview::can_preview(&state.language, &state.text);
-            state.preview = state
-                .preview_mode
+            state.language = if state.pdf.is_some() {
+                "pdf"
+            } else {
+                workbench::language_for_path(&destination.as_path_buf())
+            }
+            .to_owned();
+            state.preview_mode =
+                state.pdf.is_some() || preview::can_preview(&state.language, &state.text);
+            state.preview = (state.pdf.is_none() && state.preview_mode)
                 .then(|| preview::parse(&state.language, &state.text));
             true
         }
@@ -588,6 +592,30 @@ fn update_file(state: &mut SessionFileState, operation: &Operation, remote: bool
 #[cfg(test)]
 mod tests {
     use super::{Operation, PathBuf, SessionFileState, update_file};
+    #[test]
+    fn renaming_pdf_keeps_binary_payload_and_read_only_preview() {
+        let pdf = std::sync::Arc::new(b"%PDF-1.7\nbinary".to_vec());
+        let mut state = SessionFileState {
+            path: Some("/project/book.pdf".into()),
+            pdf: Some(pdf.clone()),
+            language: "pdf".into(),
+            preview_mode: true,
+            ..Default::default()
+        };
+        assert!(update_file(
+            &mut state,
+            &Operation::Rename {
+                from: "/project".into(),
+                to: "/renamed".into()
+            },
+            true
+        ));
+        assert_eq!(state.path, Some("/renamed/book.pdf".into()));
+        assert_eq!(state.pdf.as_ref(), Some(&pdf));
+        assert!(state.preview_mode);
+        assert!(state.preview.is_none());
+        assert_eq!(state.language, "pdf");
+    }
     #[test]
     fn remote_rename_keeps_literal_backslashes_and_component_boundaries() {
         let mut state = SessionFileState {

@@ -250,7 +250,8 @@ impl Explorer {
                                 anyhow::ensure!(
                                     std::fs::metadata(&read_path)?.len()
                                         <= workbench::MAX_FILE_BYTES,
-                                    "PNG is too large"
+                                    "{}",
+                                    crate::t!("file.too_large_open")
                                 );
                                 std::fs::read(&read_path)?
                             }
@@ -306,7 +307,7 @@ impl Explorer {
                         };
                         let language = workbench::language_for_path(&path).to_owned();
                         let preview_mode = pdf.is_some() || preview::can_preview(&language, &text);
-                        let preview = (!pdf.is_some() && preview_mode)
+                        let preview = (pdf.is_none() && preview_mode)
                             .then(|| preview::parse(&language, &text));
                         this.pending_file_state = Some(SessionFileState {
                             path: Some(path.clone()),

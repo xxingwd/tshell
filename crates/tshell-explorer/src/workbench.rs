@@ -131,6 +131,8 @@ pub fn language_for_path(path: &Path) -> &'static str {
         "go" => "go",
         "html" | "htm" => "html",
         "pdf" => "pdf",
+        "svg" => "svg",
+        "mmd" | "mermaid" => "mermaid",
         "java" => "java",
         "js" | "mjs" | "cjs" | "jsx" => "javascript",
         "ts" => "typescript",
@@ -174,6 +176,9 @@ mod tests {
         assert_eq!(language_for_path(Path::new("Cargo.toml")), "toml");
         assert_eq!(language_for_path(Path::new("README.md")), "markdown");
         assert_eq!(language_for_path(Path::new("manual.PDF")), "pdf");
+        assert_eq!(language_for_path(Path::new("icon.SVG")), "svg");
+        assert_eq!(language_for_path(Path::new("flow.mmd")), "mermaid");
+        assert_eq!(language_for_path(Path::new("flow.mermaid")), "mermaid");
         assert_eq!(language_for_path(Path::new("script.py")), "python");
         assert_eq!(language_for_path(Path::new("config.yaml")), "yaml");
         assert_eq!(language_for_path(Path::new("notes.txt")), "plaintext");

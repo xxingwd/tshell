@@ -87,6 +87,8 @@ pub struct Explorer {
     pub web_preview_failed: bool,
     #[cfg(windows)]
     web_preview_initializing: bool,
+    #[cfg(windows)]
+    web_preview_generation: u64,
     pub preview_mode: bool,
     pub editor_dirty: bool,
     pub editor_language: String,
@@ -156,6 +158,8 @@ impl Explorer {
             web_preview_failed: false,
             #[cfg(windows)]
             web_preview_initializing: false,
+            #[cfg(windows)]
+            web_preview_generation: 0,
             preview_mode: false,
             editor_dirty: false,
             editor_language: "plaintext".into(),

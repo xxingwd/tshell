@@ -66,6 +66,10 @@ pub fn set_language(language: Language) {
     rust_i18n::set_locale(language.locale());
 }
 
+pub fn current_locale() -> String {
+    rust_i18n::locale().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

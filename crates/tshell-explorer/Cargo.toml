@@ -14,6 +14,7 @@ tshell-ui = { path = "../tshell-ui" }
 dirs.workspace = true
 html5ever = "=0.27.0"
 markup5ever_rcdom = "=0.3.0"
+base64 = "=0.22.1"
 
 [target.'cfg(windows)'.dependencies]
 wry = { version = "=0.57.0", default-features = false, features = ["os-webview"] }
