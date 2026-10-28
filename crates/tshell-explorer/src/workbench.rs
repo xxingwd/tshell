@@ -130,6 +130,7 @@ pub fn language_for_path(path: &Path) -> &'static str {
         "css" => "css",
         "go" => "go",
         "html" | "htm" => "html",
+        "pdf" => "pdf",
         "java" => "java",
         "js" | "mjs" | "cjs" | "jsx" => "javascript",
         "ts" => "typescript",
@@ -172,6 +173,7 @@ mod tests {
         assert_eq!(language_for_path(Path::new("src/main.rs")), "rust");
         assert_eq!(language_for_path(Path::new("Cargo.toml")), "toml");
         assert_eq!(language_for_path(Path::new("README.md")), "markdown");
+        assert_eq!(language_for_path(Path::new("manual.PDF")), "pdf");
         assert_eq!(language_for_path(Path::new("script.py")), "python");
         assert_eq!(language_for_path(Path::new("config.yaml")), "yaml");
         assert_eq!(language_for_path(Path::new("notes.txt")), "plaintext");

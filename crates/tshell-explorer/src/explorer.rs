@@ -519,6 +519,7 @@ impl Explorer {
             path: self.open_file.clone(),
             text: self.file_editor.read(cx).value().to_string(),
             image: self.image_preview.clone(),
+            pdf: self.pdf_preview.clone(),
             preview: self.file_preview.clone(),
             preview_mode: self.preview_mode,
             saved_text: self.saved_file_text.clone(),
@@ -567,6 +568,7 @@ fn update_file(state: &mut SessionFileState, operation: &Operation, remote: bool
             };
             state.path = Some(destination.as_path_buf());
             state.language = workbench::language_for_path(&destination.as_path_buf()).to_owned();
+            state.pdf = None;
             state.preview_mode = preview::can_preview(&state.language, &state.text);
             state.preview = state
                 .preview_mode

@@ -39,7 +39,8 @@ GPUI 的应用中。终端引擎使用 Rust 原生实现和 `alacritty_terminal`
   自动收起到右侧、速度与剩余时间，以及单个任务取消、清除和重试。
   文件和文件夹下载默认保存到系统下载目录。
   详见 [SFTP 传输](docs/sftp-transfers.md)。
-- Markdown 使用原生富文本预览；HTML 在 Windows 上使用只读 WebView2 预览，均可一键切回编辑。HTML 预览不会执行脚本或加载外部资源。
+- Markdown 使用原生富文本预览；HTML 和 PDF 在 Windows 上使用只读 WebView2 预览。
+  HTML 可一键切回编辑，PDF 为只读。HTML 预览不会执行脚本或加载外部资源。
 - 工作区与终端共用色调，目前内置 VS Code Modern 的亮色/深色方案。
   同一个 `theme.json` 为每套方案保存终端色与界面语义色，旧版文件自动迁移。
   自定义配色方案单独编辑，主题可分别指定明色和暗色方案；白天、夜间或
@@ -170,10 +171,10 @@ Explorer 扫描有上限的文件树，并打开不超过 20 MiB 的普通 UTF-8
 `posix-rename@openssh.com` 时原子替换目标文件。发现外部修改时会提示冲突，不会
 静默覆盖。
 
-Markdown（`.md`、`.mdx`）和 HTML（`.html`、`.htm`）文件在不超过 256 KiB 时默认显示只读预览；更大的文件仍在源码编辑器中打开。
+Markdown（`.md`、`.mdx`）和 HTML（`.html`、`.htm`）文件在不超过 256 KiB 时默认显示只读预览；PDF（`.pdf`）文件使用 WebView2 预览，大小上限为 20 MiB；超出上限的文件仍在源码编辑器中打开。
 Markdown 原文在所有平台上直接由 GPUI Kit 的原生 `TextView::markdown` 渲染。
-Windows 上的 HTML 使用内嵌 WebView2，可显示布局和内联 CSS。HTML 预览禁止执行脚本、加载外部资源、提交表单和跳转；相对路径资源也不会加载，包括远程文件的资源。
-其他平台或没有 WebView2 的系统对 HTML 使用文本导向的原生后备预览。文件头部的“编辑/预览”
+Windows 上的 HTML 使用内嵌 WebView2，可显示布局和内联 CSS；PDF 使用 WebView2 内置的 PDF 查看器。HTML 预览禁止执行脚本、加载外部资源、提交表单和跳转；相对路径资源也不会加载，包括远程文件的资源。
+其他平台或没有 WebView2 的系统会显示 PDF 运行时提示，并对 HTML 使用文本导向的原生后备预览。文件头部的“编辑/预览”
 按钮可切换视图，保存时始终写回原始 UTF-8 源码。
 
 Git 视图显示当前工具目录的 `git status --porcelain`。它是只读浏览器，不提供暂存、

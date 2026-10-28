@@ -3,6 +3,7 @@ use super::*;
 enum OpenedFile {
     Text(String),
     Png(std::sync::Arc<Image>),
+    Pdf(std::sync::Arc<Vec<u8>>),
 }
 
 impl Explorer {
@@ -238,10 +239,11 @@ impl Explorer {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let png = read_path
+                    let extension = read_path
                         .extension()
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("png"));
-                    if png {
+                        .and_then(|ext| ext.to_str())
+                        .map(str::to_ascii_lowercase);
+                    if matches!(extension.as_deref(), Some("png" | "pdf")) {
                         let bytes = match host {
                             Some(host) => remote_files::read_bytes(&host, &read_path)?,
                             None => {
@@ -254,14 +256,32 @@ impl Explorer {
                             }
                         };
                         anyhow::ensure!(
-                            bytes.len() <= workbench::MAX_FILE_BYTES as usize
-                                && bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
-                            "Invalid or oversized PNG"
+                            bytes.len() <= workbench::MAX_FILE_BYTES as usize,
+                            "{}",
+                            crate::t!("file.too_large_open")
                         );
-                        Ok(OpenedFile::Png(std::sync::Arc::new(Image::from_bytes(
-                            ImageFormat::Png,
-                            bytes,
-                        ))))
+                        match extension.as_deref() {
+                            Some("png") => {
+                                anyhow::ensure!(
+                                    bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+                                    "{}",
+                                    crate::t!("file.invalid_png")
+                                );
+                                Ok(OpenedFile::Png(std::sync::Arc::new(Image::from_bytes(
+                                    ImageFormat::Png,
+                                    bytes,
+                                ))))
+                            }
+                            Some("pdf") => {
+                                anyhow::ensure!(
+                                    bytes.starts_with(b"%PDF-"),
+                                    "{}",
+                                    crate::t!("file.invalid_pdf")
+                                );
+                                Ok(OpenedFile::Pdf(std::sync::Arc::new(bytes)))
+                            }
+                            _ => unreachable!("binary extension was checked above"),
+                        }
                     } else {
                         let text = match host {
                             Some(host) => remote_files::read(&host, &read_path)?,
@@ -279,18 +299,21 @@ impl Explorer {
                 match result {
                     Ok(opened) if this.file_editor.read(cx).value().as_ref() == original_text => {
                         this.document_local = local;
-                        let (text, image) = match opened {
-                            OpenedFile::Text(text) => (text, None),
-                            OpenedFile::Png(image) => (String::new(), Some(image)),
+                        let (text, image, pdf) = match opened {
+                            OpenedFile::Text(text) => (text, None, None),
+                            OpenedFile::Png(image) => (String::new(), Some(image), None),
+                            OpenedFile::Pdf(pdf) => (String::new(), None, Some(pdf)),
                         };
                         let language = workbench::language_for_path(&path).to_owned();
-                        let preview_mode = preview::can_preview(&language, &text);
-                        let preview = preview_mode.then(|| preview::parse(&language, &text));
+                        let preview_mode = pdf.is_some() || preview::can_preview(&language, &text);
+                        let preview = (!pdf.is_some() && preview_mode)
+                            .then(|| preview::parse(&language, &text));
                         this.pending_file_state = Some(SessionFileState {
                             path: Some(path.clone()),
                             saved_text: text.clone(),
                             text,
                             image,
+                            pdf,
                             preview,
                             preview_mode,
                             language,
@@ -314,7 +337,7 @@ impl Explorer {
     }
 
     pub fn save_open_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.image_preview.is_some() {
+        if self.image_preview.is_some() || self.pdf_preview.is_some() {
             return;
         }
         let Some(path) = self.open_file.clone() else {

@@ -12,20 +12,31 @@ impl Explorer {
         cx.spawn(async move |owner, cx| {
             let request = cx.update_window(handle, |_, window, cx| {
                 owner.read_with(cx, |this, _| {
-                    if !this.visible || !this.preview_mode || this.editor_language != "html" {
+                    if !this.visible
+                        || !this.preview_mode
+                        || !matches!(this.editor_language.as_str(), "html" | "pdf")
+                    {
                         return None;
                     }
-                    let html = this.file_preview.as_ref()?.web_html()?.to_owned();
+                    let source = match this.editor_language.as_str() {
+                        "html" => preview::WebPreviewSource::Html(
+                            this.file_preview.as_ref()?.web_html()?.to_owned(),
+                        ),
+                        "pdf" => preview::WebPreviewSource::Pdf(this.pdf_preview.clone()?),
+                        _ => return None,
+                    };
                     let parent = wry::raw_window_handle::HasWindowHandle::window_handle(window)
                         .ok()?
                         .as_raw();
-                    Some((html, parent))
+                    Some((source, parent))
                 })
             });
             // WebView2 dispatches native messages while constructing the controller.
             // Run outside App/Window/Explorer updates so those callbacks can borrow GPUI.
             let result = match request {
-                Ok(Ok(Some((html, parent)))) => Some(preview::WebPreview::new(&html, bounds, parent)),
+                Ok(Ok(Some((source, parent)))) => {
+                    Some(preview::WebPreview::new(source, bounds, parent))
+                }
                 _ => None,
             };
             let _ = owner.update(cx, |this, cx| {
@@ -59,7 +70,8 @@ impl Explorer {
             let folder_owner = owner.clone();
             let path = PathBuf::from(entry.item().id.as_ref());
             let is_active = active_file.as_ref().is_some_and(|active| active == &path);
-            let is_code = !is_folder && workbench::language_for_path(&path) != "plaintext";
+            let is_code =
+                !is_folder && !matches!(workbench::language_for_path(&path), "plaintext" | "pdf");
             let open_owner = owner.clone();
             let disclosure = if is_folder {
                 Icon::new(if entry.is_expanded() {
@@ -355,10 +367,23 @@ impl Explorer {
                             .and_then(|document| preview::render_markdown(document, self.palette))
                             .unwrap_or_else(|| div().size_full().into_any_element())
                     } else {
-                        let fallback = self.file_preview
-                            .as_ref()
-                            .map(|document| preview::render(document, self.palette, &self.font_family))
-                            .unwrap_or_else(|| div().size_full().into_any_element());
+                        let fallback = if self.editor_language == "pdf" {
+                            style::content_notice(
+                                "file-pdf-preview",
+                                IconName::File,
+                                crate::t!("file.pdf_preview_unavailable"),
+                                self.palette.muted,
+                                self.palette,
+                            )
+                            .into_any_element()
+                        } else {
+                            self.file_preview
+                                .as_ref()
+                                .map(|document| {
+                                    preview::render(document, self.palette, &self.font_family)
+                                })
+                                .unwrap_or_else(|| div().size_full().into_any_element())
+                        };
                         #[cfg(windows)]
                         {
                             let owner = cx.entity().downgrade();
@@ -373,17 +398,45 @@ impl Explorer {
                                             window.defer(cx, move |window, cx| {
                                                 let _ = owner.update(cx, |this, cx| {
                                                     if !this.visible
-                                                        || this.editor_language != "html"
+                                                        || !matches!(this.editor_language.as_str(), "html" | "pdf")
                                                         || !this.preview_mode
                                                         || window.has_active_dialog(cx)
                                                     {
                                                         return;
                                                     }
-                                                    let Some(html) = this.file_preview.as_ref().and_then(|document| document.web_html()) else {
-                                                        return;
+                                                    let is_pdf = this.editor_language == "pdf";
+                                                    let source_available = if is_pdf {
+                                                        this.pdf_preview.is_some()
+                                                    } else {
+                                                        this.file_preview
+                                                            .as_ref()
+                                                            .and_then(|document| document.web_html())
+                                                            .is_some()
                                                     };
+                                                    if !source_available {
+                                                        return;
+                                                    }
+                                                    if this
+                                                        .web_preview
+                                                        .as_ref()
+                                                        .is_some_and(|web| web.is_pdf() != is_pdf)
+                                                    {
+                                                        this.web_preview = None;
+                                                        this.web_preview_failed = false;
+                                                        this.start_web_preview(bounds, window, cx);
+                                                        return;
+                                                    }
                                                     let result = if let Some(web) = &mut this.web_preview {
-                                                        web.show(html, bounds)
+                                                        if is_pdf {
+                                                            web.show_pdf(bounds)
+                                                        } else {
+                                                            let html = this
+                                                                .file_preview
+                                                                .as_ref()
+                                                                .and_then(|document| document.web_html())
+                                                                .unwrap_or_default();
+                                                            web.show_html(html, bounds)
+                                                        }
                                                     } else if this.web_preview_failed || this.web_preview_initializing {
                                                         return;
                                                     } else {
@@ -455,8 +508,15 @@ impl Explorer {
             self.saved_file_text = state.saved_text;
             self.open_file = None;
             self.image_preview = state.image;
+            self.pdf_preview = state.pdf;
             self.file_preview = state.preview.clone();
             self.preview_mode = state.preview_mode;
+            #[cfg(windows)]
+            {
+                self.web_preview = None;
+                self.web_preview_failed = false;
+                self.web_preview_initializing = false;
+            }
             self.file_editor.update(cx, |editor, cx| {
                 editor.set_value(state.text, window, cx);
                 editor.set_highlighter(
@@ -492,8 +552,9 @@ impl Explorer {
         #[cfg(windows)]
         if !self.visible
             || !self.preview_mode
-            || self.editor_language != "html"
-            || self.file_preview.is_none()
+            || !matches!(self.editor_language.as_str(), "html" | "pdf")
+            || (self.editor_language == "html" && self.file_preview.is_none())
+            || (self.editor_language == "pdf" && self.pdf_preview.is_none())
             || window.has_active_dialog(cx)
         {
             if let Some(web) = &mut self.web_preview {

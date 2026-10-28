@@ -49,9 +49,10 @@ xterm.js or OpenSSH feature parity.
   edge, speed/remaining time, and per-task cancellation, clearing, and retry.
   File and folder downloads default to the system Downloads directory. See
   [SFTP transfers](docs/sftp-transfers.md).
-- Markdown opens in a native rich-text preview; HTML uses a read-only WebView2
-  preview on Windows. Both have a one-click switch back to editing. The HTML
-  preview renders inline styles but blocks scripts and external resources.
+- Markdown opens in a native rich-text preview; HTML and PDF use a read-only
+  WebView2 preview on Windows. HTML has a one-click switch back to editing;
+  PDF is view-only. The HTML preview renders inline styles but blocks scripts
+  and external resources.
 - Unified workspace and terminal colors with VS Code Light/Dark Modern schemes.
   A single `theme.json` stores terminal colors and interface tokens per scheme;
   version 2 schemes migrate in place. Edit custom color schemes separately; assign the VS Code schemes to the light
@@ -215,14 +216,16 @@ temporary file, and atomically replaces the target when the server supports
 silently overwritten.
 
 Markdown (`.md`, `.mdx`) and HTML (`.html`, `.htm`) files show a read-only
-preview when opened at up to 256 KiB; larger files stay in the source editor.
+preview when opened at up to 256 KiB; PDF (`.pdf`) files show a read-only
+WebView2 preview up to 20 MiB. Larger files stay in the source editor.
 Markdown source renders directly through GPUI Kit's native `TextView::markdown`
-on all platforms. On Windows, an embedded WebView2 displays HTML
-layout and inline CSS. HTML preview pages cannot run scripts, load external
-resources, submit forms, or navigate away. Relative assets are not loaded,
-including for remote files. Other platforms and systems without WebView2 use
-the text-oriented native HTML fallback. Use the Edit/Preview controls in the
-file header to switch views; saving always writes the original UTF-8 source.
+on all platforms. On Windows, an embedded WebView2 displays HTML layout and
+inline CSS, or the PDF document through its built-in PDF viewer. HTML preview
+pages cannot run scripts, load external resources, submit forms, or navigate
+away. Relative assets are not loaded, including for remote files. Other
+platforms and systems without WebView2 show a PDF runtime notice and use the
+text-oriented native HTML fallback. Use the Edit/Preview controls in the file
+header to switch views; saving always writes the original UTF-8 source.
 
 Git view reports `git status --porcelain` for the active tool directory. It is a
 read-only browser: staging, commits, pushes, and history editing are outside

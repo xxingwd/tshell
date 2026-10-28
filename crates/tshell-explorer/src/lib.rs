@@ -49,6 +49,7 @@ pub struct SessionFileState {
     pub path: Option<PathBuf>,
     pub text: String,
     pub image: Option<std::sync::Arc<Image>>,
+    pub pdf: Option<std::sync::Arc<Vec<u8>>>,
     pub preview: Option<preview::Document>,
     pub preview_mode: bool,
     pub dirty: bool,
@@ -78,6 +79,7 @@ pub struct Explorer {
     pub file_link_position: Option<(PathBuf, (u32, u32))>,
     pub open_file: Option<PathBuf>,
     pub image_preview: Option<std::sync::Arc<Image>>,
+    pub pdf_preview: Option<std::sync::Arc<Vec<u8>>>,
     pub file_preview: Option<preview::Document>,
     #[cfg(windows)]
     pub web_preview: Option<preview::WebPreview>,
@@ -146,6 +148,7 @@ impl Explorer {
             file_link_position: None,
             open_file: None,
             image_preview: None,
+            pdf_preview: None,
             file_preview: None,
             #[cfg(windows)]
             web_preview: None,

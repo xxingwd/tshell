@@ -137,9 +137,17 @@ fn find_head(root: &Handle) -> Option<Handle> {
 }
 
 #[cfg(windows)]
+#[derive(Clone)]
+pub enum WebPreviewSource {
+    Html(String),
+    Pdf(std::sync::Arc<Vec<u8>>),
+}
+
+#[cfg(windows)]
 pub struct WebPreview {
     webview: wry::WebView,
     html: String,
+    pdf: bool,
     bounds: Bounds<Pixels>,
     visible: bool,
 }
@@ -147,34 +155,77 @@ pub struct WebPreview {
 #[cfg(windows)]
 impl WebPreview {
     pub(crate) fn new(
-        html: &str,
+        source: WebPreviewSource,
         bounds: Bounds<Pixels>,
         parent: wry::raw_window_handle::RawWindowHandle,
     ) -> wry::Result<Self> {
         // Captured from the live parent on the UI thread immediately before
         // construction. No GPUI borrow may span WebView2's nested message pump.
         let parent = unsafe { wry::raw_window_handle::WindowHandle::borrow_raw(parent) };
-        let webview = wry::WebViewBuilder::new()
-            .with_html(html)
+        let (html, pdf, builder) = match source {
+            WebPreviewSource::Html(html) => {
+                let builder = wry::WebViewBuilder::new().with_html(&html);
+                (html, false, builder)
+            }
+            WebPreviewSource::Pdf(bytes) => {
+                let builder = wry::WebViewBuilder::new()
+                    .with_custom_protocol("tshell-pdf".into(), move |_id, _request| {
+                        let mut response = wry::http::Response::new(std::borrow::Cow::Owned(
+                            bytes.as_ref().clone(),
+                        ));
+                        response.headers_mut().insert(
+                            wry::http::header::CONTENT_TYPE,
+                            wry::http::HeaderValue::from_static("application/pdf"),
+                        );
+                        response.headers_mut().insert(
+                            wry::http::header::CONTENT_DISPOSITION,
+                            wry::http::HeaderValue::from_static("inline"),
+                        );
+                        response
+                    })
+                    .with_url("tshell-pdf://localhost/document.pdf");
+                (String::new(), true, builder)
+            }
+        };
+        let webview = builder
             .with_visible(false)
             .with_incognito(true)
-            .with_navigation_handler(|url| url == "about:blank")
+            .with_navigation_handler(|url| {
+                url == "about:blank"
+                    || url.starts_with("http://tshell-pdf.")
+                    || url.starts_with("https://tshell-pdf.")
+            })
             .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
             .with_bounds(web_bounds(bounds))
             .build_as_child(&parent)?;
         Ok(Self {
             webview,
-            html: html.to_owned(),
+            html,
+            pdf,
             bounds,
             visible: false,
         })
     }
 
-    pub fn show(&mut self, html: &str, bounds: Bounds<Pixels>) -> wry::Result<()> {
+    pub fn show_html(&mut self, html: &str, bounds: Bounds<Pixels>) -> wry::Result<()> {
+        if self.pdf {
+            return Ok(());
+        }
         if self.html != html {
             self.webview.load_html(html)?;
             self.html = html.to_owned();
         }
+        self.show_bounds(bounds)
+    }
+
+    pub fn show_pdf(&mut self, bounds: Bounds<Pixels>) -> wry::Result<()> {
+        if !self.pdf {
+            return Ok(());
+        }
+        self.show_bounds(bounds)
+    }
+
+    fn show_bounds(&mut self, bounds: Bounds<Pixels>) -> wry::Result<()> {
         if self.bounds != bounds {
             self.webview.set_bounds(web_bounds(bounds))?;
             self.bounds = bounds;
@@ -194,6 +245,10 @@ impl WebPreview {
 
     pub fn is_visible(&self) -> bool {
         self.visible
+    }
+
+    pub fn is_pdf(&self) -> bool {
+        self.pdf
     }
 
     pub fn html(&self) -> &str {
