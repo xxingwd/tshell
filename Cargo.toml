@@ -42,7 +42,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "process", "io-util", "t
 
 [package]
 name = "tshell"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 description = "A native Rust terminal workspace"
 license = "Apache-2.0"

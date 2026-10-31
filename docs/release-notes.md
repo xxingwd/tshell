@@ -1,6 +1,6 @@
 # Release Notes
 
-## Unreleased
+## 0.1.5 — 2026-10-31
 
 - Added offline SVG and standalone Mermaid (`.mmd`, `.mermaid`) previews on
   Windows with zoom, fit, source editing and recoverable syntax errors.
